@@ -3,7 +3,7 @@ from .base import *
 DEBUG = False
 
 # Always set explicit hosts in prod via env
-ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["billmunshi.example.com"])  # change accordingly
+ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["billmunshi.com"])  # change accordingly
 
 # Security hardening
 SESSION_COOKIE_SECURE = True
