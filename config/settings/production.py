@@ -37,5 +37,4 @@ LOGGING["root"]["level"] = "WARNING"
 
 AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",        # REQUIRED for admin
-    "allauth.account.auth_backends.AuthenticationBackend",  # if you use allauth
 ]
