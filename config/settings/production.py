@@ -33,3 +33,9 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@billmunshi.com"
 
 # Logging: elevate to WARNING/ERROR in prod
 LOGGING["root"]["level"] = "WARNING"
+
+
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",        # REQUIRED for admin
+    "allauth.account.auth_backends.AuthenticationBackend",  # if you use allauth
+]
