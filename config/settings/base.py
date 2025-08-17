@@ -18,7 +18,7 @@ if ENV_FILE.exists():
 # ------------------------------------------------------------
 SECRET_KEY = env("SECRET_KEY", default="django-insecure-change-me")
 DEBUG = env.bool("DEBUG", default=False)
-ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*"])
+ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*","localhost:5173"])
 
 # ------------------------------------------------------------
 # Applications
