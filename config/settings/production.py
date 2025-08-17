@@ -5,7 +5,7 @@ DEBUG = False
 
 ALLOWED_HOSTS = env.list(
     "ALLOWED_HOSTS",
-    default=["billmunshi.com", "www.billmunshi.com"]
+    default=["billmunshi.com", "www.billmunshi.com", "localhost:5173"]
 )
 
 # If you’re behind nginx/Cloudflare
