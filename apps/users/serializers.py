@@ -1,10 +1,12 @@
 from django.contrib.auth import get_user_model
+from typing import Optional
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_decode
+from drf_spectacular.utils import extend_schema_field, OpenApiTypes
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
-from apps.organizations.models import Organization
+from apps.organizations.models import Organization, OrgMembership
 
 User = get_user_model()
 
@@ -15,16 +17,20 @@ class OrganizationInfoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Organization
         fields = ["id", "name", "slug", "status", "role"]
+        # Avoid component-name collisions in OpenAPI
+        ref_name = "OrganizationInfo"
 
-    def get_role(self, obj):
-        # Fetch the membership for the current user
+    @extend_schema_field(OpenApiTypes.STR)  # "ADMIN" | "MEMBER" (or None)
+    def get_role(self, obj) -> Optional[str]:
+        # request is present in context when used from DRF views
         user = self.context["request"].user
-        membership = obj.memberships.filter(user=user).first()
+        membership = obj.memberships.filter(user=user, is_active=True).only("role").first()
         return membership.role if membership else None
 
 
 class UserSerializer(serializers.ModelSerializer):
-    organizations = OrganizationInfoSerializer(source="memberships__organization", many=True, read_only=True)
+    # Use a method field; don't rely on source="memberships__organization"
+    organizations = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -34,6 +40,15 @@ class UserSerializer(serializers.ModelSerializer):
             "organizations",
         ]
         read_only_fields = ["id", "is_active", "is_staff", "is_superuser"]
+
+    def get_organizations(self, user):
+        # If the view prefetched memberships->organization, this will be hot.
+        qs = (
+            Organization.objects.filter(memberships__user=user, memberships__is_active=True)
+            .only("id", "name", "slug", "status")
+            .distinct()
+        )
+        return OrganizationInfoSerializer(qs, many=True, context=self.context).data
 
 
 class RegisterSerializer(serializers.ModelSerializer):

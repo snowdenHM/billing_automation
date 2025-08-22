@@ -1,13 +1,17 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
-from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import force_bytes
+from django.db.models import Prefetch
+from django.utils.http import urlsafe_base64_encode
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
+from rest_framework.generics import RetrieveUpdateAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.generics import RetrieveUpdateAPIView
-from drf_spectacular.utils import extend_schema
+from apps.organizations.models import OrgMembership
+
+from apps.common.utils import send_simple_email
 from .serializers import (
     RegisterSerializer,
     LoginSerializer,
@@ -15,7 +19,6 @@ from .serializers import (
     PasswordResetConfirmSerializer,
     UserSerializer,
 )
-from apps.common.utils import send_simple_email
 
 User = get_user_model()
 
@@ -98,4 +101,20 @@ class MeView(RetrieveUpdateAPIView):
         return super().patch(request, *args, **kwargs)
 
     def get_object(self):
-        return self.request.user
+        # Prefetch to avoid N+1 when serializing organizations + role
+        return (
+            self.request.user.__class__.objects
+            .filter(pk=self.request.user.pk)
+            .prefetch_related(
+                Prefetch(
+                    "memberships",
+                    queryset=OrgMembership.objects.select_related("organization")
+                    .only(
+                        "role", "is_active",
+                        "organization__id", "organization__name",
+                        "organization__slug", "organization__status",
+                    )
+                )
+            )
+            .get()
+        )
