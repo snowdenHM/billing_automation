@@ -1,15 +1,23 @@
-from django.contrib.auth import get_user_model
+# apps/users/serializers.py
+
 from typing import Optional
+
+from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_decode
-from drf_spectacular.utils import extend_schema_field, OpenApiTypes
+
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
+
+from drf_spectacular.utils import extend_schema_field, OpenApiTypes
+
 from apps.organizations.models import Organization, OrgMembership
 
 User = get_user_model()
 
+
+# -------------------- Organization info nested under User --------------------
 
 class OrganizationInfoSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
@@ -20,16 +28,22 @@ class OrganizationInfoSerializer(serializers.ModelSerializer):
         # Avoid component-name collisions in OpenAPI
         ref_name = "OrganizationInfo"
 
-    @extend_schema_field(OpenApiTypes.STR)  # "ADMIN" | "MEMBER" (or None)
+    @extend_schema_field(OpenApiTypes.STR)  # (or use a ChoiceField schema if you prefer)
     def get_role(self, obj) -> Optional[str]:
-        # request is present in context when used from DRF views
-        user = self.context["request"].user
+        """
+        Returns the calling user's role within this organization.
+        Safe even if 'request' wasn't provided in context.
+        """
+        request = self.context.get("request")
+        user = getattr(request, "user", None) or self.context.get("user")
+        if not user or not getattr(user, "is_authenticated", False):
+            return None
+
         membership = obj.memberships.filter(user=user, is_active=True).only("role").first()
         return membership.role if membership else None
 
 
 class UserSerializer(serializers.ModelSerializer):
-    # Use a method field; don't rely on source="memberships__organization"
     organizations = serializers.SerializerMethodField()
 
     class Meta:
@@ -42,14 +56,21 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "is_active", "is_staff", "is_superuser"]
 
     def get_organizations(self, user):
-        # If the view prefetched memberships->organization, this will be hot.
+        """
+        List orgs where this user has an active membership.
+        (If your view prefetches memberships->organization, this will be hot.)
+        """
         qs = (
-            Organization.objects.filter(memberships__user=user, memberships__is_active=True)
+            Organization.objects
+            .filter(memberships__user=user, memberships__is_active=True)
             .only("id", "name", "slug", "status")
             .distinct()
         )
+        # Pass through the same context so get_role() can see request/user
         return OrganizationInfoSerializer(qs, many=True, context=self.context).data
 
+
+# -------------------- Auth & account flows --------------------
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
@@ -63,10 +84,9 @@ class RegisterSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
+        # Let create_user handle hashing & defaults
         password = validated_data.pop("password")
-        user = User.objects.create_user(**validated_data)
-        user.set_password(password)
-        user.save(update_fields=["password"])
+        user = User.objects.create_user(password=password, **validated_data)
         return user
 
 
@@ -77,14 +97,18 @@ class LoginSerializer(serializers.Serializer):
     def validate(self, attrs):
         email = attrs.get("email")
         password = attrs.get("password")
+
         user = User.objects.filter(email__iexact=email).first()
         if not user or not user.is_active or not user.check_password(password):
             raise serializers.ValidationError("Invalid email or password")
+
         refresh = RefreshToken.for_user(user)
         return {
             "refresh": str(refresh),
             "access": str(refresh.access_token),
-            "user": UserSerializer(user).data,
+            # IMPORTANT: pass serializer context so nested OrganizationInfoSerializer
+            # can access request/user for get_role()
+            "user": UserSerializer(user, context=self.context).data,
         }
 
 
@@ -105,6 +129,7 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         uidb64 = attrs.get("uidb64")
         token = attrs.get("token")
         new_password = attrs.get("new_password")
+
         try:
             uid = urlsafe_base64_decode(uidb64).decode()
             user = User.objects.get(pk=uid)

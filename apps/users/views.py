@@ -1,3 +1,5 @@
+# apps/users/views.py
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.encoding import force_bytes
@@ -9,8 +11,8 @@ from rest_framework.generics import RetrieveUpdateAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from apps.organizations.models import OrgMembership
 
+from apps.organizations.models import OrgMembership
 from apps.common.utils import send_simple_email
 from .serializers import (
     RegisterSerializer,
@@ -29,10 +31,13 @@ class RegisterView(APIView):
 
     @extend_schema(request=RegisterSerializer, responses=UserSerializer, tags=["Auth"])
     def post(self, request, *args, **kwargs):
-        serializer = RegisterSerializer(data=request.data)
+        serializer = RegisterSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        return Response({"user": UserSerializer(user).data}, status=status.HTTP_201_CREATED)
+        return Response(
+            {"user": UserSerializer(user, context={"request": request}).data},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class LoginView(APIView):
@@ -41,7 +46,7 @@ class LoginView(APIView):
 
     @extend_schema(request=LoginSerializer, responses=LoginSerializer, tags=["Auth"])
     def post(self, request, *args, **kwargs):
-        serializer = LoginSerializer(data=request.data)
+        serializer = LoginSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         return Response(serializer.validated_data, status=status.HTTP_200_OK)
 
@@ -52,7 +57,7 @@ class PasswordResetRequestView(APIView):
 
     @extend_schema(request=PasswordResetRequestSerializer, responses={"200": None}, tags=["Auth"])
     def post(self, request, *args, **kwargs):
-        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer = PasswordResetRequestSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data["email"]
         user = User.objects.filter(email__iexact=email, is_active=True).first()
@@ -65,7 +70,6 @@ class PasswordResetRequestView(APIView):
                 f"token: {token}\n"
             )
             send_simple_email("Password Reset", message, to_email=user.email)
-        # Always return 200 to avoid email enumeration
         return Response({"detail": "If the email exists, a reset link was sent."})
 
 
@@ -75,7 +79,7 @@ class PasswordResetConfirmView(APIView):
 
     @extend_schema(request=PasswordResetConfirmSerializer, responses={"200": None}, tags=["Auth"])
     def post(self, request, *args, **kwargs):
-        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer = PasswordResetConfirmSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data["user_obj"]
         new_password = serializer.validated_data["new_password"]
@@ -108,8 +112,7 @@ class MeView(RetrieveUpdateAPIView):
             .prefetch_related(
                 Prefetch(
                     "memberships",
-                    queryset=OrgMembership.objects.select_related("organization")
-                    .only(
+                    queryset=OrgMembership.objects.select_related("organization").only(
                         "role", "is_active",
                         "organization__id", "organization__name",
                         "organization__slug", "organization__status",
