@@ -1,18 +1,38 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
-from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
-from django.utils.encoding import force_bytes
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.utils.http import urlsafe_base64_decode
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
+from apps.organizations.models import Organization
 
 User = get_user_model()
 
 
+class OrganizationInfoSerializer(serializers.ModelSerializer):
+    role = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Organization
+        fields = ["id", "name", "slug", "status", "role"]
+
+    def get_role(self, obj):
+        # Fetch the membership for the current user
+        user = self.context["request"].user
+        membership = obj.memberships.filter(user=user).first()
+        return membership.role if membership else None
+
+
 class UserSerializer(serializers.ModelSerializer):
+    organizations = OrganizationInfoSerializer(source="memberships__organization", many=True, read_only=True)
+
     class Meta:
         model = User
-        fields = ["id", "email", "first_name", "last_name", "is_active", "is_staff", "is_superuser"]
+        fields = [
+            "id", "email", "first_name", "last_name",
+            "is_active", "is_staff", "is_superuser",
+            "organizations",
+        ]
         read_only_fields = ["id", "is_active", "is_staff", "is_superuser"]
 
 
