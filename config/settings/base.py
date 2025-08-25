@@ -202,11 +202,12 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@billmunshi.loca
 # Cache / Redis (for rate limiting, general cache)
 # ------------------------------------------------------------
 REDIS_URL = env("REDIS_URL", default="redis://127.0.0.1:6379/1")
+
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
         "LOCATION": REDIS_URL,
-        "OPTIONS": {"CLIENT_CLASS": "django_redis.client.DefaultClient"},
+        # REMOVE the OPTIONS block entirely
         "KEY_PREFIX": "billmunshi",
         "TIMEOUT": 300,
     }
