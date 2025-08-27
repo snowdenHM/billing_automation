@@ -4,7 +4,7 @@ from .settings import (
     ZohoVendorSerializer,
     ZohoChartOfAccountSerializer,
     ZohoTaxesSerializer,
-    ZohoTDSTCSSerializer,
+    ZohoTdsTcsSerializer,
     ZohoVendorCreditsSerializer,
 )
 
@@ -16,6 +16,6 @@ __all__ = [
     "ZohoVendorSerializer",
     "ZohoChartOfAccountSerializer",
     "ZohoTaxesSerializer",
-    "ZohoTDSTCSSerializer",
-    "ZohoVendorCreditsSerializer",
+    "ZohoTdsTcsSerializer",
+    "ZohoVendorCreditSerializer",
 ]

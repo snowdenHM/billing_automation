@@ -22,12 +22,14 @@ class NullablePKRelatedField(serializers.PrimaryKeyRelatedField):
 class OrganizationSerializer(serializers.ModelSerializer):
     owner = NullablePKRelatedField(queryset=User.objects.all(), required=False, allow_null=True)
     owner_email = serializers.EmailField(write_only=True, required=False)
+    unique_name = serializers.CharField(read_only=True)  # This is auto-generated
 
     class Meta:
         model = Organization
         fields = [
             "id",
             "name",
+            "unique_name",
             "slug",
             "status",
             "owner",
@@ -36,7 +38,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "slug", "created_by", "created_at", "updated_at"]
+        read_only_fields = ["id", "slug", "unique_name", "created_by", "created_at", "updated_at"]
 
     def validate(self, attrs):
         owner = attrs.get("owner")

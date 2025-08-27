@@ -17,7 +17,7 @@ from apps.module.zoho.models import (
     VendorZohoBill, ExpenseZohoBill,
     VendorZohoProduct, ExpenseZohoProduct,
     ZohoVendor, ZohoChartOfAccount,
-    ZohoTaxes, Zoho_TDS_TCS, ZohoCredentials
+    ZohoTaxes, ZohoTdsTcs, ZohoCredentials
 )
 # TALLY models (optional aggregation)
 from apps.module.tally.models import (
@@ -407,9 +407,9 @@ class IntegrationsHealthView(APIView):
             or ZohoCredentials.objects.filter(organization=org).exclude(accessToken__isnull=True).exists()
 
         tally_reachable = TallyVendorBill.objects.filter(
-            organization=org, status="Synced", update_at__gte=timezone.now()-timedelta(days=1)
+            organization=org, status="Synced", updated_at__gte=timezone.now()-timedelta(days=1)
         ).exists() or TallyExpenseBill.objects.filter(
-            organization=org, status="Synced", update_at__gte=timezone.now()-timedelta(days=1)
+            organization=org, status="Synced", updated_at__gte=timezone.now()-timedelta(days=1)
         ).exists()
 
         data = {

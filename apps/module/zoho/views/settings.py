@@ -14,8 +14,8 @@ from apps.module.zoho.models import (
     ZohoVendor,
     ZohoChartOfAccount,
     ZohoTaxes,
-    Zoho_TDS_TCS,
-    Zoho_Vendor_Credits,
+    ZohoTdsTcs,
+    ZohoVendorCredit,
 )
 from apps.module.zoho.permissions import IsOrgAdminOrOrgAPIKey, ModuleZohoEnabled
 from apps.module.zoho.serializers import (
@@ -26,7 +26,7 @@ from apps.module.zoho.serializers import (
     ZohoVendorSerializer,
     ZohoChartOfAccountSerializer,
     ZohoTaxesSerializer,
-    ZohoTDSTCSSerializer,
+    ZohoTdsTcsSerializer,  # Fixed casing to match the serializer definition
     ZohoVendorCreditsSerializer,
 )
 
@@ -66,7 +66,11 @@ class ZohoClient:
         return resp.json()
 
 
-def _get_org_and_creds(org_id: int) -> Tuple[Organization, ZohoCredentials]:
+def _get_org_and_creds(org_id):
+    """
+    Helper to get organization and its Zoho credentials.
+    Updated to handle UUID organization IDs.
+    """
     org = get_object_or_404(Organization, id=org_id)
     creds = get_object_or_404(ZohoCredentials, organization=org)
     return org, creds
@@ -99,7 +103,7 @@ class GenerateTokenView(APIView):
     permission_classes = [permissions.IsAuthenticated | IsOrgAdminOrOrgAPIKey, ModuleZohoEnabled]
     serializer_class = GenerateTokenResponseSerializer  # helps spectacular
 
-    def post(self, request, org_id: int, *args, **kwargs):
+    def post(self, request, org_id, *args, **kwargs):
         _, creds = _get_org_and_creds(org_id)
         try:
             data = ZohoClient.exchange_code_for_tokens(creds)
@@ -140,7 +144,7 @@ class VendorSyncView(APIView):
     permission_classes = [permissions.IsAuthenticated | IsOrgAdminOrOrgAPIKey, ModuleZohoEnabled]
     serializer_class = SyncResultSerializer
 
-    def post(self, request, org_id: int, *args, **kwargs):
+    def post(self, request, org_id, *args, **kwargs):
         org, creds = _get_org_and_creds(org_id)
         client = ZohoClient(creds)
         try:
@@ -194,7 +198,7 @@ class ChartOfAccountSyncView(APIView):
     permission_classes = [permissions.IsAuthenticated | IsOrgAdminOrOrgAPIKey, ModuleZohoEnabled]
     serializer_class = SyncResultSerializer
 
-    def post(self, request, org_id: int, *args, **kwargs):
+    def post(self, request, org_id, *args, **kwargs):
         org, creds = _get_org_and_creds(org_id)
         client = ZohoClient(creds)
         try:
@@ -246,7 +250,7 @@ class TaxesSyncView(APIView):
     permission_classes = [permissions.IsAuthenticated | IsOrgAdminOrOrgAPIKey, ModuleZohoEnabled]
     serializer_class = SyncResultSerializer
 
-    def post(self, request, org_id: int, *args, **kwargs):
+    def post(self, request, org_id, *args, **kwargs):
         org, creds = _get_org_and_creds(org_id)
         client = ZohoClient(creds)
         try:
@@ -284,17 +288,17 @@ class TaxesSyncView(APIView):
 @extend_schema(
     tags=["Zoho"],
     parameters=[OpenApiParameter(name="tax_type", required=False, type=str, location=OpenApiParameter.QUERY)],
-    responses=ZohoTDSTCSSerializer(many=True),
+    responses=ZohoTdsTcsSerializer(many=True),
 )
 class TDSTCSListView(ListAPIView):
     permission_classes = [permissions.IsAuthenticated | IsOrgAdminOrOrgAPIKey, ModuleZohoEnabled]
-    serializer_class = ZohoTDSTCSSerializer
-    queryset = Zoho_TDS_TCS.objects.none()
+    serializer_class = ZohoTdsTcsSerializer
+    queryset = ZohoTdsTcs.objects.none()
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
-            return Zoho_TDS_TCS.objects.none()
-        qs = Zoho_TDS_TCS.objects.filter(organization_id=self.kwargs["org_id"]).order_by("-created_at")
+            return ZohoTdsTcs.objects.none()
+        qs = ZohoTdsTcs.objects.filter(organization_id=self.kwargs["org_id"]).order_by("-created_at")
         ttype = self.request.query_params.get("tax_type")
         if ttype in {"TDS", "TCS"}:
             qs = qs.filter(taxType=ttype)
@@ -306,7 +310,7 @@ class TDSTCSSyncView(APIView):
     permission_classes = [permissions.IsAuthenticated | IsOrgAdminOrOrgAPIKey, ModuleZohoEnabled]
     serializer_class = SyncResultSerializer
 
-    def post(self, request, org_id: int, *args, **kwargs):
+    def post(self, request, org_id, *args, **kwargs):
         org, creds = _get_org_and_creds(org_id)
         client = ZohoClient(creds)
 
@@ -319,14 +323,14 @@ class TDSTCSSyncView(APIView):
         def upsert(taxes: List[dict], ttype: str) -> int:
             ids = [x.get("tax_id") for x in taxes]
             existing = set(
-                Zoho_TDS_TCS.objects.filter(organization=org, taxType=ttype, taxId__in=ids)
+                ZohoTdsTcs.objects.filter(organization=org, taxType=ttype, taxId__in=ids)
                 .values_list("taxId", flat=True)
             )
-            to_create: List[Zoho_TDS_TCS] = []
+            to_create: List[ZohoTdsTcs] = []
             for x in taxes:
                 if x.get("tax_id") not in existing:
                     to_create.append(
-                        Zoho_TDS_TCS(
+                        ZohoTdsTcs(
                             organization=org,
                             taxId=x.get("tax_id") or "",
                             taxName=x.get("tax_name") or "",
@@ -335,7 +339,7 @@ class TDSTCSSyncView(APIView):
                         )
                     )
             if to_create:
-                Zoho_TDS_TCS.objects.bulk_create(to_create, ignore_conflicts=True)
+                ZohoTdsTcs.objects.bulk_create(to_create, ignore_conflicts=True)
             return len(to_create)
 
         return Response({
@@ -350,12 +354,12 @@ class TDSTCSSyncView(APIView):
 class VendorCreditsListView(ListAPIView):
     permission_classes = [permissions.IsAuthenticated | IsOrgAdminOrOrgAPIKey, ModuleZohoEnabled]
     serializer_class = ZohoVendorCreditsSerializer
-    queryset = Zoho_Vendor_Credits.objects.none()
+    queryset = ZohoVendorCredit.objects.none()
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
-            return Zoho_Vendor_Credits.objects.none()
-        return Zoho_Vendor_Credits.objects.filter(organization_id=self.kwargs["org_id"]).order_by("-created_at")
+            return ZohoVendorCredit.objects.none()
+        return ZohoVendorCredit.objects.filter(organization_id=self.kwargs["org_id"]).order_by("-created_at")
 
 
 @extend_schema(tags=["Zoho"], request=EmptySerializer, responses=SyncResultSerializer)
@@ -363,7 +367,7 @@ class VendorCreditsSyncView(APIView):
     permission_classes = [permissions.IsAuthenticated | IsOrgAdminOrOrgAPIKey, ModuleZohoEnabled]
     serializer_class = SyncResultSerializer
 
-    def post(self, request, org_id: int, *args, **kwargs):
+    def post(self, request, org_id, *args, **kwargs):
         org, creds = _get_org_and_creds(org_id)
         client = ZohoClient(creds)
         try:
@@ -373,17 +377,17 @@ class VendorCreditsSyncView(APIView):
 
         credits = payload.get("vendor_credits", [])
         existing_ids = set(
-            Zoho_Vendor_Credits.objects.filter(
+            ZohoVendorCredit.objects.filter(
                 organization=org, vendor_credit_id__in=[vc.get("vendor_credit_id") for vc in credits]
             ).values_list("vendor_credit_id", flat=True)
         )
 
-        to_create: List[Zoho_Vendor_Credits] = []
+        to_create: List[ZohoVendorCredit] = []
         for vc in credits:
             vcid = vc.get("vendor_credit_id")
             if vcid not in existing_ids:
                 to_create.append(
-                    Zoho_Vendor_Credits(
+                    ZohoVendorCredit(
                         organization=org,
                         vendor_credit_id=vcid or "",
                         vendor_credit_number=vc.get("vendor_credit_number") or "",
@@ -392,7 +396,7 @@ class VendorCreditsSyncView(APIView):
                     )
                 )
         if to_create:
-            Zoho_Vendor_Credits.objects.bulk_create(to_create, ignore_conflicts=True)
+            ZohoVendorCredit.objects.bulk_create(to_create, ignore_conflicts=True)
 
         return Response({"created": len(to_create)})
 
@@ -410,7 +414,7 @@ class VendorGSTLookupView(APIView):
     permission_classes = [permissions.IsAuthenticated | IsOrgAdminOrOrgAPIKey, ModuleZohoEnabled]
     serializer_class = EmptySerializer
 
-    def get(self, request, org_id: int, *args, **kwargs):
+    def get(self, request, org_id, *args, **kwargs):
         vendor_pk = request.query_params.get("vendor_id")
         vendor = get_object_or_404(ZohoVendor, id=vendor_pk, organization_id=org_id)
         return Response({"gst": vendor.gstNo or "N/A"})

@@ -1,12 +1,24 @@
-from django.urls import path
+from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import PlanViewSet, SubscriptionAssignView, SubscriptionDetailView
+from .views import (
+    PlanViewSet,
+    SubscriptionViewSet,
+    OrganizationSubscriptionView,
+)
 
+# Setup DRF routers
 router = DefaultRouter()
-router.register(r"subscriptions/plans", PlanViewSet, basename="plan")
+router.register(r"plans", PlanViewSet, basename="plan")
+router.register(r"subscriptions", SubscriptionViewSet, basename="subscription")
+
+app_name = "subscriptions"
 
 urlpatterns = [
-    path("subscriptions/assign/", SubscriptionAssignView.as_view(), name="subscription-assign"),
-    path("subscriptions/<int:org_id>/", SubscriptionDetailView.as_view(), name="subscription-detail"),
+    # Organization subscription detail view (uses UUID)
+    path("organizations/<uuid:org_id>/subscription/",
+         OrganizationSubscriptionView.as_view(),
+         name="organization-subscription"),
+
+    # Include router URLs
+    path("", include(router.urls)),
 ]
-urlpatterns += router.urls

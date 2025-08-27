@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
 from rest_framework_api_key.models import APIKey
 from .models import (
     Organization,
@@ -115,10 +116,10 @@ class OrganizationViewSet(viewsets.ModelViewSet):
     @extend_schema(
         summary="Revoke an API key for this organization",
         tags=["Organization API Keys"],
-        parameters=[OpenApiParameter(name="key_id", type=int, location=OpenApiParameter.PATH)],
+        parameters=[OpenApiParameter(name="key_id", type=OpenApiTypes.UUID, location=OpenApiParameter.PATH)],
         responses={"200": None},
     )
-    @action(detail=True, methods=["post"], url_path=r"apikeys/(?P<key_id>[^/.]+)/revoke")
+    @action(detail=True, methods=["post"], url_path=r"apikeys/(?P<key_id>[0-9a-f-]{36})/revoke")
     def revoke_api_key(self, request, key_id=None, pk=None):
         org = self.get_object()
         self.check_object_permissions(request, org)

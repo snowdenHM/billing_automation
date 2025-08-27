@@ -1,11 +1,32 @@
+import random
+import string
+
 from django.conf import settings
 from django.db import models
-from django.utils.text import slugify
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
-from apps.common.models import TimeStampedModel
+from django.utils.text import slugify
 from rest_framework_api_key.models import APIKey
 from waffle.models import Switch
+
+from apps.common.models import TimeStampedModel
+
+
+def generate_unique_org_name():
+    """
+    Generate a unique organization name with BM- prefix followed by random characters.
+    Format: BM-XXXXX where X is alphanumeric
+    """
+    # Generate a random string of 5 alphanumeric characters
+    random_str = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+    unique_name = f"BM-{random_str}"
+
+    # Check if this name already exists, regenerate if it does
+    while Organization.objects.filter(unique_name=unique_name).exists():
+        random_str = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+        unique_name = f"BM-{random_str}"
+
+    return unique_name
 
 
 class Organization(TimeStampedModel):
@@ -14,6 +35,7 @@ class Organization(TimeStampedModel):
     STATUS_CHOICES = [(ACTIVE, "Active"), (SUSPENDED, "Suspended")]
 
     name = models.CharField(max_length=255, unique=True)
+    unique_name = models.CharField(max_length=50, unique=True, default=generate_unique_org_name)
     slug = models.SlugField(max_length=255, unique=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=ACTIVE)
 
@@ -36,7 +58,7 @@ class Organization(TimeStampedModel):
         return super().save(*args, **kwargs)
 
     def __str__(self):  # pragma: no cover
-        return self.name
+        return f"{self.name} ({self.unique_name})"
 
 
 class OrgMembership(TimeStampedModel):
@@ -61,7 +83,8 @@ class OrganizationAPIKey(TimeStampedModel):
     api_key = models.OneToOneField(APIKey, on_delete=models.CASCADE, related_name="organization_link")
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="api_keys")
     name = models.CharField(max_length=100)
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="issued_org_api_keys")
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   related_name="issued_org_api_keys")
 
     class Meta:
         unique_together = ("api_key", "organization")
@@ -103,7 +126,11 @@ class OrganizationModule(TimeStampedModel):
         return f"{self.organization_id}:{self.module.code} -> {self.is_enabled}"
 
 
-def _switch_name(org_id: int, module_code: str) -> str:
+def _switch_name(org_id, module_code: str) -> str:
+    """
+    Generate a consistent switch name using organization ID and module code.
+    Handles both UUID and legacy integer IDs.
+    """
     return f"org:{org_id}:{module_code}"
 
 

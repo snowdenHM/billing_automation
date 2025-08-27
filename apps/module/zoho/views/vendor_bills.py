@@ -25,7 +25,7 @@ from apps.module.zoho.models import (
     VendorZohoBill,
     VendorZohoProduct,
     ZohoVendor,
-    Zoho_TDS_TCS,
+    ZohoTdsTcs,
     ZohoChartOfAccount,
     ZohoTaxes,
     ZohoCredentials,
@@ -45,7 +45,10 @@ from apps.module.zoho.serializers.base import SyncResultSerializer  # ← use sh
 
 # -------------------- Helpers --------------------
 
-def _get_org(org_id: int) -> Organization:
+def _get_org(org_id):
+    """
+    Get organization by ID, supporting UUID.
+    """
     return get_object_or_404(Organization, id=org_id)
 
 

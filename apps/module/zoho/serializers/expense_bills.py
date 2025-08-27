@@ -94,16 +94,35 @@ class ExpenseBillUploadSerializer(serializers.ModelSerializer):
     Multipart upload. fileType behavior:
       - "Single Invoice/File": analyse all PDF pages as ONE invoice
       - "Multiple Invoice/File": each PDF page becomes its own bill+analysis
+
+    Supports both single file upload and multiple file uploads with files[].
     """
     organization = OrgField()
+    file = serializers.FileField(required=False)
+    files = serializers.ListField(
+        child=serializers.FileField(),
+        required=False,
+        help_text="Use for multiple file uploads"
+    )
 
     class Meta:
         model = ExpenseBill
-        fields = ["organization", "file", "fileType"]
+        fields = ["organization", "file", "files", "fileType"]
 
     def validate(self, attrs):
-        if not attrs.get("file"):
-            raise serializers.ValidationError({"file": "A file is required."})
+        has_file = attrs.get("file") is not None
+        has_files = attrs.get("files") is not None and len(attrs.get("files", [])) > 0
+
+        if not has_file and not has_files:
+            raise serializers.ValidationError({
+                "file": "Either 'file' or 'files' field is required."
+            })
+
+        if has_file and has_files:
+            raise serializers.ValidationError({
+                "file": "Please provide either 'file' or 'files', not both."
+            })
+
         return attrs
 
 

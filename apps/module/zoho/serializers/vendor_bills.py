@@ -8,7 +8,7 @@ from apps.module.zoho.models import (
     VendorZohoBill,
     VendorZohoProduct,
     ZohoVendor,
-    Zoho_TDS_TCS,
+    ZohoTdsTcs,
     ZohoChartOfAccount,
     ZohoTaxes,
 )
@@ -147,7 +147,7 @@ class VendorBillVerifySerializer(serializers.Serializer):
     igst = serializers.CharField(required=False, allow_blank=True)
     tax_type = serializers.ChoiceField(choices=("TDS", "TCS", "No"), required=False, default="No")
     tds_tcs_id = serializers.PrimaryKeyRelatedField(
-        queryset=Zoho_TDS_TCS.objects.all(), required=False, allow_null=True
+        queryset=ZohoTdsTcs.objects.all(), required=False, allow_null=True
     )
     products = VerifyProductItemSerializer(many=True, required=False)
 

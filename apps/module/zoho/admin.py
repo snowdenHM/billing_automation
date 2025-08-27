@@ -10,8 +10,8 @@ from .models import (
     ZohoVendor,
     ZohoChartOfAccount,
     ZohoTaxes,
-    Zoho_TDS_TCS,
-    Zoho_Vendor_Credits,
+    ZohoTdsTcs,
+    ZohoVendorCredit,
     VendorBill,
     VendorZohoBill,
     VendorZohoProduct,
@@ -105,7 +105,7 @@ class ZohoTaxesAdmin(BaseOrgScopedAdmin):
     autocomplete_fields = ("organization",)
 
 
-@admin.register(Zoho_TDS_TCS)
+@admin.register(ZohoTdsTcs)
 class ZohoTDSTCSAdmin(BaseOrgScopedAdmin):
     list_display = ("organization", "taxName", "taxType", "taxPercentage", "created_at")
     search_fields = ("taxName", "taxType", "organization__name")
@@ -114,7 +114,7 @@ class ZohoTDSTCSAdmin(BaseOrgScopedAdmin):
     autocomplete_fields = ("organization",)
 
 
-@admin.register(Zoho_Vendor_Credits)
+@admin.register(ZohoVendorCredit)
 class ZohoVendorCreditsAdmin(BaseOrgScopedAdmin):
     list_display = ("organization", "vendor_name", "vendor_credit_number", "vendor_credit_id", "created_at")
     search_fields = ("vendor_name", "vendor_credit_number", "vendor_credit_id", "organization__name")

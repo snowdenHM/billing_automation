@@ -170,6 +170,31 @@ class TallyVendorBill(BaseOrgModel):
             self.billmunshiName = f"BM-TB-{next_num}"
         super().save(*args, **kwargs)
 
+    def clean(self):
+        """Validate status transitions"""
+        super().clean()
+        if not self.pk:  # Skip validation for new records
+            return
+
+        old_instance = TallyVendorBill.objects.get(pk=self.pk)
+        if old_instance.status != self.status:
+            valid_transitions = {
+                self.BillStatus.DRAFT: [self.BillStatus.ANALYSED],
+                self.BillStatus.ANALYSED: [self.BillStatus.VERIFIED],
+                self.BillStatus.VERIFIED: [self.BillStatus.SYNCED],
+                self.BillStatus.SYNCED: [],  # No further transitions allowed
+            }
+
+            if self.status not in valid_transitions.get(old_instance.status, []):
+                raise ValidationError({
+                    'status': f"Invalid status transition from {old_instance.status} to {self.status}. "
+                             f"Valid next states are: {', '.join(valid_transitions.get(old_instance.status, []))}"
+                })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
 
 class TallyVendorAnalyzedBill(BaseOrgModel):
     class TaxType(models.TextChoices):
@@ -177,8 +202,8 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
         TDS = "TDS", "is_tds_tax"
 
     class GSTType(models.TextChoices):
-        INTRA = "Intra-State", "Intra-State"   # CGST + SGST
-        INTER = "Inter-State", "Inter-State"   # IGST
+        IGST = "IGST", "IGST"
+        CGST_SGST = "CGST_SGST", "CGST+SGST"
         UNKNOWN = "Unknown", "Unknown"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
@@ -217,6 +242,37 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
 
     def __str__(self) -> str:
         return (self.selectBill.billmunshiName if self.selectBill else None) or f"VendorAnalysed:{self.id}"
+
+    def clean(self):
+        super().clean()
+        self.validate_gst_calculations()
+
+    def validate_gst_calculations(self):
+        """Validate that GST totals match sum of product GSTs"""
+        if not self.pk:  # Skip validation for new unsaved records
+            return
+
+        if self.gst_type == self.GSTType.IGST:
+            product_igst_sum = sum(p.igst or 0 for p in self.products.all())
+            if abs(product_igst_sum - (self.igst or 0)) > 0.01:
+                raise ValidationError({
+                    'igst': f"IGST total ({self.igst}) doesn't match sum of product IGSTs ({product_igst_sum})"
+                })
+        elif self.gst_type == self.GSTType.CGST_SGST:
+            product_cgst_sum = sum(p.cgst or 0 for p in self.products.all())
+            product_sgst_sum = sum(p.sgst or 0 for p in self.products.all())
+            if abs(product_cgst_sum - (self.cgst or 0)) > 0.01:
+                raise ValidationError({
+                    'cgst': f"CGST total ({self.cgst}) doesn't match sum of product CGSTs ({product_cgst_sum})"
+                })
+            if abs(product_sgst_sum - (self.sgst or 0)) > 0.01:
+                raise ValidationError({
+                    'sgst': f"SGST total ({self.sgst}) doesn't match sum of product SGSTs ({product_sgst_sum})"
+                })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
 
 
 class TallyVendorAnalyzedProduct(BaseOrgModel):
@@ -332,7 +388,7 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
     bill_no = models.CharField(max_length=50, blank=True, null=True)
     bill_date = models.DateField(blank=True, null=True)
 
-    total = models.CharField(max_length=50, blank=True, null=True, default="0")
+    total = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     igst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     igst_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="igst_tally_expense_analysed_bills"
@@ -369,7 +425,7 @@ class TallyExpenseAnalyzedProduct(BaseOrgModel):
 
     item_details = models.CharField(max_length=200, blank=True, null=True)
     chart_of_accounts = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
-    amount = models.CharField(max_length=10, blank=True, null=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     debit_or_credit = models.CharField(
         choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.CREDIT
     )

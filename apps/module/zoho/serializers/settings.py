@@ -5,8 +5,8 @@ from apps.module.zoho.models import (
     ZohoVendor,
     ZohoChartOfAccount,
     ZohoTaxes,
-    Zoho_TDS_TCS,
-    Zoho_Vendor_Credits,
+    ZohoTdsTcs,
+    ZohoVendorCredit,
 )
 
 
@@ -58,11 +58,11 @@ class ZohoTaxesSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at"]
 
 
-class ZohoTDSTCSSerializer(serializers.ModelSerializer):
+class ZohoTdsTcsSerializer(serializers.ModelSerializer):
     organization = OrgField(required=True)
 
     class Meta:
-        model = Zoho_TDS_TCS
+        model = ZohoTdsTcs
         fields = [
             "id",
             "organization",
@@ -79,7 +79,7 @@ class ZohoVendorCreditsSerializer(serializers.ModelSerializer):
     organization = OrgField(required=True)
 
     class Meta:
-        model = Zoho_Vendor_Credits
+        model = ZohoVendorCredit
         fields = [
             "id",
             "organization",

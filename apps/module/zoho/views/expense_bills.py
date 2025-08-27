@@ -42,7 +42,10 @@ from apps.module.zoho.serializers.base import SyncResultSerializer  # reuse shar
 
 # -------------------- Helpers --------------------
 
-def _get_org(org_id: int) -> Organization:
+def _get_org(org_id):
+    """
+    Get organization by ID, supporting UUID.
+    """
     return get_object_or_404(Organization, id=org_id)
 
 
@@ -235,24 +238,60 @@ class ExpenseBillListCreateView(ListCreateAPIView):
         ser = ExpenseBillUploadSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         org = _get_org(kwargs["org_id"])
-        file = ser.validated_data["file"]
         file_type = ser.validated_data.get("fileType") or "Single Invoice/File"
+        created = []
 
+        # Handle both single file and multiple files cases
+        if "file" in ser.validated_data:
+            # Single file upload via 'file' field
+            single_file = ser.validated_data["file"]
+            created.extend(self._process_file(org, single_file, file_type))
+        elif "files" in ser.validated_data:
+            # Multiple files upload via 'files' field
+            files = ser.validated_data["files"]
+            for uploaded_file in files:
+                created.extend(self._process_file(org, uploaded_file, file_type))
+
+        out = ExpenseUploadResultSerializer({
+            "created": len(created),
+            "bills": ExpenseBillSerializer(created, many=True).data
+        }).data
+        return Response(out, status=status.HTTP_201_CREATED)
+
+    def _process_file(self, org, file, file_type):
+        """
+        Process a single file for expense bill creation and analysis.
+        Returns a list of created ExpenseBill objects.
+        """
+        created = []
         pages, is_pdf = _file_to_pages(file)
 
-        created: List[ExpenseBill] = []
-
         if file_type == "Single Invoice/File":
-            bill = ExpenseBill.objects.create(organization=org, file=file, fileType=file_type, status="Draft")
+            # Process as a single invoice
+            bill = ExpenseBill.objects.create(
+                organization=org,
+                file=file,
+                fileType=file_type,
+                status="Draft"
+            )
             try:
-                analysed_json = _openai_analyse_images(pages)  # ALL pages as one
+                # Analyze all pages as one document
+                analysed_json = _openai_analyse_images(pages)
                 _persist_analysis_to_models(org, bill, analysed_json)
             except Exception:
+                # If analysis fails, leave it as Draft
                 pass
             created.append(bill)
         else:
-            if not is_pdf:
-                bill = ExpenseBill.objects.create(organization=org, file=file, fileType=file_type, status="Draft")
+            # Multiple Invoice/File handling
+            if not is_pdf or len(pages) == 1:
+                # Non-PDF files or single-page PDFs are handled as one bill
+                bill = ExpenseBill.objects.create(
+                    organization=org,
+                    file=file,
+                    fileType=file_type,
+                    status="Draft"
+                )
                 try:
                     analysed_json = _openai_analyse_images(pages)
                     _persist_analysis_to_models(org, bill, analysed_json)
@@ -260,20 +299,24 @@ class ExpenseBillListCreateView(ListCreateAPIView):
                     pass
                 created.append(bill)
             else:
+                # Multi-page PDFs are split into separate bills
                 for idx, jpeg in enumerate(pages, start=1):
                     page_name = f"expense-page-{idx}.jpg"
                     bill = ExpenseBill.objects.create(
-                        organization=org, file=ContentFile(jpeg, name=page_name), fileType=file_type, status="Draft"
+                        organization=org,
+                        file=ContentFile(jpeg, name=page_name),
+                        fileType=file_type,
+                        status="Draft"
                     )
                     try:
+                        # Analyze each page as a separate invoice
                         analysed_json = _openai_analyse_images([jpeg])
                         _persist_analysis_to_models(org, bill, analysed_json)
                     except Exception:
                         pass
                     created.append(bill)
 
-        out = ExpenseUploadResultSerializer({"created": len(created), "bills": ExpenseBillSerializer(created, many=True).data}).data
-        return Response(out, status=status.HTTP_201_CREATED)
+        return created
 
 
 @extend_schema(tags=["Zoho Expense Bills"], responses=ExpenseBillDetailSerializer)
@@ -357,51 +400,84 @@ class ExpenseBillSyncView(APIView):
             return Response({"synced": False, "message": "Bill is not verified/analysed."}, status=400)
 
         try:
-            zb = ExpenseZohoBill.objects.select_related("vendor").get(selectBill=bill, organization=org)
+            zbill = ExpenseZohoBill.objects.select_related("vendor").get(
+                selectBill=bill, organization=org
+            )
         except ExpenseZohoBill.DoesNotExist:
-            return Response({"synced": False, "message": "Analysed expense not found."}, status=404)
+            return Response({"synced": False, "message": "Analysed bill not found."}, status=404)
 
-        products = list(
-            ExpenseZohoProduct.objects.select_related("chart_of_accounts", "vendor").filter(zohoBill=zb)
-        )
+        products = list(ExpenseZohoProduct.objects.select_related("chart_of_accounts", "vendor").filter(zohoBill=zbill))
 
-        journal_date = zb.bill_date.isoformat() if zb.bill_date else None
-        payload: Dict[str, Any] = {
-            "reference_number": zb.bill_no or "",
+        if not products:
+            return Response({"synced": False, "message": "No expense items found to sync."}, status=400)
+
+        # Check that all products have the required fields
+        missing_fields = []
+        for idx, item in enumerate(products):
+            if not item.chart_of_accounts:
+                missing_fields.append(f"Item {idx+1}: Missing chart of accounts")
+            if not item.amount:
+                missing_fields.append(f"Item {idx+1}: Missing amount")
+
+        if missing_fields:
+            return Response({
+                "synced": False,
+                "message": "Missing required fields: " + ", ".join(missing_fields)
+            }, status=400)
+
+        # Prepare journal entry payload for Zoho
+        bill_date_str = zbill.bill_date.isoformat() if zbill.bill_date else None
+        journal_date = bill_date_str or None
+        reference_number = zbill.bill_no or f"Expense-{bill.billmunshiName}"
+        notes = zbill.note or f"Expense entry from bill {bill.billmunshiName}"
+
+        payload = {
             "journal_date": journal_date,
-            "notes": zb.note or "",
-            "line_items": [],
+            "reference_number": reference_number,
+            "notes": notes,
+            "line_items": []
         }
 
+        # Add line items from the expense products
         for item in products:
-            line: Dict[str, Any] = {
+            line_item = {
+                "account_id": str(item.chart_of_accounts.accountId),
                 "description": item.item_details or "",
-                "account_id": str(item.chart_of_accounts.accountId) if item.chart_of_accounts else "",
-                "amount": item.amount or "0",
-                "debit_or_credit": item.debit_or_credit or "credit",
+                "debit_or_credit": item.debit_or_credit or "debit",
+                "amount": float(item.amount or 0)
             }
-            if item.vendor:
-                line["customer_id"] = str(item.vendor.contactId)
-            payload["line_items"].append(line)
 
+            # If vendor is specified, add it to the line item
+            if item.vendor:
+                line_item["entity_type"] = "vendor"
+                line_item["entity_id"] = item.vendor.contactId
+
+            payload["line_items"].append(line_item)
+
+        # Get Zoho credentials and make the API call
         creds = _get_org_creds(org)
         url = f"https://www.zohoapis.in/books/v3/journals?organization_id={creds.organisationId}"
-        headers = {"Authorization": f"Zoho-oauthtoken {creds.accessToken}"}
-        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
+        headers = {"Authorization": f"Zoho-oauthtoken {creds.accessToken}", "Content-Type": "application/json"}
 
+        r = requests.post(url, headers=headers, json=payload, timeout=60)
+
+        # Handle token refresh if needed
         if r.status_code == 401:
             new_at = _refresh_zoho_access_token(creds)
             if new_at:
                 headers["Authorization"] = f"Zoho-oauthtoken {new_at}"
-                r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
+                r = requests.post(url, headers=headers, json=payload, timeout=60)
 
+        # Check response and update bill status
         if r.status_code in (200, 201):
             bill.status = "Synced"
             bill.save(update_fields=["status"])
-            return Response({"synced": True, "message": "Expense synced successfully."})
+            return Response({"synced": True, "message": "Expense bill synced as journal entry successfully."})
 
+        # Handle errors
         try:
             err = r.json().get("message", r.text)
         except Exception:
             err = r.text
+
         return Response({"synced": False, "message": f"Zoho error: {err}"}, status=502)
