@@ -135,7 +135,7 @@ class ChangePasswordView(APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = ChangePasswordSerializer
 
-    @extend_schema(request=ChangePasswordSerializer, responses={"200": None}, tags=["Users"])
+    @extend_schema(request=ChangePasswordSerializer, responses={"200": None}, tags=["Auth"])
     def post(self, request, *args, **kwargs):
         serializer = ChangePasswordSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
@@ -176,15 +176,15 @@ class MeView(RetrieveUpdateAPIView):
             )
         ).first()
 
-    @extend_schema(responses=UserSerializer, tags=["Users"])
+    @extend_schema(responses=UserSerializer, tags=["Auth"])
     def get(self, request, *args, **kwargs):
         return super().get(request, *args, **kwargs)
 
-    @extend_schema(request=UserSerializer, responses=UserSerializer, tags=["Users"])
+    @extend_schema(request=UserSerializer, responses=UserSerializer, tags=["Auth"])
     def put(self, request, *args, **kwargs):
         return super().put(request, *args, **kwargs)
 
-    @extend_schema(request=UserSerializer, responses=UserSerializer, tags=["Users"])
+    @extend_schema(request=UserSerializer, responses=UserSerializer, tags=["Auth"])
     def patch(self, request, *args, **kwargs):
         return super().patch(request, *args, **kwargs)
 

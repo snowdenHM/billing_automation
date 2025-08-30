@@ -32,5 +32,5 @@ class ModuleAdmin(admin.ModelAdmin):
 @admin.register(OrganizationModule)
 class OrganizationModuleAdmin(admin.ModelAdmin):
     list_display = ("id", "organization", "module", "is_enabled", "created_at")
-    list_filter = ("is_enabled", "module")
+    list_filter = ("is_active", "module")
     search_fields = ("organization__name", "module__code", "module__name")

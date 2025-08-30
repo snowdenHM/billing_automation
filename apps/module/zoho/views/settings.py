@@ -1,21 +1,19 @@
-import requests
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List
 
+import requests
 from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import permissions, status
 from rest_framework.generics import RetrieveUpdateAPIView, ListAPIView
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from drf_spectacular.utils import extend_schema, OpenApiParameter
 
-from apps.organizations.models import Organization
 from apps.module.zoho.models import (
     ZohoCredentials,
     ZohoVendor,
     ZohoChartOfAccount,
     ZohoTaxes,
     ZohoTdsTcs,
-    ZohoVendorCredit,
 )
 from apps.module.zoho.permissions import IsOrgAdminOrOrgAPIKey, ModuleZohoEnabled
 from apps.module.zoho.serializers import (
@@ -27,8 +25,8 @@ from apps.module.zoho.serializers import (
     ZohoChartOfAccountSerializer,
     ZohoTaxesSerializer,
     ZohoTdsTcsSerializer,  # Fixed casing to match the serializer definition
-    ZohoVendorCreditsSerializer,
 )
+from apps.organizations.models import Organization
 
 
 # ------------------------------------------------------------------------------
@@ -146,35 +144,63 @@ class VendorSyncView(APIView):
 
     def post(self, request, org_id, *args, **kwargs):
         org, creds = _get_org_and_creds(org_id)
-        client = ZohoClient(creds)
+
+        # Direct API call to Zoho Books
+        url = f"https://www.zohoapis.in/books/v3/contacts"
+        headers = {
+            'Authorization': f'Zoho-oauthtoken {creds.accessToken}',
+        }
+        params = {
+            'organization_id': creds.organisationId,
+            'filter_by': 'Status.All'
+        }
+
         try:
-            payload = client.get("contacts")
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response.raise_for_status()
+            parsed_data = response.json()
         except requests.RequestException as e:
-            return Response({"detail": f"Fetch vendors failed: {e}"}, status=502)
+            return Response({"detail": f"Failed to fetch contacts from Zoho: {str(e)}"}, status=502)
+        except json.JSONDecodeError:
+            return Response({"detail": "Failed to parse contacts data from Zoho"}, status=502)
 
-        contacts = payload.get("contacts", [])
-        vendors = [c for c in contacts if c.get("contact_type") == "vendor"]
+        # Filter contacts to get only vendors
+        contacts = [
+            contact for contact in parsed_data.get("contacts", [])
+            if contact.get("contact_type") == "vendor"
+        ]
 
+        # Get existing vendor IDs
         existing_ids = set(
-            ZohoVendor.objects.filter(organization=org, contactId__in=[v.get("contact_id") for v in vendors])
-            .values_list("contactId", flat=True)
+            ZohoVendor.objects.filter(
+                organization=org,
+                contactId__in=[contact.get("contact_id") for contact in contacts]
+            ).values_list("contactId", flat=True)
         )
 
-        to_create: List[ZohoVendor] = []
-        for v in vendors:
-            if v.get("contact_id") not in existing_ids:
+        # Prepare new vendors for creation
+        to_create = []
+        for contact in contacts:
+            contact_id = contact.get("contact_id")
+            if contact_id and contact_id not in existing_ids:
                 to_create.append(
                     ZohoVendor(
                         organization=org,
-                        contactId=v.get("contact_id"),
-                        companyName=v.get("company_name") or "",
-                        gstNo=v.get("gst_no") or "",
+                        contactId=contact_id,
+                        companyName=contact.get("company_name") or "",
+                        gstNo=contact.get("gst_no") or "",
                     )
                 )
+
+        # Bulk create new vendors
         if to_create:
             ZohoVendor.objects.bulk_create(to_create, ignore_conflicts=True)
 
-        return Response({"created": len(to_create), "total_vendors_seen": len(vendors)})
+        return Response({
+            "created": len(to_create),
+            "total_vendors_seen": len(contacts),
+            "message": f"{len(to_create)} new vendors saved successfully." if to_create else "No new vendors to save."
+        })
 
 
 # ------------------------------------------------------------------------------
@@ -200,33 +226,54 @@ class ChartOfAccountSyncView(APIView):
 
     def post(self, request, org_id, *args, **kwargs):
         org, creds = _get_org_and_creds(org_id)
-        client = ZohoClient(creds)
-        try:
-            payload = client.get("chartofaccounts")
-        except requests.RequestException as e:
-            return Response({"detail": f"Fetch chart of accounts failed: {e}"}, status=502)
 
-        items = payload.get("chartofaccounts", [])
-        existing_ids = set(
-            ZohoChartOfAccount.objects.filter(organization=org, accountId__in=[a.get("account_id") for a in items])
-            .values_list("accountId", flat=True)
+        # Direct API call to Zoho Books
+        url = f"https://www.zohoapis.in/books/v3/chartofaccounts?organization_id={creds.organisationId}"
+        headers = {
+            'Authorization': f'Zoho-oauthtoken {creds.accessToken}',
+        }
+        print(url, headers)
+        try:
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            parsed_data = response.json()
+        except requests.RequestException as e:
+            return Response({"detail": f"Failed to fetch chart of accounts from Zoho: {str(e)}"}, status=502)
+        except json.JSONDecodeError:
+            return Response({"detail": "Failed to parse chart of accounts data"}, status=502)
+
+        chartOfAccounts = parsed_data.get("chartofaccounts", [])
+
+        # Get existing account IDs
+        existing_accounts = set(
+            ZohoChartOfAccount.objects.filter(
+                organization=org,
+                accountId__in=[account.get("account_id") for account in chartOfAccounts]
+            ).values_list("accountId", flat=True)
         )
 
-        to_create: List[ZohoChartOfAccount] = []
-        for a in items:
-            acc_id = a.get("account_id")
-            if acc_id not in existing_ids:
+        # Prepare new accounts for creation
+        to_create = []
+        for account in chartOfAccounts:
+            account_id = account.get("account_id")
+            if account_id and account_id not in existing_accounts:
                 to_create.append(
                     ZohoChartOfAccount(
                         organization=org,
-                        accountId=acc_id or "",
-                        accountName=a.get("account_name") or "",
+                        accountId=account_id,
+                        accountName=account.get("account_name") or "",
                     )
                 )
+
+        # Bulk create new accounts
         if to_create:
             ZohoChartOfAccount.objects.bulk_create(to_create, ignore_conflicts=True)
 
-        return Response({"created": len(to_create), "total_accounts_seen": len(items)})
+        return Response({
+            "created": len(to_create),
+            "total_accounts_seen": len(chartOfAccounts),
+            "message": f"{len(to_create)} new chart of accounts saved successfully." if to_create else "No new chart of accounts to save."
+        })
 
 
 # ------------------------------------------------------------------------------
@@ -252,33 +299,57 @@ class TaxesSyncView(APIView):
 
     def post(self, request, org_id, *args, **kwargs):
         org, creds = _get_org_and_creds(org_id)
-        client = ZohoClient(creds)
-        try:
-            payload = client.get("settings/taxes")
-        except requests.RequestException as e:
-            return Response({"detail": f"Fetch taxes failed: {e}"}, status=502)
 
-        taxes = payload.get("taxes", [])
-        existing_ids = set(
-            ZohoTaxes.objects.filter(organization=org, taxId__in=[t.get("tax_id") for t in taxes])
-            .values_list("taxId", flat=True)
+        # Direct API call to Zoho Books
+        url = f"https://www.zohoapis.in/books/v3/settings/taxes"
+        headers = {
+            'Authorization': f'Zoho-oauthtoken {creds.accessToken}',
+        }
+        params = {
+            'organization_id': creds.organisationId
+        }
+
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response.raise_for_status()
+            parsed_data = response.json()
+        except requests.RequestException as e:
+            return Response({"detail": f"Failed to fetch taxes from Zoho: {str(e)}"}, status=502)
+        except json.JSONDecodeError:
+            return Response({"detail": "Failed to parse taxes data"}, status=502)
+
+        zohoTax = parsed_data.get("taxes", [])
+
+        # Get existing tax IDs
+        existing_taxes = set(
+            ZohoTaxes.objects.filter(
+                organization=org,
+                taxId__in=[tax.get("tax_id") for tax in zohoTax]
+            ).values_list("taxId", flat=True)
         )
 
-        to_create: List[ZohoTaxes] = []
-        for t in taxes:
-            tax_id = t.get("tax_id")
-            if tax_id not in existing_ids:
+        # Prepare new taxes for creation
+        to_create = []
+        for tax in zohoTax:
+            tax_id = tax.get("tax_id")
+            if tax_id and tax_id not in existing_taxes:
                 to_create.append(
                     ZohoTaxes(
                         organization=org,
-                        taxId=tax_id or "",
-                        taxName=t.get("tax_name") or "",
+                        taxId=tax_id,
+                        taxName=tax.get("tax_name") or "",
                     )
                 )
+
+        # Bulk create new taxes
         if to_create:
             ZohoTaxes.objects.bulk_create(to_create, ignore_conflicts=True)
 
-        return Response({"created": len(to_create), "total_taxes_seen": len(taxes)})
+        return Response({
+            "created": len(to_create),
+            "total_taxes_seen": len(zohoTax),
+            "message": f"{len(to_create)} new taxes saved successfully." if to_create else "No new taxes to save."
+        })
 
 
 # ------------------------------------------------------------------------------
@@ -312,93 +383,112 @@ class TDSTCSSyncView(APIView):
 
     def post(self, request, org_id, *args, **kwargs):
         org, creds = _get_org_and_creds(org_id)
-        client = ZohoClient(creds)
+
+        headers = {
+            'Authorization': f'Zoho-oauthtoken {creds.accessToken}',
+        }
+
+        # Fetch TDS taxes
+        tds_url = f"https://www.zohoapis.in/books/v3/settings/taxes"
+        tds_params = {
+            'organization_id': creds.organisationId,
+            'is_tds_request': 'true'
+        }
 
         try:
-            tds_payload = client.get("settings/taxes", params={"is_tds_request": "true"})
-            tcs_payload = client.get("settings/taxes", params={"is_tcs_request": "true", "filter_by": "Taxes.All"})
+            tds_response = requests.get(tds_url, headers=headers, params=tds_params, timeout=30)
+            tds_response.raise_for_status()
+            tds_parsed_data = tds_response.json()
         except requests.RequestException as e:
-            return Response({"detail": f"Fetch TDS/TCS failed: {e}"}, status=502)
+            return Response({"detail": f"Failed to fetch TDS taxes from Zoho: {str(e)}"}, status=502)
+        except json.JSONDecodeError:
+            return Response({"detail": "Failed to parse TDS taxes data"}, status=502)
 
-        def upsert(taxes: List[dict], ttype: str) -> int:
-            ids = [x.get("tax_id") for x in taxes]
-            existing = set(
-                ZohoTdsTcs.objects.filter(organization=org, taxType=ttype, taxId__in=ids)
-                .values_list("taxId", flat=True)
-            )
-            to_create: List[ZohoTdsTcs] = []
-            for x in taxes:
-                if x.get("tax_id") not in existing:
-                    to_create.append(
-                        ZohoTdsTcs(
-                            organization=org,
-                            taxId=x.get("tax_id") or "",
-                            taxName=x.get("tax_name") or "",
-                            taxPercentage=str(x.get("tax_percentage") or "0"),
-                            taxType=ttype,
-                        )
-                    )
-            if to_create:
-                ZohoTdsTcs.objects.bulk_create(to_create, ignore_conflicts=True)
-            return len(to_create)
+        tds_taxes = tds_parsed_data.get("taxes", [])
 
-        return Response({
-            "created_tds": upsert(tds_payload.get("taxes", []), "TDS"),
-            "created_tcs": upsert(tcs_payload.get("taxes", []), "TCS"),
-        })
-# ------------------------------------------------------------------------------
-# Vendor Credits
-# ------------------------------------------------------------------------------
-
-@extend_schema(tags=["Zoho"], responses=ZohoVendorCreditsSerializer(many=True))
-class VendorCreditsListView(ListAPIView):
-    permission_classes = [permissions.IsAuthenticated | IsOrgAdminOrOrgAPIKey, ModuleZohoEnabled]
-    serializer_class = ZohoVendorCreditsSerializer
-    queryset = ZohoVendorCredit.objects.none()
-
-    def get_queryset(self):
-        if getattr(self, "swagger_fake_view", False):
-            return ZohoVendorCredit.objects.none()
-        return ZohoVendorCredit.objects.filter(organization_id=self.kwargs["org_id"]).order_by("-created_at")
-
-
-@extend_schema(tags=["Zoho"], request=EmptySerializer, responses=SyncResultSerializer)
-class VendorCreditsSyncView(APIView):
-    permission_classes = [permissions.IsAuthenticated | IsOrgAdminOrOrgAPIKey, ModuleZohoEnabled]
-    serializer_class = SyncResultSerializer
-
-    def post(self, request, org_id, *args, **kwargs):
-        org, creds = _get_org_and_creds(org_id)
-        client = ZohoClient(creds)
-        try:
-            payload = client.get("vendorcredits")
-        except requests.RequestException as e:
-            return Response({"detail": f"Fetch vendor credits failed: {e}"}, status=502)
-
-        credits = payload.get("vendor_credits", [])
-        existing_ids = set(
-            ZohoVendorCredit.objects.filter(
-                organization=org, vendor_credit_id__in=[vc.get("vendor_credit_id") for vc in credits]
-            ).values_list("vendor_credit_id", flat=True)
+        # Get existing TDS tax IDs
+        existing_tds_taxes = set(
+            ZohoTdsTcs.objects.filter(
+                organization=org,
+                taxType="TDS",
+                taxId__in=[tax.get("tax_id") for tax in tds_taxes]
+            ).values_list("taxId", flat=True)
         )
 
-        to_create: List[ZohoVendorCredit] = []
-        for vc in credits:
-            vcid = vc.get("vendor_credit_id")
-            if vcid not in existing_ids:
-                to_create.append(
-                    ZohoVendorCredit(
+        # Prepare new TDS taxes for creation
+        new_tds_taxes = []
+        for tax in tds_taxes:
+            tax_id = tax.get("tax_id")
+            if tax_id and tax_id not in existing_tds_taxes:
+                new_tds_taxes.append(
+                    ZohoTdsTcs(
                         organization=org,
-                        vendor_credit_id=vcid or "",
-                        vendor_credit_number=vc.get("vendor_credit_number") or "",
-                        vendor_id=vc.get("vendor_id") or "",
-                        vendor_name=vc.get("vendor_name") or "",
+                        taxId=tax_id,
+                        taxName=tax.get("tax_name") or "",
+                        taxPercentage=str(tax.get("tax_percentage") or "0"),
+                        taxType="TDS",
                     )
                 )
-        if to_create:
-            ZohoVendorCredit.objects.bulk_create(to_create, ignore_conflicts=True)
 
-        return Response({"created": len(to_create)})
+        # Fetch TCS taxes
+        tcs_url = f"https://www.zohoapis.in/books/v3/settings/taxes"
+        tcs_params = {
+            'organization_id': creds.organisationId,
+            'is_tcs_request': 'true',
+            'filter_by': 'Taxes.All'
+        }
+
+        try:
+            tcs_response = requests.get(tcs_url, headers=headers, params=tcs_params, timeout=30)
+            tcs_response.raise_for_status()
+            tcs_parsed_data = tcs_response.json()
+        except requests.RequestException as e:
+            return Response({"detail": f"Failed to fetch TCS taxes from Zoho: {str(e)}"}, status=502)
+        except json.JSONDecodeError:
+            return Response({"detail": "Failed to parse TCS taxes data"}, status=502)
+
+        tcs_taxes = tcs_parsed_data.get("taxes", [])
+
+        # Get existing TCS tax IDs
+        existing_tcs_taxes = set(
+            ZohoTdsTcs.objects.filter(
+                organization=org,
+                taxType="TCS",
+                taxId__in=[tax.get("tax_id") for tax in tcs_taxes]
+            ).values_list("taxId", flat=True)
+        )
+
+        # Prepare new TCS taxes for creation
+        new_tcs_taxes = []
+        for tax in tcs_taxes:
+            tax_id = tax.get("tax_id")
+            if tax_id and tax_id not in existing_tcs_taxes:
+                new_tcs_taxes.append(
+                    ZohoTdsTcs(
+                        organization=org,
+                        taxId=tax_id,
+                        taxName=tax.get("tax_name") or "",
+                        taxPercentage=str(tax.get("tax_percentage") or "0"),
+                        taxType="TCS",
+                    )
+                )
+
+        # Bulk create both TDS and TCS taxes
+        total_created = 0
+        if new_tds_taxes:
+            ZohoTdsTcs.objects.bulk_create(new_tds_taxes, ignore_conflicts=True)
+            total_created += len(new_tds_taxes)
+        if new_tcs_taxes:
+            ZohoTdsTcs.objects.bulk_create(new_tcs_taxes, ignore_conflicts=True)
+            total_created += len(new_tcs_taxes)
+
+        return Response({
+            "created_tds": len(new_tds_taxes),
+            "created_tcs": len(new_tcs_taxes),
+            "total_tds_seen": len(tds_taxes),
+            "total_tcs_seen": len(tcs_taxes),
+            "message": "TDS/TCS taxes saved successfully." if total_created > 0 else "No new TDS/TCS taxes to save."
+        })
 
 
 # ------------------------------------------------------------------------------

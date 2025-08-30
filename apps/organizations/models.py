@@ -114,16 +114,20 @@ class OrganizationModule(TimeStampedModel):
     """
     Entitlement table: which organization has which module.
     """
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="org_modules")
-    module = models.ForeignKey(Module, on_delete=models.CASCADE, related_name="org_modules")
-    is_enabled = models.BooleanField(default=True)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="modules")
+    module = models.ForeignKey(Module, on_delete=models.PROTECT)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         unique_together = ("organization", "module")
-        ordering = ("organization_id", "module_id")
 
-    def __str__(self):  # pragma: no cover
-        return f"{self.organization_id}:{self.module.code} -> {self.is_enabled}"
+    def __str__(self):
+        return f"{self.organization.name} - {self.module.name}"
+
+    @property
+    def is_enabled(self):
+        """Property to match admin interface expectations"""
+        return self.is_active
 
 
 def _switch_name(org_id, module_code: str) -> str:
@@ -157,3 +161,25 @@ def sync_switch_on_delete(sender, instance: "OrganizationModule", **kwargs):
             sw.save(update_fields=["active"])
     except Switch.DoesNotExist:
         pass
+
+
+@receiver(post_save, sender=OrganizationModule)
+def handle_module_status_change(sender, instance, created, **kwargs):
+    """Set the waffle flag when a module is enabled/disabled for an organization"""
+    from apps.organizations.modules import set_module
+    set_module(
+        org_id=instance.organization.id,
+        module=instance.module.name.lower(),
+        active=instance.is_active
+    )
+
+
+@receiver(post_delete, sender=OrganizationModule)
+def handle_module_deletion(sender, instance, **kwargs):
+    """Disable the waffle flag when a module is removed from an organization"""
+    from apps.organizations.modules import set_module
+    set_module(
+        org_id=instance.organization.id,
+        module=instance.module.name.lower(),
+        active=False
+    )

@@ -11,7 +11,6 @@ from .models import (
     ZohoChartOfAccount,
     ZohoTaxes,
     ZohoTdsTcs,
-    ZohoVendorCredit,
     VendorBill,
     VendorZohoBill,
     VendorZohoProduct,
@@ -114,13 +113,13 @@ class ZohoTDSTCSAdmin(BaseOrgScopedAdmin):
     autocomplete_fields = ("organization",)
 
 
-@admin.register(ZohoVendorCredit)
-class ZohoVendorCreditsAdmin(BaseOrgScopedAdmin):
-    list_display = ("organization", "vendor_name", "vendor_credit_number", "vendor_credit_id", "created_at")
-    search_fields = ("vendor_name", "vendor_credit_number", "vendor_credit_id", "organization__name")
-    list_filter = ("organization",)
-    readonly_fields = ("created_at",)
-    autocomplete_fields = ("organization",)
+# @admin.register(ZohoVendorCredit)
+# class ZohoVendorCreditsAdmin(BaseOrgScopedAdmin):
+#     list_display = ("organization", "vendor_name", "vendor_credit_number", "vendor_credit_id", "created_at")
+#     search_fields = ("vendor_name", "vendor_credit_number", "vendor_credit_id", "organization__name")
+#     list_filter = ("organization",)
+#     readonly_fields = ("created_at",)
+#     autocomplete_fields = ("organization",)
 
 
 # -----------------------------

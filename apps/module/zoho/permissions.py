@@ -1,6 +1,7 @@
 # apps/zoho/permissions.py
 
 from typing import Optional
+from uuid import UUID
 
 from django.utils.functional import cached_property
 from rest_framework.permissions import BasePermission
@@ -10,24 +11,22 @@ from rest_framework_api_key.models import APIKey
 from apps.organizations.models import OrgMembership, OrganizationAPIKey
 
 
-def _get_org_id_from_view(view) -> Optional[int]:
+def _get_org_id_from_view(view):
     """
     Pull org_id from the view/kwargs consistently.
     """
-    # Views in this app use path("zoho/<int:org_id>/..."), so kwargs should have it.
-    org_id = getattr(view, "org_id", None)
-    if org_id is not None:
-        try:
-            return int(org_id)
-        except (TypeError, ValueError):
-            return None
+    # Views in this app use path("zoho/<uuid:org_id>/..."), so kwargs should have it.
     try:
-        return int(getattr(view, "kwargs", {}).get("org_id"))
-    except (TypeError, ValueError):
+        return view.kwargs.get("org_id")
+    except (AttributeError, KeyError):
         return None
 
 
-def _waffle_switch_name(org_id: int) -> str:
+def _waffle_switch_name(org_id) -> str:
+    """
+    Generate waffle switch name for organization module.
+    Works with both UUID and legacy integer IDs.
+    """
     return f"org:{org_id}:zoho"
 
 
@@ -88,6 +87,7 @@ class ModuleZohoEnabled(BasePermission):
     """
     Gate every Zoho endpoint behind a waffle switch:
         name = "org:<org_id>:zoho"
+    Also checks OrganizationModule table as fallback.
     """
 
     message = "Zoho module is not enabled for this organization."
@@ -96,4 +96,14 @@ class ModuleZohoEnabled(BasePermission):
         org_id = _get_org_id_from_view(view)
         if not org_id:
             return False
-        return switch_is_active(_waffle_switch_name(org_id))
+
+        # First try waffle switch
+        if switch_is_active(_waffle_switch_name(org_id)):
+            return True
+
+        # Fallback: check OrganizationModule directly
+        from apps.organizations.models import OrganizationModule
+
+        return OrganizationModule.objects.filter(
+            organization_id=org_id, module__code="zoho", is_active=True
+        ).exists()

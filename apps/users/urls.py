@@ -13,14 +13,14 @@ app_name = "users"
 
 urlpatterns = [
     # Auth
-    path("auth/register/", RegisterView.as_view(), name="register"),
-    path("auth/login/", LoginView.as_view(), name="login"),
+    path("register/", RegisterView.as_view(), name="register"),
+    path("login/", LoginView.as_view(), name="login"),
     # Optional alias so /api/v1/login/ works too
     # path("login/", LoginView.as_view(), name="login-alias"),
-    path("auth/password/reset/", PasswordResetRequestView.as_view(), name="password-reset"),
-    path("auth/password/confirm/", PasswordResetConfirmView.as_view(), name="password-confirm"),
-    path("auth/password/change/", ChangePasswordView.as_view(), name="password-change"),
-    path("auth/verify-email/<str:uidb64>/<str:token>/", VerifyEmailView.as_view(), name="verify-email"),
+    path("password/reset/", PasswordResetRequestView.as_view(), name="password-reset"),
+    path("password/confirm/", PasswordResetConfirmView.as_view(), name="password-confirm"),
+    path("password/change/", ChangePasswordView.as_view(), name="password-change"),
+    path("verify-email/<str:uidb64>/<str:token>/", VerifyEmailView.as_view(), name="verify-email"),
     # Profile
     path("me/", MeView.as_view(), name="me"),
 ]
