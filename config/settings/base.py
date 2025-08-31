@@ -166,10 +166,6 @@ SPECTACULAR_SETTINGS = {
     'DESCRIPTION': 'BillMunshi API Documentation',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
-    'ENUM_NAME_OVERRIDES': {
-        'OrganizationStatusEnum': 'apps.organizations.models.Organization.status',
-        'UserStatusEnum': 'apps.users.models.User.status',
-    }
 }
 
 # ------------------------------------------------------------

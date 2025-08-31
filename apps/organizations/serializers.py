@@ -104,10 +104,7 @@ class ModuleSerializer(serializers.ModelSerializer):
 
 class OrganizationModuleSerializer(serializers.ModelSerializer):
     module = serializers.SlugRelatedField(queryset=Module.objects.all(), slug_field="code")
-
-    @extend_schema_field(serializers.BooleanField())
-    def get_is_enabled(self, obj) -> bool:
-        return obj.is_enabled
+    is_enabled = serializers.BooleanField()
 
     class Meta:
         model = OrganizationModule
