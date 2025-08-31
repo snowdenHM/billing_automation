@@ -1,4 +1,5 @@
 from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.hashers import make_password
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
@@ -61,3 +62,15 @@ class User(AbstractUser):
         """Send an email verification to the user."""
         # Implementation would depend on your email sending setup
         pass
+
+    def save(self, *args, **kwargs):
+        # Handle password hashing when saving
+        if self._password is not None:
+            self.password = make_password(self._password)
+            self._password = None
+        super().save(*args, **kwargs)
+
+    def set_password(self, raw_password):
+        self.password = make_password(raw_password)
+        self._password = None
+        self.save(update_fields=["password"] if self.pk else None)

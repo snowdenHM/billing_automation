@@ -124,6 +124,19 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 # ------------------------------------------------------------
+# Password Hashers
+# ------------------------------------------------------------
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+    'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',
+    'django.contrib.auth.hashers.BCryptPasswordHasher',
+    'django.contrib.auth.hashers.SHA1PasswordHasher',
+    'django.contrib.auth.hashers.MD5PasswordHasher',  # Adding MD5 hasher for backward compatibility
+    'django.contrib.auth.hashers.UnsaltedMD5PasswordHasher',  # For very old passwords
+]
+
+# ------------------------------------------------------------
 # Internationalization
 # ------------------------------------------------------------
 LANGUAGE_CODE = "en-us"
