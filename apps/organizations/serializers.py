@@ -13,6 +13,20 @@ from .models import (
 User = get_user_model()
 
 
+class UserDetailSerializer(serializers.ModelSerializer):
+    """Serializer for detailed user information in organizations"""
+    full_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'full_name', 'is_active']
+
+    @extend_schema_field(serializers.CharField())
+    def get_full_name(self, obj) -> str:
+        """Returns the user's full name"""
+        return obj.get_full_name()
+
+
 class NullablePKRelatedField(serializers.PrimaryKeyRelatedField):
     def to_internal_value(self, data):
         if data in (None, "", "0", 0):
@@ -21,7 +35,8 @@ class NullablePKRelatedField(serializers.PrimaryKeyRelatedField):
 
 
 class OrganizationSerializer(serializers.ModelSerializer):
-    owner = NullablePKRelatedField(queryset=User.objects.all(), required=False, allow_null=True)
+    owner = UserDetailSerializer(read_only=True)
+    created_by = UserDetailSerializer(read_only=True)
     owner_email = serializers.EmailField(write_only=True, required=False)
     unique_name = serializers.CharField(read_only=True)  # This is auto-generated
 
@@ -42,10 +57,10 @@ class OrganizationSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "slug", "unique_name", "created_by", "created_at", "updated_at"]
 
     def validate(self, attrs):
-        owner = attrs.get("owner")
-        owner_email = attrs.get("owner_email")
-        if not owner and not owner_email:
-            raise serializers.ValidationError({"owner_email": "Provide either 'owner' (user id) or 'owner_email'."})
+        if self.instance is None:  # Only for creation
+            owner_email = attrs.get("owner_email")
+            if not owner_email:
+                raise serializers.ValidationError({"owner_email": "Provide owner_email for organization creation."})
         return attrs
 
     def create(self, validated_data):
@@ -55,7 +70,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
         if request and request.user and not validated_data.get("created_by"):
             validated_data["created_by"] = request.user
 
-        if owner_email and not validated_data.get("owner"):
+        if owner_email:
             owner, _ = User.objects.get_or_create(email=owner_email, defaults={"is_active": True})
             validated_data["owner"] = owner
 
@@ -63,7 +78,9 @@ class OrganizationSerializer(serializers.ModelSerializer):
 
 
 class OrgMembershipSerializer(serializers.ModelSerializer):
+    user = UserDetailSerializer(read_only=True)
     user_email = serializers.EmailField(write_only=True, required=False)
+    organization = serializers.PrimaryKeyRelatedField(queryset=Organization.objects.all())
 
     class Meta:
         model = OrgMembership
@@ -83,6 +100,9 @@ class APIKeyIssueSerializer(serializers.Serializer):
 
 
 class APIKeySerializer(serializers.ModelSerializer):
+    created_by = UserDetailSerializer(read_only=True)
+    organization = OrganizationSerializer(read_only=True)
+
     class Meta:
         model = OrganizationAPIKey
         fields = ["id", "name", "organization", "created_by", "created_at", "updated_at"]
@@ -104,6 +124,7 @@ class ModuleSerializer(serializers.ModelSerializer):
 
 class OrganizationModuleSerializer(serializers.ModelSerializer):
     module = serializers.SlugRelatedField(queryset=Module.objects.all(), slug_field="code")
+    organization = OrganizationSerializer(read_only=True)
     is_enabled = serializers.BooleanField()
 
     class Meta:

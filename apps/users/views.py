@@ -158,19 +158,14 @@ class MeView(RetrieveUpdateAPIView):
     serializer_class = UserSerializer
 
     def get_object(self):
-        """
-        Return the authenticated user with prefetched organization memberships
-        for optimal performance.
-        """
+        """Get current user with prefetched org memberships."""
         user = self.request.user
-
-        # Update last_active timestamp
         user.update_last_active()
 
         # Prefetch active organization memberships to optimize the serializer
         return User.objects.filter(id=user.id).prefetch_related(
             Prefetch(
-                "orgmembership_set",
+                "memberships",  # Using correct related_name from OrgMembership model
                 queryset=OrgMembership.objects.filter(is_active=True).select_related("organization"),
                 to_attr="active_memberships",
             )

@@ -31,9 +31,14 @@ User = get_user_model()
 
 @extend_schema(tags=["Organizations"])
 class OrganizationViewSet(viewsets.ModelViewSet):
-    queryset = Organization.objects.all().select_related("owner", "created_by")
     serializer_class = OrganizationSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Organization.objects.all().select_related(
+            "owner",
+            "created_by"
+        )
 
     def get_permissions(self):
         if self.action in ["create", "destroy"]:
@@ -49,111 +54,135 @@ class OrganizationViewSet(viewsets.ModelViewSet):
             "set_module",
             "catalog_modules",
         ]:
-            return [IsAuthenticated(), IsOrgAdminForObject()]
+            return [IsOrgAdminForObject()]
         return super().get_permissions()
 
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
-
-    # ---------- Members ----------
-
-    @extend_schema(summary="List organization members", tags=["Organization Members"], responses=OrgMembershipSerializer(many=True))
-    @action(detail=True, methods=["get"], url_path="members")
-    def members(self, request, pk=None):
-        org = self.get_object()
-        qs = OrgMembership.objects.filter(organization=org).select_related("user")
-        ser = OrgMembershipSerializer(qs, many=True)
-        return Response(ser.data)
-
-    @extend_schema(summary="Add/update organization members", tags=["Organization Members"], request=OrgMembershipSerializer, responses=OrgMembershipSerializer)
-    @members.mapping.post
+    @extend_schema(
+        request=OrgMembershipSerializer,
+        responses=OrgMembershipSerializer,
+    )
+    @action(detail=True, methods=["post"])
     def add_member(self, request, pk=None):
-        org = self.get_object()
-        self.check_object_permissions(request, org)
-        data = request.data.copy()
-        data["organization"] = org.id
-        ser = OrgMembershipSerializer(data=data)
-        ser.is_valid(raise_exception=True)
-        ser.save()
-        return Response(ser.data, status=status.HTTP_201_CREATED)
+        organization = self.get_object()
+        serializer = OrgMembershipSerializer(
+            data={**request.data, "organization": organization.id},
+            context=self.get_serializer_context(),
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-    # ---------- API Keys ----------
+    @action(detail=True)
+    def members(self, request, pk=None):
+        organization = self.get_object()
+        queryset = OrgMembership.objects.filter(
+            organization=organization
+        ).select_related("user", "organization")
+        serializer = OrgMembershipSerializer(queryset, many=True)
+        return Response(serializer.data)
 
-    @extend_schema(summary="Issue an API key for this organization", tags=["Organization API Keys"], request=APIKeyIssueSerializer, responses=APIKeySerializer)
-    @action(detail=True, methods=["post"], url_path="apikeys/issue")
+    @extend_schema(
+        request=APIKeyIssueSerializer,
+        responses=APIKeySerializer,
+    )
+    @action(detail=True, methods=["post"])
     def issue_api_key(self, request, pk=None):
-        org = self.get_object()
-        self.check_object_permissions(request, org)
-        ser = APIKeyIssueSerializer(data=request.data)
-        ser.is_valid(raise_exception=True)
-        name = ser.validated_data["name"]
-        api_key_obj, key = APIKey.objects.create_key(name=name)
-        link = OrganizationAPIKey.objects.create(
-            api_key=api_key_obj,
-            organization=org,
-            name=name,
+        organization = self.get_object()
+        serializer = APIKeyIssueSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        api_key, key = APIKey.objects.create_key(name=serializer.validated_data["name"])
+        org_api_key = OrganizationAPIKey.objects.create(
+            api_key=api_key,
+            organization=organization,
+            name=serializer.validated_data["name"],
             created_by=request.user,
         )
+
         return Response(
             {
-                "id": link.id,
-                "name": link.name,
-                "organization": org.id,
-                "api_key": key,
+                **APIKeySerializer(org_api_key).data,
+                "key": key,  # Include the actual key in response
             },
             status=status.HTTP_201_CREATED,
         )
 
-    @extend_schema(summary="List API keys for this organization", tags=["Organization API Keys"])
-    @action(detail=True, methods=["get"], url_path="apikeys")
+    @action(detail=True)
     def list_api_keys(self, request, pk=None):
-        org = self.get_object()
-        self.check_object_permissions(request, org)
-        qs = OrganizationAPIKey.objects.filter(organization=org).select_related("api_key")
-        data = [{"id": link.id, "name": link.name, "revoked": link.api_key.revoked, "created_at": link.created_at} for link in qs]
-        return Response(data)
+        organization = self.get_object()
+        queryset = OrganizationAPIKey.objects.filter(
+            organization=organization
+        ).select_related("created_by", "organization", "organization__owner", "organization__created_by")
+        serializer = APIKeySerializer(queryset, many=True)
+        return Response(serializer.data)
 
     @extend_schema(
-        summary="Revoke an API key for this organization",
-        tags=["Organization API Keys"],
-        parameters=[OpenApiParameter(name="key_id", type=OpenApiTypes.UUID, location=OpenApiParameter.PATH)],
-        responses={"200": None},
+        request=APIKeyRevokeSerializer,
+        responses=APIKeySerializer,
+        parameters=[
+            OpenApiParameter(
+                name="key_id",
+                location=OpenApiParameter.PATH,
+                type=OpenApiTypes.UUID,
+                description="The UUID of the API key to revoke"
+            )
+        ]
     )
-    @action(detail=True, methods=["post"], url_path=r"apikeys/(?P<key_id>[0-9a-f-]{36})/revoke")
-    def revoke_api_key(self, request, key_id=None, pk=None):
-        org = self.get_object()
-        self.check_object_permissions(request, org)
-        link = get_object_or_404(OrganizationAPIKey, id=key_id, organization=org)
-        ser = APIKeyRevokeSerializer(data=request.data)
-        ser.is_valid(raise_exception=True)
-        link.api_key.revoked = True
-        link.api_key.save(update_fields=["revoked"])
-        return Response({"detail": "API key revoked."})
+    @action(detail=True, methods=["post"], url_path="api-keys/(?P<key_id>[^/.]+)/revoke")
+    def revoke_api_key(self, request, pk=None, key_id=None):
+        organization = self.get_object()
+        api_key = get_object_or_404(
+            OrganizationAPIKey, organization=organization, id=key_id
+        )
+        api_key.api_key.revoked = True
+        api_key.api_key.save()
+        return Response(APIKeySerializer(api_key).data)
 
-    # ---------- Modules Catalog & Entitlements ----------
-
-    @extend_schema(summary="List catalog modules (admin-defined)", tags=["Organization Modules"], responses=ModuleSerializer(many=True))
-    @action(detail=False, methods=["get"], url_path="modules/catalog")
-    def catalog_modules(self, request):
-        modules = Module.objects.all().order_by("code")
-        return Response(ModuleSerializer(modules, many=True).data)
-
-    @extend_schema(summary="List enabled modules for this organization", tags=["Organization Modules"], responses=OrganizationModuleSerializer(many=True))
-    @action(detail=True, methods=["get"], url_path="modules")
+    @action(detail=True)
     def modules(self, request, pk=None):
-        org = self.get_object()
-        self.check_object_permissions(request, org)
-        qs = OrganizationModule.objects.filter(organization=org).select_related("module")
-        return Response(OrganizationModuleSerializer(qs, many=True).data)
+        organization = self.get_object()
+        queryset = OrganizationModule.objects.filter(
+            organization=organization
+        ).select_related("organization", "organization__owner", "organization__created_by", "module")
+        serializer = OrganizationModuleSerializer(queryset, many=True)
+        return Response(serializer.data)
 
-    @extend_schema(summary="Enable/disable a module for this organization", tags=["Organization Modules"], request=OrganizationModuleSerializer, responses=OrganizationModuleSerializer)
-    @modules.mapping.post
-    def set_module(self, request, pk=None):
-        org = self.get_object()
-        self.check_object_permissions(request, org)
-        data = request.data.copy()
-        data["organization"] = org.id
-        ser = OrganizationModuleSerializer(data=data)
-        ser.is_valid(raise_exception=True)
-        obj = ser.save()
-        return Response(OrganizationModuleSerializer(obj).data)
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name="code",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.PATH,
+                description="Module code",
+            )
+        ],
+    )
+    @action(
+        detail=True,
+        methods=["post", "delete"],
+        url_path="modules/(?P<code>[^/.]+)",
+    )
+    def set_module(self, request, pk=None, code=None):
+        organization = self.get_object()
+        module = get_object_or_404(Module, code=code)
+
+        if request.method == "DELETE":
+            OrganizationModule.objects.filter(
+                organization=organization, module=module
+            ).delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        obj, _ = OrganizationModule.objects.get_or_create(
+            organization=organization,
+            module=module,
+            defaults={"is_enabled": True},
+        )
+        serializer = OrganizationModuleSerializer(obj)
+        return Response(serializer.data)
+
+    @action(detail=False, url_path="modules/catalog")
+    def catalog_modules(self, request):
+        """List all available modules that can be enabled."""
+        queryset = Module.objects.all()
+        serializer = ModuleSerializer(queryset, many=True)
+        return Response(serializer.data)
