@@ -145,8 +145,18 @@ class LoginSerializer(serializers.Serializer):
         email = attrs.get("email")
         password = attrs.get("password")
 
-        user = User.objects.filter(email__iexact=email).first()
-        if not user or not user.is_active or not user.check_password(password):
+        if not email or not password:
+            raise serializers.ValidationError("Please provide both email and password.")
+
+        try:
+            user = User.objects.get(email__iexact=email)
+        except User.DoesNotExist:
+            raise serializers.ValidationError("Invalid email or password")
+
+        if not user.is_active:
+            raise serializers.ValidationError("This account is inactive.")
+
+        if not user.check_password(password):
             raise serializers.ValidationError("Invalid email or password")
 
         # Update last active timestamp
@@ -156,8 +166,6 @@ class LoginSerializer(serializers.Serializer):
         return {
             "refresh": str(refresh),
             "access": str(refresh.access_token),
-            # IMPORTANT: pass serializer context so nested OrganizationInfoSerializer
-            # can access request/user for get_role()
             "user": UserSerializer(user, context=self.context).data,
         }
 

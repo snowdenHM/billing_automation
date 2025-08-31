@@ -71,6 +71,8 @@ class User(AbstractUser):
         super().save(*args, **kwargs)
 
     def set_password(self, raw_password):
-        self.password = make_password(raw_password)
-        self._password = None
-        self.save(update_fields=["password"] if self.pk else None)
+        """Override to ensure proper password hashing."""
+        if raw_password is not None:
+            self.password = make_password(raw_password)
+            self._password = None
+            self.save(update_fields=["password"] if self.pk else None)
