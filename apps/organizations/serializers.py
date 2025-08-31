@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 from rest_framework_api_key.models import APIKey  # noqa: F401
+from drf_spectacular.utils import extend_schema_field
 from .models import (
     Organization,
     OrgMembership,
@@ -103,6 +104,10 @@ class ModuleSerializer(serializers.ModelSerializer):
 
 class OrganizationModuleSerializer(serializers.ModelSerializer):
     module = serializers.SlugRelatedField(queryset=Module.objects.all(), slug_field="code")
+
+    @extend_schema_field(serializers.BooleanField())
+    def get_is_enabled(self, obj) -> bool:
+        return obj.is_enabled
 
     class Meta:
         model = OrganizationModule

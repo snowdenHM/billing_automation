@@ -162,27 +162,14 @@ REST_FRAMEWORK = {
 }
 
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Billmunshi API",
-    "DESCRIPTION": "Backend API for organizations, users, subscriptions, and integrations.",
-    "VERSION": "1.0.0",
-    "SERVE_INCLUDE_SCHEMA": False,
-    "ENUM_NAME_OVERRIDES": {
-        # Disambiguate multiple "status" choice fields across serializers
-        "StatusEnum": {
-            # ZOHO (if present in your project)
-            "apps.module.zoho.serializers.vendor_bills.VendorZohoBillSerializer.status": "ZohoVendorBillStatus",
-            "apps.module.zoho.serializers.expense_bills.ExpenseZohoBillSerializer.status": "ZohoExpenseBillStatus",
-
-            # TALLY
-            "apps.module.tally.serializers.vendor_expense.VendorBillSerializer.status": "TallyVendorBillStatus",
-            "apps.module.tally.serializers.vendor_expense.ExpenseBillSerializer.status": "TallyExpenseBillStatus",
-        },
-
-        # Disambiguate multiple "debit_or_credit" enums
-        "DebitOrCreditEnum": {
-            "apps.module.tally.serializers.vendor_expense.ExpenseAnalyzedProductSerializer.debit_or_credit": "TallyExpenseDebitCredit",
-        },
-    },
+    'TITLE': 'BillMunshi API',
+    'DESCRIPTION': 'BillMunshi API Documentation',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'ENUM_NAME_OVERRIDES': {
+        'OrganizationStatusEnum': 'apps.organizations.models.Organization.status',
+        'UserStatusEnum': 'apps.users.models.User.status',
+    }
 }
 
 # ------------------------------------------------------------
