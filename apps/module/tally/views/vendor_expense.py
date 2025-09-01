@@ -17,12 +17,17 @@ from apps.module.tally.models import (
     TallyExpenseBill,
     TallyExpenseAnalyzedBill,
     TallyExpenseAnalyzedProduct,
+    Ledger,
 )
 from apps.module.tally.serializers.vendor_expense import (
     VendorBillUploadSerializer,
     VendorBillSerializer,
+    VendorAnalyzedBillSerializer,
+    VendorAnalyzedProductSerializer,
     ExpenseBillUploadSerializer,
     ExpenseBillSerializer,
+    ExpenseAnalyzedBillSerializer,
+    ExpenseAnalyzedProductSerializer,
 )
 from apps.module.tally.services.analysis import parse_single_invoice
 from apps.organizations.models import Organization
@@ -203,6 +208,32 @@ class VendorBillListView(generics.ListAPIView):
     ],
     responses={200: VendorBillSerializer},
 )
+class VendorBillDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET /api/v1/tally/org/{org_id}/vendor-bills/{bill_id}/
+    Retrieve, update or delete a vendor bill.
+    """
+    serializer_class = VendorBillSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        org_id = self.kwargs.get('org_id')
+        return TallyVendorBill.objects.filter(organization_id=org_id)
+
+    def get_object(self):
+        org_id = self.kwargs.get('org_id')
+        bill_id = self.kwargs.get('bill_id')
+        return get_object_or_404(TallyVendorBill, organization_id=org_id, id=bill_id)
+
+
+@extend_schema(
+    tags=["Tally / Vendor Bills"],
+    parameters=[
+        OpenApiParameter("org_id", str, OpenApiParameter.PATH),
+        OpenApiParameter("bill_id", str, OpenApiParameter.PATH),
+    ],
+    responses={200: VendorBillSerializer},
+)
 class VendorBillForceAnalyzeView(generics.GenericAPIView):
     """
     POST /api/v1/tally/org/{org_id}/vendor-bills/{bill_id}/analyze/
@@ -221,7 +252,7 @@ class VendorBillForceAnalyzeView(generics.GenericAPIView):
                 bill.analysed_headers.all().delete()
                 # Re-analyze the bill
                 if AI_ANALYSIS_ENABLED:
-                    VendorBillUploadView.perform_analysis(None, _org_or_404(org_id), bill, bill.gst_type)
+                    VendorBillUploadView.perform_analysis(None, _org_or_404(org_id), bill, request.data.get('gst_type', 'IGST'))
                 bill.status = "Analysed"
                 bill.save()
         except Exception as e:
@@ -298,6 +329,101 @@ class VendorBillSyncView(generics.GenericAPIView):
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = self.get_serializer(bill)
+        return Response(serializer.data)
+
+
+@extend_schema(
+    tags=["Tally / Vendor Bills"],
+    parameters=[
+        OpenApiParameter("org_id", str, OpenApiParameter.PATH),
+        OpenApiParameter("bill_id", str, OpenApiParameter.PATH),
+    ],
+    responses={200: VendorAnalyzedBillSerializer},
+)
+class VendorBillAnalyzedDetailView(generics.RetrieveAPIView):
+    """
+    GET /api/v1/tally/org/{org_id}/vendor-bills/{bill_id}/analyzed/
+    Retrieve analyzed data for a vendor bill.
+    """
+    serializer_class = VendorAnalyzedBillSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        org_id = self.kwargs.get('org_id')
+        bill_id = self.kwargs.get('bill_id')
+        vendor_bill = get_object_or_404(TallyVendorBill, organization_id=org_id, id=bill_id)
+
+        # Get the most recent analyzed bill for this vendor bill
+        analyzed_bill = TallyVendorAnalyzedBill.objects.filter(
+            selectBill=vendor_bill,
+            organization_id=org_id
+        ).order_by('-created_at').first()
+
+        if not analyzed_bill:
+            raise Response(
+                {"error": "No analyzed data found for this bill"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        return analyzed_bill
+
+
+@extend_schema(
+    tags=["Tally / Vendor Bills"],
+    parameters=[
+        OpenApiParameter("org_id", str, OpenApiParameter.PATH),
+        OpenApiParameter("bill_id", str, OpenApiParameter.PATH),
+    ],
+    request=VendorAnalyzedBillSerializer,
+    responses={200: VendorAnalyzedBillSerializer},
+)
+class VendorBillAnalyzedUpdateView(generics.UpdateAPIView):
+    """
+    PUT/PATCH /api/v1/tally/org/{org_id}/vendor-bills/{bill_id}/analyzed/update/
+    Update analyzed data for a vendor bill.
+    """
+    serializer_class = VendorAnalyzedBillSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        org_id = self.kwargs.get('org_id')
+        bill_id = self.kwargs.get('bill_id')
+        vendor_bill = get_object_or_404(TallyVendorBill, organization_id=org_id, id=bill_id)
+
+        # Get the most recent analyzed bill for this vendor bill
+        analyzed_bill = TallyVendorAnalyzedBill.objects.filter(
+            selectBill=vendor_bill,
+            organization_id=org_id
+        ).order_by('-created_at').first()
+
+        if not analyzed_bill:
+            raise Response(
+                {"error": "No analyzed data found for this bill"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        return analyzed_bill
+
+    @transaction.atomic
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        # Check if the vendor bill is in a status that allows updating analyzed data
+        if instance.selectBill.status == "Synced":
+            return Response(
+                {"error": "Cannot update analyzed data for a synced bill"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = self.get_serializer(instance, data=request.data, partial=kwargs.get('partial', False))
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        # Update the vendor bill status if it was in Draft status
+        if instance.selectBill.status == "Draft":
+            instance.selectBill.status = "Analysed"
+            instance.selectBill.save()
+
         return Response(serializer.data)
 
 
@@ -419,6 +545,32 @@ class ExpenseBillListView(generics.ListAPIView):
     ],
     responses={200: ExpenseBillSerializer},
 )
+class ExpenseBillDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET /api/v1/tally/org/{org_id}/expense-bills/{bill_id}/
+    Retrieve, update or delete an expense bill.
+    """
+    serializer_class = ExpenseBillSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        org_id = self.kwargs.get('org_id')
+        return TallyExpenseBill.objects.filter(organization_id=org_id)
+
+    def get_object(self):
+        org_id = self.kwargs.get('org_id')
+        bill_id = self.kwargs.get('bill_id')
+        return get_object_or_404(TallyExpenseBill, organization_id=org_id, id=bill_id)
+
+
+@extend_schema(
+    tags=["Tally / Expense Bills"],
+    parameters=[
+        OpenApiParameter("org_id", str, OpenApiParameter.PATH),
+        OpenApiParameter("bill_id", str, OpenApiParameter.PATH),
+    ],
+    responses={200: ExpenseBillSerializer},
+)
 class ExpenseBillForceAnalyzeView(generics.GenericAPIView):
     """
     POST /api/v1/tally/org/{org_id}/expense-bills/{bill_id}/analyze/
@@ -433,9 +585,9 @@ class ExpenseBillForceAnalyzeView(generics.GenericAPIView):
 
         try:
             with transaction.atomic():
-                # Clear existing analysis
+                # Clear existing analysis if any
                 bill.analysed_headers.all().delete()
-                # Re-analyze
+                # Re-analyze the bill
                 if AI_ANALYSIS_ENABLED:
                     ExpenseBillUploadView.perform_analysis(None, _org_or_404(org_id), bill)
                 bill.status = "Analysed"
@@ -514,4 +666,99 @@ class ExpenseBillSyncView(generics.GenericAPIView):
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = self.get_serializer(bill)
+        return Response(serializer.data)
+
+
+@extend_schema(
+    tags=["Tally / Expense Bills"],
+    parameters=[
+        OpenApiParameter("org_id", str, OpenApiParameter.PATH),
+        OpenApiParameter("bill_id", str, OpenApiParameter.PATH),
+    ],
+    responses={200: ExpenseAnalyzedBillSerializer},
+)
+class ExpenseBillAnalyzedDetailView(generics.RetrieveAPIView):
+    """
+    GET /api/v1/tally/org/{org_id}/expense-bills/{bill_id}/analyzed/
+    Retrieve analyzed data for an expense bill.
+    """
+    serializer_class = ExpenseAnalyzedBillSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        org_id = self.kwargs.get('org_id')
+        bill_id = self.kwargs.get('bill_id')
+        expense_bill = get_object_or_404(TallyExpenseBill, organization_id=org_id, id=bill_id)
+
+        # Get the most recent analyzed bill for this expense bill
+        analyzed_bill = TallyExpenseAnalyzedBill.objects.filter(
+            selectBill=expense_bill,
+            organization_id=org_id
+        ).order_by('-created_at').first()
+
+        if not analyzed_bill:
+            raise Response(
+                {"error": "No analyzed data found for this bill"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        return analyzed_bill
+
+
+@extend_schema(
+    tags=["Tally / Expense Bills"],
+    parameters=[
+        OpenApiParameter("org_id", str, OpenApiParameter.PATH),
+        OpenApiParameter("bill_id", str, OpenApiParameter.PATH),
+    ],
+    request=ExpenseAnalyzedBillSerializer,
+    responses={200: ExpenseAnalyzedBillSerializer},
+)
+class ExpenseBillAnalyzedUpdateView(generics.UpdateAPIView):
+    """
+    PUT/PATCH /api/v1/tally/org/{org_id}/expense-bills/{bill_id}/analyzed/update/
+    Update analyzed data for an expense bill.
+    """
+    serializer_class = ExpenseAnalyzedBillSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        org_id = self.kwargs.get('org_id')
+        bill_id = self.kwargs.get('bill_id')
+        expense_bill = get_object_or_404(TallyExpenseBill, organization_id=org_id, id=bill_id)
+
+        # Get the most recent analyzed bill for this expense bill
+        analyzed_bill = TallyExpenseAnalyzedBill.objects.filter(
+            selectBill=expense_bill,
+            organization_id=org_id
+        ).order_by('-created_at').first()
+
+        if not analyzed_bill:
+            raise Response(
+                {"error": "No analyzed data found for this bill"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        return analyzed_bill
+
+    @transaction.atomic
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        # Check if the expense bill is in a status that allows updating analyzed data
+        if instance.selectBill.status == "Synced":
+            return Response(
+                {"error": "Cannot update analyzed data for a synced bill"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = self.get_serializer(instance, data=request.data, partial=kwargs.get('partial', False))
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        # Update the expense bill status if it was in Draft status
+        if instance.selectBill.status == "Draft":
+            instance.selectBill.status = "Analysed"
+            instance.selectBill.save()
+
         return Response(serializer.data)

@@ -232,7 +232,6 @@ class ChartOfAccountSyncView(APIView):
         headers = {
             'Authorization': f'Zoho-oauthtoken {creds.accessToken}',
         }
-        print(url, headers)
         try:
             response = requests.get(url, headers=headers)
             response.raise_for_status()
@@ -301,16 +300,13 @@ class TaxesSyncView(APIView):
         org, creds = _get_org_and_creds(org_id)
 
         # Direct API call to Zoho Books
-        url = f"https://www.zohoapis.in/books/v3/settings/taxes"
+        url = f"https://www.zohoapis.in/books/v3/settings/taxes?organization_id={creds.organisationId}"
         headers = {
             'Authorization': f'Zoho-oauthtoken {creds.accessToken}',
         }
-        params = {
-            'organization_id': creds.organisationId
-        }
 
         try:
-            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response = requests.get(url, headers=headers)
             response.raise_for_status()
             parsed_data = response.json()
         except requests.RequestException as e:
