@@ -75,4 +75,7 @@ class User(AbstractUser):
         if raw_password is not None:
             self.password = make_password(raw_password)
             self._password = None
-            self.save(update_fields=["password"] if self.pk else None)
+            # Only save if this is a real user with a primary key
+            # and not a temporary instance used for validation
+            if self.pk:
+                self.save(update_fields=["password"])

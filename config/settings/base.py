@@ -180,9 +180,8 @@ SPECTACULAR_SETTINGS = {
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
-    'ENUM_NAME_OVERRIDES': {
-        'Status656Enum': 'OrganizationStatusEnum',
-    },
+    # Temporarily disable enum name overrides to fix the schema generation issue
+    'ENUM_NAME_OVERRIDES': {},
 }
 
 # ------------------------------------------------------------

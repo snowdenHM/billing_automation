@@ -41,7 +41,6 @@ def set_module(org_id: int, module: str, active: bool) -> None:
     name = flag_name_for(org_id, module)
     # Using 'everyone' toggle is the simplest; no need for custom condition sets.
     flag, _ = Flag.objects.get_or_create(name=name, defaults={"everyone": active})
-    if flag.everyone != active or flag.disabled is True:
+    if flag.everyone != active:
         flag.everyone = active
-        flag.disabled = False
-        flag.save(update_fields=["everyone", "disabled"])
+        flag.save(update_fields=["everyone"])
