@@ -99,6 +99,24 @@ class APIKeyIssueSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100)
 
 
+class APIKeyRevokeResponseSerializer(serializers.Serializer):
+    """Serializer for API key revocation response."""
+    id = serializers.UUIDField()
+    name = serializers.CharField()
+    prefix = serializers.CharField()
+    created = serializers.DateTimeField()
+    revoked = serializers.BooleanField()
+    organization = serializers.PrimaryKeyRelatedField(queryset=Organization.objects.all())
+    created_by = UserDetailSerializer(read_only=True)
+
+
+class ModuleToggleSerializer(serializers.Serializer):
+    """Serializer for toggling module status."""
+    organization = serializers.PrimaryKeyRelatedField(queryset=Organization.objects.all())
+    module = serializers.PrimaryKeyRelatedField(queryset=Module.objects.all())
+    is_enabled = serializers.BooleanField(default=True)
+
+
 class APIKeySerializer(serializers.ModelSerializer):
     created_by = UserDetailSerializer(read_only=True)
     organization = OrganizationSerializer(read_only=True)
@@ -144,3 +162,18 @@ class OrganizationModuleSerializer(serializers.ModelSerializer):
             obj.is_enabled = is_enabled
             obj.save(update_fields=["is_enabled"])
         return obj
+
+
+class OrgMembershipUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating organization membership details (like role)"""
+
+    class Meta:
+        model = OrgMembership
+        fields = ["role", "is_active"]
+
+    def validate_role(self, value):
+        """Validate that the role is one of the allowed choices"""
+        valid_roles = [choice[0] for choice in OrgMembership.ROLE_CHOICES]
+        if value not in valid_roles:
+            raise serializers.ValidationError(f"Invalid role. Must be one of: {valid_roles}")
+        return value

@@ -227,3 +227,38 @@ class ChangePasswordSerializer(serializers.Serializer):
         if attrs['new_password'] != attrs['confirm_password']:
             raise serializers.ValidationError({'confirm_password': "Password fields didn't match."})
         return attrs
+
+
+class RefreshTokenSerializer(serializers.Serializer):
+    """Serializer for refreshing JWT access tokens."""
+    refresh = serializers.CharField()
+
+    def validate(self, attrs):
+        refresh_token = attrs.get("refresh")
+
+        try:
+            # Validate the refresh token
+            refresh = RefreshToken(refresh_token)
+
+            # Get the user from the token
+            user_id = refresh.payload.get('user_id')
+            user = User.objects.get(id=user_id)
+
+            # Check if user is still active
+            if not user.is_active:
+                raise serializers.ValidationError("User account is inactive.")
+
+            # Update last active timestamp
+            user.update_last_active()
+
+            # Generate new access token
+            new_refresh = RefreshToken.for_user(user)
+
+            return {
+                "access": str(new_refresh.access_token),
+                "refresh": str(new_refresh),
+                "user": UserSerializer(user, context=self.context).data,
+            }
+
+        except Exception as e:
+            raise serializers.ValidationError("Invalid or expired refresh token.")

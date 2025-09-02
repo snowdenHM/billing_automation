@@ -49,7 +49,7 @@ class ParentLedger(BaseOrgModel):
     parent = models.CharField(max_length=255, blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
-    update_at = models.DateTimeField(auto_now=True)
+    updated_at = models.DateTimeField(auto_now=True)  # Fixed typo: was 'update_at'
 
     class Meta:
         verbose_name = "Parent Ledger"
@@ -67,9 +67,12 @@ class Ledger(BaseOrgModel):
 
     parent = models.ForeignKey(ParentLedger, on_delete=models.CASCADE, related_name="ledgers")
     alias = models.CharField(max_length=255, blank=True, null=True)
-    opening_balance = models.CharField(max_length=255, blank=True, null=True)
+    opening_balance = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))  # Fixed: was CharField
     gst_in = models.CharField(max_length=255, blank=True, null=True)
     company = models.CharField(max_length=255, blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)  # Added missing timestamp
+    updated_at = models.DateTimeField(auto_now=True)     # Added missing timestamp
 
     class Meta:
         verbose_name = "Ledger"
@@ -129,9 +132,9 @@ class TallyVendorBill(BaseOrgModel):
         MULTI = "Multiple Invoice/File", "Multiple Invoice/File"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
-    billmunshiName = models.CharField(max_length=100, blank=True, null=True)
+    bill_munshi_name = models.CharField(max_length=100, blank=True, null=True)  # Fixed: was billmunshiName
     file = models.FileField(upload_to="bills/", validators=[validate_file_extension])
-    fileType = models.CharField(
+    file_type = models.CharField(  # Fixed: was fileType
         choices=BillType.choices, max_length=100, blank=True, null=True, default=BillType.SINGLE
     )
     analysed_data = models.JSONField(default=dict, blank=True, null=True)
@@ -148,26 +151,48 @@ class TallyVendorBill(BaseOrgModel):
         verbose_name_plural = "Tally Vendor Bills"
 
     def __str__(self) -> str:
-        return self.billmunshiName or f"TallyVendorBill:{self.id}"
+        return self.bill_munshi_name or f"TallyVendorBill:{self.id}"
 
     def save(self, *args, **kwargs):
         """
-        Autogenerate billmunshiName as 'BM-TB-{N}' if missing.
+        Autogenerate bill_munshi_name as 'BM-TB-{N}' if missing.
+        Also validates status transitions.
         """
-        if not self.billmunshiName:
+        if not self.bill_munshi_name:
             last = (
                 TallyVendorBill.objects.filter(
-                    organization=self.organization, billmunshiName__startswith="BM-TB-"
+                    organization=self.organization, bill_munshi_name__startswith="BM-TB-"
                 )
-                .order_by("-billmunshiName")
+                .order_by("-bill_munshi_name")
                 .first()
             )
-            if last and last.billmunshiName:
-                m = re.match(r"BM-TB-(\d+)$", last.billmunshiName)
+            if last and last.bill_munshi_name:
+                m = re.match(r"BM-TB-(\d+)$", last.bill_munshi_name)
                 next_num = int(m.group(1)) + 1 if m else 1
             else:
                 next_num = 1
-            self.billmunshiName = f"BM-TB-{next_num}"
+            self.bill_munshi_name = f"BM-TB-{next_num}"
+
+        # Perform status transition validation for existing records
+        if self.pk:  # Skip validation for new records
+            try:
+                old_instance = TallyVendorBill.objects.get(pk=self.pk)
+                if old_instance.status != self.status:
+                    valid_transitions = {
+                        self.BillStatus.DRAFT: [self.BillStatus.ANALYSED],
+                        self.BillStatus.ANALYSED: [self.BillStatus.VERIFIED],
+                        self.BillStatus.VERIFIED: [self.BillStatus.SYNCED],
+                        self.BillStatus.SYNCED: [],  # No further transitions allowed
+                    }
+
+                    if self.status not in valid_transitions.get(old_instance.status, []):
+                        raise ValidationError({
+                            'status': f"Invalid status transition from {old_instance.status} to {self.status}. "
+                                    f"Valid next states are: {', '.join(valid_transitions.get(old_instance.status, []))}"
+                        })
+            except TallyVendorBill.DoesNotExist:
+                pass  # Handle case where pk exists but object doesn't (unlikely)
+
         super().save(*args, **kwargs)
 
     def clean(self):
@@ -176,24 +201,23 @@ class TallyVendorBill(BaseOrgModel):
         if not self.pk:  # Skip validation for new records
             return
 
-        old_instance = TallyVendorBill.objects.get(pk=self.pk)
-        if old_instance.status != self.status:
-            valid_transitions = {
-                self.BillStatus.DRAFT: [self.BillStatus.ANALYSED],
-                self.BillStatus.ANALYSED: [self.BillStatus.VERIFIED],
-                self.BillStatus.VERIFIED: [self.BillStatus.SYNCED],
-                self.BillStatus.SYNCED: [],  # No further transitions allowed
-            }
+        try:
+            old_instance = TallyVendorBill.objects.get(pk=self.pk)
+            if old_instance.status != self.status:
+                valid_transitions = {
+                    self.BillStatus.DRAFT: [self.BillStatus.ANALYSED],
+                    self.BillStatus.ANALYSED: [self.BillStatus.VERIFIED],
+                    self.BillStatus.VERIFIED: [self.BillStatus.SYNCED],
+                    self.BillStatus.SYNCED: [],  # No further transitions allowed
+                }
 
-            if self.status not in valid_transitions.get(old_instance.status, []):
-                raise ValidationError({
-                    'status': f"Invalid status transition from {old_instance.status} to {self.status}. "
-                             f"Valid next states are: {', '.join(valid_transitions.get(old_instance.status, []))}"
-                })
-
-    def save(self, *args, **kwargs):
-        self.full_clean()
-        super().save(*args, **kwargs)
+                if self.status not in valid_transitions.get(old_instance.status, []):
+                    raise ValidationError({
+                        'status': f"Invalid status transition from {old_instance.status} to {self.status}. "
+                                 f"Valid next states are: {', '.join(valid_transitions.get(old_instance.status, []))}"
+                    })
+        except TallyVendorBill.DoesNotExist:
+            pass  # Handle case where pk exists but object doesn't (unlikely)
 
 
 class TallyVendorAnalyzedBill(BaseOrgModel):
@@ -207,7 +231,7 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
         UNKNOWN = "Unknown", "Unknown"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
-    selectBill = models.ForeignKey(
+    selected_bill = models.ForeignKey(
         TallyVendorBill, on_delete=models.CASCADE, blank=True, null=True, related_name="analysed_headers"
     )
     vendor = models.ForeignKey(
@@ -241,7 +265,7 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
         verbose_name_plural = "Tally Vendor Analysed Bills"
 
     def __str__(self) -> str:
-        return (self.selectBill.billmunshiName if self.selectBill else None) or f"VendorAnalysed:{self.id}"
+        return (self.selected_bill.bill_munshi_name if self.selected_bill else None) or f"VendorAnalysed:{self.id}"
 
     def clean(self):
         super().clean()
@@ -333,9 +357,9 @@ class TallyExpenseBill(BaseOrgModel):
         MULTI = "Multiple Invoice/File", "Multiple Invoice/File"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
-    billmunshiName = models.CharField(max_length=100, blank=True, null=True)
+    bill_munshi_name = models.CharField(max_length=100, blank=True, null=True)  # Fixed: was billmunshiName
     file = models.FileField(upload_to="bills/", validators=[validate_file_extension])
-    fileType = models.CharField(
+    file_type = models.CharField(  # Fixed: was fileType
         choices=BillType.choices, max_length=100, blank=True, null=True, default=BillType.SINGLE
     )
     analysed_data = models.JSONField(default=dict, blank=True, null=True)
@@ -352,32 +376,32 @@ class TallyExpenseBill(BaseOrgModel):
         verbose_name_plural = "Tally Expense Bills"
 
     def __str__(self) -> str:
-        return self.billmunshiName or f"TallyExpenseBill:{self.id}"
+        return self.bill_munshi_name or f"TallyExpenseBill:{self.id}"
 
     def save(self, *args, **kwargs):
         """
-        Autogenerate billmunshiName as 'BM-TE-{N}' if missing.
+        Autogenerate bill_munshi_name as 'BM-TE-{N}' if missing.
         """
-        if not self.billmunshiName:
+        if not self.bill_munshi_name:
             last = (
                 TallyExpenseBill.objects.filter(
-                    organization=self.organization, billmunshiName__startswith="BM-TE-"
+                    organization=self.organization, bill_munshi_name__startswith="BM-TE-"
                 )
-                .order_by("-billmunshiName")
+                .order_by("-bill_munshi_name")
                 .first()
             )
-            if last and last.billmunshiName:
-                m = re.match(r"BM-TE-(\d+)$", last.billmunshiName)
+            if last and last.bill_munshi_name:
+                m = re.match(r"BM-TE-(\d+)$", last.bill_munshi_name)
                 next_num = int(m.group(1)) + 1 if m else 1
             else:
                 next_num = 1
-            self.billmunshiName = f"BM-TE-{next_num}"
+            self.bill_munshi_name = f"BM-TE-{next_num}"
         super().save(*args, **kwargs)
 
 
 class TallyExpenseAnalyzedBill(BaseOrgModel):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
-    selectBill = models.ForeignKey(
+    selected_bill = models.ForeignKey(  # Fixed: was selectBill
         TallyExpenseBill, on_delete=models.CASCADE, blank=True, null=True, related_name="analysed_headers"
     )
     vendor = models.ForeignKey(
@@ -410,7 +434,7 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
         verbose_name_plural = "Tally Expense Analysed Bills"
 
     def __str__(self) -> str:
-        return (self.selectBill.billmunshiName if self.selectBill else None) or f"ExpenseAnalysed:{self.id}"
+        return (self.selected_bill.bill_munshi_name if self.selected_bill else None) or f"ExpenseAnalysed:{self.id}"
 
 
 class TallyExpenseAnalyzedProduct(BaseOrgModel):
@@ -437,6 +461,6 @@ class TallyExpenseAnalyzedProduct(BaseOrgModel):
         verbose_name_plural = "Tally Expense Analysed Bill Products"
 
     def __str__(self) -> str:
-        if self.expense_bill and self.expense_bill.selectBill:
-            return self.expense_bill.selectBill.billmunshiName or f"ExpenseProduct:{self.id}"
+        if self.expense_bill and self.expense_bill.selected_bill:
+            return self.expense_bill.selected_bill.bill_munshi_name or f"ExpenseProduct:{self.id}"
         return f"ExpenseProduct:{self.id}"

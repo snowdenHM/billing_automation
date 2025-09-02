@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.utils.html import format_html
+from django.urls import reverse
 
 from .models import (
     ParentLedger,
@@ -9,75 +10,48 @@ from .models import (
     TallyVendorAnalyzedBill,
     TallyVendorAnalyzedProduct,
     TallyExpenseBill,
-    TallyExpenseAnalyzedBill,
-    TallyExpenseAnalyzedProduct,
 )
 
 
-class BaseOrgAdmin(admin.ModelAdmin):
-    """
-    Base admin class for organization-scoped models.
-    - Shows organization in list display
-    - Filters by organization
-    - Makes created_at/updated_at readonly
-    """
-    list_display = ('id', 'organization')
-    list_filter = ('organization',)
-
-    def get_readonly_fields(self, request, obj=None):
-        ro = list(super().get_readonly_fields(request, obj))
-        # Add common timestamp fields if they exist on the model
-        model_field_names = {f.name for f in self.model._meta.get_fields()}
-        for f in ("created_at", "updated_at", "update_at"):
-            if f in model_field_names and f not in ro:
-                ro.append(f)
-        return ro
+class ParentLedgerAdmin(admin.ModelAdmin):
+    list_display = ('parent', 'organization', 'created_at', 'updated_at')
+    list_filter = ('organization', 'created_at')
+    search_fields = ('parent', 'organization__name')
+    readonly_fields = ('created_at', 'updated_at')
 
 
-@admin.register(ParentLedger)
-class ParentLedgerAdmin(BaseOrgAdmin):
-    list_display = ('id', 'parent', 'organization', 'created_at')
-    search_fields = ('parent',)
-    readonly_fields = ('created_at', 'update_at')
-
-
-@admin.register(Ledger)
-class LedgerAdmin(BaseOrgAdmin):
-    list_display = ('id', 'name', 'parent', 'organization', 'gst_in')
-    search_fields = ('name', 'master_id', 'alter_id', 'gst_in')
-    list_filter = ('organization', 'parent')
+class LedgerAdmin(admin.ModelAdmin):
+    list_display = ('name', 'parent', 'master_id', 'alter_id', 'organization', 'created_at')
+    list_filter = ('parent', 'organization', 'created_at')
+    search_fields = ('name', 'master_id', 'parent__parent', 'organization__name')
+    readonly_fields = ('created_at', 'updated_at')
     autocomplete_fields = ('parent',)
 
 
-class TallyConfigParentInline(admin.TabularInline):
-    model = TallyConfig.igst_parents.through
-    extra = 1
-    verbose_name = "IGST Parent"
-    verbose_name_plural = "IGST Parents"
-
-
-@admin.register(TallyConfig)
-class TallyConfigAdmin(BaseOrgAdmin):
-    list_display = ('id', 'organization')
+class TallyConfigAdmin(admin.ModelAdmin):
     filter_horizontal = (
-        'igst_parents', 'cgst_parents', 'sgst_parents',
-        'vendor_parents', 'chart_of_accounts_parents',
-        'chart_of_accounts_expense_parents'
+        'igst_parents',
+        'cgst_parents',
+        'sgst_parents',
+        'vendor_parents',
+        'chart_of_accounts_parents',
+        'chart_of_accounts_expense_parents',
     )
+    list_display = ('organization', 'display_mappings')
+    search_fields = ('organization__name',)
 
-
-@admin.register(TallyVendorBill)
-class TallyVendorBillAdmin(BaseOrgAdmin):
-    list_display = ('id', 'billmunshiName', 'file_link', 'fileType', 'status', 'process', 'organization', 'created_at')
-    list_filter = ('organization', 'status', 'fileType', 'process')
-    search_fields = ('billmunshiName',)
-    readonly_fields = ('created_at', 'updated_at')
-
-    @admin.display(description='File')
-    def file_link(self, obj):
-        if obj.file:
-            return format_html('<a href="{}" target="_blank">View</a>', obj.file.url)
-        return '-'
+    def display_mappings(self, obj):
+        """Display a summary of the number of ledger mappings"""
+        return format_html(
+            "IGST: {}, CGST: {}, SGST: {}, Vendors: {}, COA: {}, Expense COA: {}",
+            obj.igst_parents.count(),
+            obj.cgst_parents.count(),
+            obj.sgst_parents.count(),
+            obj.vendor_parents.count(),
+            obj.chart_of_accounts_parents.count(),
+            obj.chart_of_accounts_expense_parents.count(),
+        )
+    display_mappings.short_description = "Mappings"
 
 
 class TallyVendorAnalyzedProductInline(admin.TabularInline):
@@ -87,54 +61,55 @@ class TallyVendorAnalyzedProductInline(admin.TabularInline):
     readonly_fields = ('created_at',)
 
 
-@admin.register(TallyVendorAnalyzedBill)
-class TallyVendorAnalyzedBillAdmin(BaseOrgAdmin):
-    list_display = ('id', 'bill_ref', 'vendor', 'bill_no', 'bill_date', 'total', 'organization', 'created_at')
-    list_filter = ('organization', 'selectBill__status', 'gst_type')
-    search_fields = ('bill_no', 'selectBill__billmunshiName', 'vendor__name')
+class TallyVendorAnalyzedBillAdmin(admin.ModelAdmin):
+    list_display = ('__str__', 'vendor', 'bill_no', 'bill_date', 'total', 'gst_type', 'organization')
+    list_filter = ('organization', 'gst_type', 'created_at')
+    search_fields = ('bill_no', 'vendor__name', 'selected_bill__bill_munshi_name')
     readonly_fields = ('created_at',)
     inlines = [TallyVendorAnalyzedProductInline]
-    autocomplete_fields = ('vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes')
+    fieldsets = (
+        (None, {
+            'fields': ('selected_bill', 'vendor', 'bill_no', 'bill_date', 'note')
+        }),
+        ('GST Details', {
+            'fields': ('gst_type', 'total', 'igst', 'igst_taxes', 'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes')
+        }),
+        ('Meta', {
+            'fields': ('organization', 'created_at')
+        }),
+    )
 
-    @admin.display(description='Bill')
-    def bill_ref(self, obj):
-        if obj.selectBill:
-            return obj.selectBill.billmunshiName
-        return f"ID: {obj.id}"
 
-
-@admin.register(TallyExpenseBill)
-class TallyExpenseBillAdmin(BaseOrgAdmin):
-    list_display = ('id', 'billmunshiName', 'file_link', 'fileType', 'status', 'process', 'organization', 'created_at')
-    list_filter = ('organization', 'status', 'fileType', 'process')
-    search_fields = ('billmunshiName',)
+class TallyVendorBillAdmin(admin.ModelAdmin):
+    list_display = ('bill_munshi_name', 'status', 'file_type', 'organization', 'display_file', 'created_at')
+    list_filter = ('status', 'file_type', 'organization', 'created_at')
+    search_fields = ('bill_munshi_name', 'organization__name')
     readonly_fields = ('created_at', 'updated_at')
 
-    @admin.display(description='File')
-    def file_link(self, obj):
+    def display_file(self, obj):
         if obj.file:
-            return format_html('<a href="{}" target="_blank">View</a>', obj.file.url)
-        return '-'
+            return format_html('<a href="{}" target="_blank">View File</a>', obj.file.url)
+        return "-"
+    display_file.short_description = "File"
 
 
-class TallyExpenseAnalyzedProductInline(admin.TabularInline):
-    model = TallyExpenseAnalyzedProduct
-    extra = 0
-    fields = ('item_details', 'chart_of_accounts', 'amount', 'debit_or_credit')
-    readonly_fields = ('created_at',)
+class TallyExpenseBillAdmin(admin.ModelAdmin):
+    list_display = ('bill_munshi_name', 'status', 'file_type', 'organization', 'display_file', 'created_at')
+    list_filter = ('status', 'file_type', 'organization', 'created_at')
+    search_fields = ('bill_munshi_name', 'organization__name')
+    readonly_fields = ('created_at', 'updated_at')
+
+    def display_file(self, obj):
+        if obj.file:
+            return format_html('<a href="{}" target="_blank">View File</a>', obj.file.url)
+        return "-"
+    display_file.short_description = "File"
 
 
-@admin.register(TallyExpenseAnalyzedBill)
-class TallyExpenseAnalyzedBillAdmin(BaseOrgAdmin):
-    list_display = ('id', 'bill_ref', 'vendor', 'bill_no', 'bill_date', 'total', 'organization', 'created_at')
-    list_filter = ('organization', 'selectBill__status')
-    search_fields = ('bill_no', 'voucher', 'selectBill__billmunshiName', 'vendor__name')
-    readonly_fields = ('created_at',)
-    inlines = [TallyExpenseAnalyzedProductInline]
-    autocomplete_fields = ('vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes')
-
-    @admin.display(description='Bill')
-    def bill_ref(self, obj):
-        if obj.selectBill:
-            return obj.selectBill.billmunshiName
-        return f"ID: {obj.id}"
+# Register models with the admin site
+admin.site.register(ParentLedger, ParentLedgerAdmin)
+admin.site.register(Ledger, LedgerAdmin)
+admin.site.register(TallyConfig, TallyConfigAdmin)
+admin.site.register(TallyVendorBill, TallyVendorBillAdmin)
+admin.site.register(TallyVendorAnalyzedBill, TallyVendorAnalyzedBillAdmin)
+admin.site.register(TallyExpenseBill, TallyExpenseBillAdmin)

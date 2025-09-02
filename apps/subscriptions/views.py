@@ -20,7 +20,7 @@ from .serializers import (
 )
 
 
-@extend_schema(tags=["Plans"])
+@extend_schema(tags=["Plans & Subscriptions"])
 class PlanViewSet(viewsets.ModelViewSet):
     """
     API endpoint for subscription plans management.
@@ -49,7 +49,7 @@ class PlanViewSet(viewsets.ModelViewSet):
 
 
 @extend_schema(
-    tags=["Subscriptions"],
+    tags=["Plans & Subscriptions"],
     parameters=[
         OpenApiParameter(
             name="id",
@@ -150,7 +150,7 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
 
 
 @extend_schema(
-    tags=["Subscriptions"],
+    tags=["Plans & Subscriptions"],
     parameters=[
         OpenApiParameter(name="org_id", location=OpenApiParameter.PATH, required=True, type=str)
     ]

@@ -9,7 +9,35 @@ from apps.module.zoho.models import (
     ZohoVendor,
     ZohoChartOfAccount,
 )
-from apps.module.zoho.serializers.base import SyncResultSerializer  # re-use shared type
+
+
+class FileUploadField(serializers.FileField):
+    """Custom file field with validation for supported file types"""
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("help_text", "Upload PDF, PNG, or JPG files only")
+        super().__init__(**kwargs)
+
+    def to_internal_value(self, data):
+        file = super().to_internal_value(data)
+
+        # Validate file extension
+        if hasattr(file, "name"):
+            allowed_extensions = [".pdf", ".png", ".jpg", ".jpeg"]
+            file_ext = file.name.lower().split(".")[-1]
+            if f".{file_ext}" not in allowed_extensions:
+                raise serializers.ValidationError(
+                    f"Unsupported file type. Only PDF, PNG, and JPG files are allowed. Got: .{file_ext}"
+                )
+
+        # Validate file size (10MB limit)
+        max_size = 10 * 1024 * 1024  # 10MB
+        if hasattr(file, "size") and file.size > max_size:
+            raise serializers.ValidationError(
+                f"File too large. Maximum file size is 10MB. Got: {file.size / (1024*1024):.2f}MB"
+            )
+
+        return file
 
 
 class OrgField(serializers.PrimaryKeyRelatedField):
@@ -17,116 +45,74 @@ class OrgField(serializers.PrimaryKeyRelatedField):
         return Organization.objects.all()
 
 
-# ---------- Read serializers ----------
+# ---------- Zoho Expense Bill Serializers ----------
 
 class ExpenseZohoProductSerializer(serializers.ModelSerializer):
+    """Serializer for expense product line items with correct field mapping to model"""
+
     class Meta:
         model = ExpenseZohoProduct
         fields = [
-            "id",
-            "zohoBill",
-            "item_details",
-            "chart_of_accounts",
-            "vendor",
-            "amount",
-            "debit_or_credit",
-            "created_at",
+            "id", "zohoBill", "item_details", "chart_of_accounts",
+            "vendor", "amount", "debit_or_credit", "created_at"
         ]
         read_only_fields = ["id", "zohoBill", "created_at"]
 
 
 class ExpenseZohoBillSerializer(serializers.ModelSerializer):
-    # NOTE: 'products' is the reverse related_name on ExpenseZohoProduct. No 'source=' needed.
+    """Serializer for expense Zoho bill with corrected product relationship"""
+
     products = ExpenseZohoProductSerializer(many=True, read_only=True)
 
     class Meta:
         model = ExpenseZohoBill
         fields = [
-            "id",
-            "selectBill",
-            "vendor",
-            "bill_no",
-            "bill_date",
-            "total",
-            "igst",
-            "cgst",
-            "sgst",
-            "note",
-            "created_at",
-            "products",
+            "id", "selectBill", "vendor", "bill_no", "bill_date", "total",
+            "igst", "cgst", "sgst", "note", "created_at", "products"
         ]
         read_only_fields = ["id", "selectBill", "created_at"]
 
 
-class ExpenseBillSerializer(serializers.ModelSerializer):
-    organization = OrgField()
-    analysed = serializers.BooleanField(source="process", read_only=True)
+class ZohoExpenseBillSerializer(serializers.ModelSerializer):
+    """Serializer for Zoho Expense Bill listing and basic operations"""
 
     class Meta:
         model = ExpenseBill
         fields = [
-            "id",
-            "organization",
-            "billmunshiName",
-            "file",
-            "fileType",
-            "analysed_data",
-            "status",
-            "process",
-            "analysed",
-            "created_at",
-            "update_at",
+            "id", "billmunshiName", "file", "fileType", "status",
+            "process", "created_at", "update_at"
         ]
-        read_only_fields = ["id", "analysed_data", "status", "process", "created_at", "update_at"]
-        ref_name = "ExpenseBillWithStatusEnum"
+        read_only_fields = ["id", "billmunshiName", "created_at", "update_at"]
+        ref_name = "ZohoExpenseBill"  # Unique component name
 
 
+class ZohoExpenseBillDetailSerializer(serializers.Serializer):
+    """Serializer for detailed Zoho Expense Bill view including analysis data"""
 
-class ExpenseBillDetailSerializer(serializers.Serializer):
-    bill = ExpenseBillSerializer()
-    analysed = ExpenseZohoBillSerializer(allow_null=True)
+    bill = ZohoExpenseBillSerializer(read_only=True)
+    analysed_data = serializers.JSONField(read_only=True)
+
+    class Meta:
+        ref_name = "ZohoExpenseBillDetail"
 
 
-# ---------- Write serializers ----------
+class ZohoExpenseBillUploadSerializer(serializers.ModelSerializer):
+    """Serializer for uploading Zoho Expense Bill files"""
 
-class ExpenseBillUploadSerializer(serializers.ModelSerializer):
-    """
-    Multipart upload. fileType behavior:
-      - "Single Invoice/File": analyse all PDF pages as ONE invoice
-      - "Multiple Invoice/File": each PDF page becomes its own bill+analysis
-
-    Supports both single file upload and multiple file uploads with files[].
-    """
-    organization = OrgField()
-    file = serializers.FileField(required=False)
-    files = serializers.ListField(
-        child=serializers.FileField(),
-        required=False,
-        help_text="Use for multiple file uploads"
-    )
+    file = FileUploadField()
 
     class Meta:
         model = ExpenseBill
-        fields = ["organization", "file", "files", "fileType"]
+        fields = ["file", "fileType"]
+        ref_name = "ZohoExpenseBillUploadRequest"
 
-    def validate(self, attrs):
-        has_file = attrs.get("file") is not None
-        has_files = attrs.get("files") is not None and len(attrs.get("files", [])) > 0
-
-        if not has_file and not has_files:
-            raise serializers.ValidationError({
-                "file": "Either 'file' or 'files' field is required."
-            })
-
-        if has_file and has_files:
-            raise serializers.ValidationError({
-                "file": "Please provide either 'file' or 'files', not both."
-            })
-
-        return attrs
+    def create(self, validated_data):
+        return ExpenseBill.objects.create(**validated_data)
 
 
-class VerifyExpenseProductItemSerializer(serializers.Serializer):
+class ZohoExpenseVerifyProductItemSerializer(serializers.Serializer):
+    """Edits to each product during expense verification - using correct field names"""
+
     id = serializers.UUIDField()
     chart_of_accounts = serializers.PrimaryKeyRelatedField(
         queryset=ZohoChartOfAccount.objects.all(), required=False, allow_null=True
@@ -134,12 +120,21 @@ class VerifyExpenseProductItemSerializer(serializers.Serializer):
     vendor = serializers.PrimaryKeyRelatedField(
         queryset=ZohoVendor.objects.all(), required=False, allow_null=True
     )
+    item_details = serializers.CharField(required=False, allow_blank=True)
     amount = serializers.CharField(required=False, allow_blank=True)
-    debit_or_credit = serializers.ChoiceField(choices=("credit", "debit"), required=False)
+    debit_or_credit = serializers.ChoiceField(
+        choices=[("credit", "Credit"), ("debit", "Debit")],
+        required=False,
+        default="credit"
+    )
 
 
-class ExpenseBillVerifySerializer(serializers.Serializer):
-    vendor = serializers.PrimaryKeyRelatedField(queryset=ZohoVendor.objects.all(), required=False, allow_null=True)
+class ZohoExpenseBillVerifySerializer(serializers.Serializer):
+    """Verification payload for the analysed expense bill header + products"""
+
+    vendor = serializers.PrimaryKeyRelatedField(
+        queryset=ZohoVendor.objects.all(), required=False, allow_null=True
+    )
     note = serializers.CharField(required=False, allow_blank=True)
     bill_no = serializers.CharField(required=False, allow_blank=True)
     bill_date = serializers.DateField(required=False, allow_null=True)
@@ -147,12 +142,7 @@ class ExpenseBillVerifySerializer(serializers.Serializer):
     sgst = serializers.CharField(required=False, allow_blank=True)
     igst = serializers.CharField(required=False, allow_blank=True)
     total = serializers.CharField(required=False, allow_blank=True)
-    products = VerifyExpenseProductItemSerializer(many=True, required=False)
+    products = ZohoExpenseVerifyProductItemSerializer(many=True, required=False)
 
-
-class ExpenseUploadResultSerializer(serializers.Serializer):
     class Meta:
-        ref_name = "ExpenseBillUploadResult"  # unique name for schema
-
-    created = serializers.IntegerField()
-    bills = ExpenseBillSerializer(many=True)
+        ref_name = "ZohoExpenseBillVerify"

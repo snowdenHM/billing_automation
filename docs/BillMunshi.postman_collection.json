@@ -1,0 +1,1916 @@
+{
+  "info": {
+    "name": "Bill Munshi API Collection",
+    "description": "Complete API collection for the Bill Munshi project - A comprehensive solution for bill management, expense tracking, and accounting integration with Tally and Zoho.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "API Status",
+      "description": "Health check and system status endpoints",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/health/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "health", ""]
+            },
+            "description": "Check if the API is operational"
+          }
+        },
+        {
+          "name": "API Version",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/version/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "version", ""]
+            },
+            "description": "Get the current API version information"
+          }
+        },
+        {
+          "name": "System Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/system/status/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "system", "status", ""]
+            },
+            "description": "Get detailed system status (requires authentication)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Authentication",
+      "description": "User authentication and authorization endpoints",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/register/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "register", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecurePassword123\",\n  \"confirm_password\": \"SecurePassword123\",\n  \"first_name\": \"John\",\n  \"last_name\": \"Doe\"\n}"
+            },
+            "description": "Register a new user"
+          }
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/login/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "login", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecurePassword123\"\n}"
+            },
+            "description": "Authenticate user and get JWT tokens"
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/refresh/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "refresh", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}"
+            },
+            "description": "Get a new access token using refresh token"
+          }
+        },
+        {
+          "name": "Password Reset Request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/password/reset/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "password", "reset", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\"\n}"
+            },
+            "description": "Request a password reset link"
+          }
+        },
+        {
+          "name": "Password Reset Confirm",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/password/confirm/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "password", "confirm", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"password-reset-token\",\n  \"uidb64\": \"user-id-base64\",\n  \"password\": \"NewSecurePassword123\",\n  \"confirm_password\": \"NewSecurePassword123\"\n}"
+            },
+            "description": "Confirm password reset with token"
+          }
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/password/change/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "password", "change", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"old_password\": \"CurrentPassword123\",\n  \"new_password\": \"NewSecurePassword123\",\n  \"confirm_password\": \"NewSecurePassword123\"\n}"
+            },
+            "description": "Change password while authenticated"
+          }
+        },
+        {
+          "name": "Verify Email",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/verify-email/{{uidb64}}/{{token}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "verify-email", "{{uidb64}}", "{{token}}", ""]
+            },
+            "description": "Verify user email with token"
+          }
+        }
+      ]
+    },
+    {
+      "name": "User Profile",
+      "description": "User profile management endpoints",
+      "item": [
+        {
+          "name": "Get Current User",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/me/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "me", ""]
+            },
+            "description": "Get current user profile information"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Organizations",
+      "description": "Organization management endpoints",
+      "item": [
+        {
+          "name": "List Organizations",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/org/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "org", ""]
+            },
+            "description": "List all organizations the user has access to"
+          }
+        },
+        {
+          "name": "Create Organization",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/org/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "org", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"My Organization\",\n  \"business_type\": \"LLC\",\n  \"tax_identifier\": \"12345678\"\n}"
+            },
+            "description": "Create a new organization"
+          }
+        },
+        {
+          "name": "Get Organization",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/org/{{organization_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "org", "{{organization_id}}", ""]
+            },
+            "description": "Get details of a specific organization"
+          }
+        },
+        {
+          "name": "Update Organization",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/org/{{organization_id}}/update/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "org", "{{organization_id}}", "update", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Organization Name\",\n  \"business_type\": \"Corporation\"\n}"
+            },
+            "description": "Update organization details"
+          }
+        },
+        {
+          "name": "List Organization Members",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/org/{{organization_id}}/members/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "org", "{{organization_id}}", "members", ""]
+            },
+            "description": "List all members of an organization"
+          }
+        },
+        {
+          "name": "Add Organization Member",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/org/{{organization_id}}/members/add/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "org", "{{organization_id}}", "members", "add", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"newmember@example.com\",\n  \"role\": \"member\"\n}"
+            },
+            "description": "Add a new member to the organization"
+          }
+        },
+        {
+          "name": "Remove Organization Member",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/org/{{organization_id}}/members/{{membership_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "org", "{{organization_id}}", "members", "{{membership_id}}", ""]
+            },
+            "description": "Remove a member from the organization"
+          }
+        },
+        {
+          "name": "Update Member Role",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/org/{{organization_id}}/members/{{membership_id}}/role/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "org", "{{organization_id}}", "members", "{{membership_id}}", "role", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"admin\"\n}"
+            },
+            "description": "Update a member's role in the organization"
+          }
+        },
+        {
+          "name": "List API Keys",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/org/{{organization_id}}/api-keys/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "org", "{{organization_id}}", "api-keys", ""]
+            },
+            "description": "List all API keys for the organization"
+          }
+        },
+        {
+          "name": "Issue API Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/org/{{organization_id}}/api-keys/issue/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "org", "{{organization_id}}", "api-keys", "issue", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"API Key Name\",\n  \"expires_in\": 90\n}"
+            },
+            "description": "Issue a new API key for the organization"
+          }
+        },
+        {
+          "name": "Revoke API Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/org/{{organization_id}}/api-keys/{{key_id}}/revoke/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "org", "{{organization_id}}", "api-keys", "{{key_id}}", "revoke", ""]
+            },
+            "description": "Revoke an API key"
+          }
+        },
+        {
+          "name": "List Organization Modules",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/org/{{organization_id}}/modules/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "org", "{{organization_id}}", "modules", ""]
+            },
+            "description": "List all modules enabled for the organization"
+          }
+        },
+        {
+          "name": "Set Module Status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/org/{{organization_id}}/modules/{{module_code}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "org", "{{organization_id}}", "modules", "{{module_code}}", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"enabled\"\n}"
+            },
+            "description": "Enable or disable a module for the organization"
+          }
+        },
+        {
+          "name": "Get Modules Catalog",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/modules/catalog/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "modules", "catalog", ""]
+            },
+            "description": "Get the catalog of available modules"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Subscriptions",
+      "description": "Subscription and plan management endpoints",
+      "item": [
+        {
+          "name": "List Plans",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/plans/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "plans", ""]
+            },
+            "description": "List all available subscription plans"
+          }
+        },
+        {
+          "name": "Get Plan",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/plans/{{plan_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "plans", "{{plan_id}}", ""]
+            },
+            "description": "Get details of a specific plan"
+          }
+        },
+        {
+          "name": "List Subscriptions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/subscriptions/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "subscriptions", ""]
+            },
+            "description": "List all subscriptions the user has access to"
+          }
+        },
+        {
+          "name": "Get Subscription",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/subscriptions/{{subscription_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "subscriptions", "{{subscription_id}}", ""]
+            },
+            "description": "Get details of a specific subscription"
+          }
+        },
+        {
+          "name": "Create Subscription",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/subscriptions/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "subscriptions", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"plan\": \"{{plan_id}}\",\n  \"organization\": \"{{organization_id}}\",\n  \"billing_cycle\": \"monthly\",\n  \"payment_method\": \"card\"\n}"
+            },
+            "description": "Create a new subscription"
+          }
+        },
+        {
+          "name": "Get Organization Subscription",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/organizations/{{organization_id}}/subscription/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "organizations", "{{organization_id}}", "subscription", ""]
+            },
+            "description": "Get subscription details for a specific organization"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "description": "Dashboard endpoints for analytics and insights",
+      "item": [
+        {
+          "name": "Overview",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/{{organization_id}}/overview/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "{{organization_id}}", "overview", ""]
+            },
+            "description": "Get dashboard overview data"
+          }
+        },
+        {
+          "name": "Timeseries",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/{{organization_id}}/timeseries/?period=monthly",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "{{organization_id}}", "timeseries", ""],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "monthly"
+                }
+              ]
+            },
+            "description": "Get timeseries data for charts"
+          }
+        },
+        {
+          "name": "Funnel",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/{{organization_id}}/funnel/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "{{organization_id}}", "funnel", ""]
+            },
+            "description": "Get funnel analysis data"
+          }
+        },
+        {
+          "name": "Top Vendors",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/{{organization_id}}/top-vendors/?limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "{{organization_id}}", "top-vendors", ""],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "Get top vendors data"
+          }
+        },
+        {
+          "name": "Taxes Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/{{organization_id}}/taxes/summary/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "{{organization_id}}", "taxes", "summary", ""]
+            },
+            "description": "Get taxes summary data"
+          }
+        },
+        {
+          "name": "Expenses Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/{{organization_id}}/expenses/summary/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "{{organization_id}}", "expenses", "summary", ""]
+            },
+            "description": "Get expenses summary data"
+          }
+        },
+        {
+          "name": "Pending Items",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/{{organization_id}}/pending/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "{{organization_id}}", "pending", ""]
+            },
+            "description": "Get pending items that need attention"
+          }
+        },
+        {
+          "name": "Integrations Health",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/{{organization_id}}/integrations/health/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "{{organization_id}}", "integrations", "health", ""]
+            },
+            "description": "Get health status of integrations"
+          }
+        },
+        {
+          "name": "Usage",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/{{organization_id}}/usage/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "{{organization_id}}", "usage", ""]
+            },
+            "description": "Get usage statistics"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Zoho Integration",
+      "description": "Zoho Books integration endpoints",
+      "item": [
+        {
+          "name": "Zoho Credentials",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/settings/credentials/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "settings", "credentials", ""]
+            },
+            "description": "Get Zoho credentials status"
+          }
+        },
+        {
+          "name": "Generate Zoho Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/settings/generate-token/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "settings", "generate-token", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"zoho_authorization_code\"\n}"
+            },
+            "description": "Generate Zoho access token from authorization code"
+          }
+        },
+        {
+          "name": "List Vendors",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/vendors/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "vendors", ""]
+            },
+            "description": "List vendors from Zoho Books"
+          }
+        },
+        {
+          "name": "Sync Vendors",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/vendors/sync/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "vendors", "sync", ""]
+            },
+            "description": "Sync vendors from Zoho Books"
+          }
+        },
+        {
+          "name": "List Chart of Accounts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/chart-of-accounts/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "chart-of-accounts", ""]
+            },
+            "description": "List chart of accounts from Zoho Books"
+          }
+        },
+        {
+          "name": "Sync Chart of Accounts",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/chart-of-accounts/sync/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "chart-of-accounts", "sync", ""]
+            },
+            "description": "Sync chart of accounts from Zoho Books"
+          }
+        },
+        {
+          "name": "List Taxes",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/taxes/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "taxes", ""]
+            },
+            "description": "List taxes from Zoho Books"
+          }
+        },
+        {
+          "name": "Sync Taxes",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/taxes/sync/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "taxes", "sync", ""]
+            },
+            "description": "Sync taxes from Zoho Books"
+          }
+        },
+        {
+          "name": "List TDS/TCS",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/tds-tcs/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "tds-tcs", ""]
+            },
+            "description": "List TDS/TCS from Zoho Books"
+          }
+        },
+        {
+          "name": "Sync TDS/TCS",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/tds-tcs/sync/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "tds-tcs", "sync", ""]
+            },
+            "description": "Sync TDS/TCS from Zoho Books"
+          }
+        },
+        {
+          "name": "List Vendor Bills",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/vendor-bills/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "vendor-bills", ""]
+            },
+            "description": "List vendor bills"
+          }
+        },
+        {
+          "name": "Upload Vendor Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/vendor-bills/upload/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "vendor-bills", "upload", ""]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "/path/to/bill.pdf"
+                },
+                {
+                  "key": "vendor_id",
+                  "value": "{{vendor_id}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "Upload a new vendor bill"
+          }
+        },
+        {
+          "name": "Get Vendor Bill Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/vendor-bills/{{bill_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "vendor-bills", "{{bill_id}}", ""]
+            },
+            "description": "Get details of a vendor bill"
+          }
+        },
+        {
+          "name": "Analyze Vendor Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/vendor-bills/{{bill_id}}/analyze/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "vendor-bills", "{{bill_id}}", "analyze", ""]
+            },
+            "description": "Analyze a vendor bill with OCR"
+          }
+        },
+        {
+          "name": "Verify Vendor Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/vendor-bills/{{bill_id}}/verify/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "vendor-bills", "{{bill_id}}", "verify", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vendor_id\": \"{{vendor_id}}\",\n  \"bill_number\": \"BILL-2023-001\",\n  \"bill_date\": \"2023-09-01\",\n  \"due_date\": \"2023-10-01\",\n  \"items\": [\n    {\n      \"account_id\": \"{{account_id}}\",\n      \"description\": \"Item description\",\n      \"amount\": 100.00,\n      \"tax_id\": \"{{tax_id}}\"\n    }\n  ],\n  \"notes\": \"Bill verification notes\"\n}"
+            },
+            "description": "Verify vendor bill details"
+          }
+        },
+        {
+          "name": "Sync Vendor Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/vendor-bills/{{bill_id}}/sync/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "vendor-bills", "{{bill_id}}", "sync", ""]
+            },
+            "description": "Sync a verified vendor bill to Zoho Books"
+          }
+        },
+        {
+          "name": "List Expense Bills",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/expense-bills/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "expense-bills", ""]
+            },
+            "description": "List expense bills"
+          }
+        },
+        {
+          "name": "Upload Expense Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/expense-bills/upload/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "expense-bills", "upload", ""]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "/path/to/expense.pdf"
+                }
+              ]
+            },
+            "description": "Upload a new expense bill"
+          }
+        },
+        {
+          "name": "Get Expense Bill Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/expense-bills/{{bill_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "expense-bills", "{{bill_id}}", ""]
+            },
+            "description": "Get details of an expense bill"
+          }
+        },
+        {
+          "name": "Analyze Expense Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/expense-bills/{{bill_id}}/analyze/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "expense-bills", "{{bill_id}}", "analyze", ""]
+            },
+            "description": "Analyze an expense bill with OCR"
+          }
+        },
+        {
+          "name": "Verify Expense Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/expense-bills/{{bill_id}}/verify/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "expense-bills", "{{bill_id}}", "verify", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"expense_date\": \"2023-09-01\",\n  \"merchant\": \"Merchant Name\",\n  \"category_id\": \"{{category_id}}\",\n  \"amount\": 100.00,\n  \"tax_id\": \"{{tax_id}}\",\n  \"notes\": \"Expense verification notes\"\n}"
+            },
+            "description": "Verify expense bill details"
+          }
+        },
+        {
+          "name": "Sync Expense Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/zoho/org/{{organization_id}}/expense-bills/{{bill_id}}/sync/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "zoho", "org", "{{organization_id}}", "expense-bills", "{{bill_id}}", "sync", ""]
+            },
+            "description": "Sync a verified expense bill to Zoho Books"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tally Integration",
+      "description": "Tally ERP integration endpoints",
+      "item": [
+        {
+          "name": "List Tally Configs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/configs/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "configs", ""]
+            },
+            "description": "List Tally configurations"
+          }
+        },
+        {
+          "name": "Create Tally Config",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/configs/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "configs", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tally Config Name\",\n  \"tally_url\": \"http://localhost:9000\",\n  \"company_name\": \"Company Name\"\n}"
+            },
+            "description": "Create a new Tally configuration"
+          }
+        },
+        {
+          "name": "Get Tally Config",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/configs/{{config_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "configs", "{{config_id}}", ""]
+            },
+            "description": "Get details of a Tally configuration"
+          }
+        },
+        {
+          "name": "Update Tally Config",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/configs/{{config_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "configs", "{{config_id}}", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tally_url\": \"http://localhost:9001\"\n}"
+            },
+            "description": "Update a Tally configuration"
+          }
+        },
+        {
+          "name": "Delete Tally Config",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/configs/{{config_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "configs", "{{config_id}}", ""]
+            },
+            "description": "Delete a Tally configuration"
+          }
+        },
+        {
+          "name": "List Ledgers",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/ledgers/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "ledgers", ""]
+            },
+            "description": "List ledgers from Tally"
+          }
+        },
+        {
+          "name": "Create Ledger",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/ledgers/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "ledgers", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"New Ledger\",\n  \"group\": \"Sundry Debtors\",\n  \"opening_balance\": 0.00\n}"
+            },
+            "description": "Create a new ledger in Tally"
+          }
+        },
+        {
+          "name": "List Vendor Bills",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/vendor-bills/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "vendor-bills", ""]
+            },
+            "description": "List vendor bills for Tally"
+          }
+        },
+        {
+          "name": "Create Vendor Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/vendor-bills/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "vendor-bills", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vendor\": \"Vendor Name\",\n  \"bill_number\": \"BILL-2023-001\",\n  \"bill_date\": \"2023-09-01\",\n  \"amount\": 100.00,\n  \"ledger\": \"Purchase Account\"\n}"
+            },
+            "description": "Create a new vendor bill for Tally"
+          }
+        },
+        {
+          "name": "List Expense Bills",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/expense-bills/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "expense-bills", ""]
+            },
+            "description": "List expense bills for Tally"
+          }
+        },
+        {
+          "name": "Create Expense Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/expense-bills/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "expense-bills", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"expense_date\": \"2023-09-01\",\n  \"amount\": 100.00,\n  \"ledger\": \"Expense Account\",\n  \"narration\": \"Expense description\"\n}"
+            },
+            "description": "Create a new expense bill for Tally"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tally Vendor Bills",
+      "description": "Manage vendor bills in Tally with complete workflow",
+      "item": [
+        {
+          "name": "List Vendor Bills",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/vendor-bills/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "vendor-bills", ""]
+            },
+            "description": "Get a list of all vendor bills for the organization"
+          }
+        },
+        {
+          "name": "Upload Vendor Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": "/path/to/invoice.pdf"
+                },
+                {
+                  "key": "file_type",
+                  "value": "Single Invoice/File",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/vendor-bills/upload/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "vendor-bills", "upload", ""]
+            },
+            "description": "Upload a new vendor bill file (PDF or image)"
+          }
+        },
+        {
+          "name": "Get Vendor Bill Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/vendor-bills/{{bill_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "vendor-bills", "{{bill_id}}", ""]
+            },
+            "description": "Get details of a specific vendor bill"
+          }
+        },
+        {
+          "name": "Analyze Vendor Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bill_id\": \"{{bill_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/vendor-bills/analyze/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "vendor-bills", "analyze", ""]
+            },
+            "description": "Analyze a vendor bill using AI to extract invoice data"
+          }
+        },
+        {
+          "name": "Verify Vendor Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bill_id\": \"{{bill_id}}\",\n  \"vendor_id\": \"{{vendor_id}}\",\n  \"invoice_number\": \"INV-2023-001\",\n  \"invoice_date\": \"2023-10-15\",\n  \"items\": [\n    {\n      \"description\": \"Product Description\",\n      \"quantity\": 1,\n      \"price\": 100.00\n    }\n  ],\n  \"igst\": 18.00,\n  \"cgst\": 0,\n  \"sgst\": 0,\n  \"total\": 118.00\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/vendor-bills/verify/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "vendor-bills", "verify", ""]
+            },
+            "description": "Verify and update extracted vendor bill data"
+          }
+        },
+        {
+          "name": "Sync Vendor Bill to Tally",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bill_id\": \"{{bill_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/vendor-bills/sync/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "vendor-bills", "sync", ""]
+            },
+            "description": "Sync a verified vendor bill to Tally ERP"
+          }
+        },
+        {
+          "name": "Delete Vendor Bill",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/vendor-bills/{{bill_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "vendor-bills", "{{bill_id}}", ""]
+            },
+            "description": "Delete a vendor bill"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tally Expense Bills",
+      "description": "Manage expense bills in Tally with complete workflow",
+      "item": [
+        {
+          "name": "List Expense Bills",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/expense-bills/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "expense-bills", ""]
+            },
+            "description": "Get a list of all expense bills for the organization"
+          }
+        },
+        {
+          "name": "Upload Expense Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": "/path/to/expense.pdf"
+                },
+                {
+                  "key": "file_type",
+                  "value": "Single Invoice/File",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/expense-bills/upload/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "expense-bills", "upload", ""]
+            },
+            "description": "Upload a new expense bill file (PDF or image)"
+          }
+        },
+        {
+          "name": "Get Expense Bill Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/expense-bills/{{bill_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "expense-bills", "{{bill_id}}", ""]
+            },
+            "description": "Get details of a specific expense bill"
+          }
+        },
+        {
+          "name": "Analyze Expense Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bill_id\": \"{{bill_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/expense-bills/analyze/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "expense-bills", "analyze", ""]
+            },
+            "description": "Analyze an expense bill using AI to extract expense data"
+          }
+        },
+        {
+          "name": "Verify Expense Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bill_id\": \"{{bill_id}}\",\n  \"merchant\": \"Merchant Name\",\n  \"expense_date\": \"2023-10-15\",\n  \"category\": \"Office Supplies\",\n  \"amount\": 100.00,\n  \"tax_amount\": 18.00,\n  \"description\": \"Office supplies purchase\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/expense-bills/verify/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "expense-bills", "verify", ""]
+            },
+            "description": "Verify and update extracted expense bill data"
+          }
+        },
+        {
+          "name": "Sync Expense Bill to Tally",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bill_id\": \"{{bill_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/expense-bills/sync/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "expense-bills", "sync", ""]
+            },
+            "description": "Sync a verified expense bill to Tally ERP"
+          }
+        },
+        {
+          "name": "Delete Expense Bill",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tally/org/{{organization_id}}/expense-bills/{{bill_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tally", "org", "{{organization_id}}", "expense-bills", "{{bill_id}}", ""]
+            },
+            "description": "Delete an expense bill"
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "access_token",
+      "value": "your_access_token_here",
+      "type": "string"
+    },
+    {
+      "key": "refresh_token",
+      "value": "your_refresh_token_here",
+      "type": "string"
+    },
+    {
+      "key": "organization_id",
+      "value": "your_organization_id_here",
+      "type": "string"
+    },
+    {
+      "key": "bill_id",
+      "value": "your_bill_id_here",
+      "type": "string"
+    },
+    {
+      "key": "vendor_id",
+      "value": "your_vendor_id_here",
+      "type": "string"
+    }
+  ]
+}

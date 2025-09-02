@@ -1,12 +1,12 @@
-from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model
-from rest_framework import status, viewsets
+from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.decorators import action
-from drf_spectacular.utils import extend_schema, OpenApiParameter
-from drf_spectacular.types import OpenApiTypes
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from drf_spectacular.utils import extend_schema
 from rest_framework_api_key.models import APIKey
+
 from .models import (
     Organization,
     OrgMembership,
@@ -19,170 +19,624 @@ from .serializers import (
     OrgMembershipSerializer,
     APIKeyIssueSerializer,
     APIKeySerializer,
-    APIKeyRevokeSerializer,
     ModuleSerializer,
     OrganizationModuleSerializer,
+    OrgMembershipUpdateSerializer,
 )
-from .permissions import IsOrgAdminForObject
-from apps.common.permissions import IsSuperAdmin
 
 User = get_user_model()
 
 
-@extend_schema(tags=["Organizations"])
-class OrganizationViewSet(viewsets.ModelViewSet):
-    serializer_class = OrganizationSerializer
-    permission_classes = [IsAuthenticated]
+# Organization Views
+@extend_schema(
+    responses=OrganizationSerializer(many=True),
+    tags=["Organizations"],
+    methods=["GET"]
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def organization_list_view(request):
+    """
+    List organizations accessible to the authenticated user.
+    """
+    # Users can only see organizations they belong to
+    if request.user.is_staff:
+        organizations = Organization.objects.all().select_related("owner", "created_by")
+    else:
+        user_org_ids = request.user.memberships.filter(
+            is_active=True
+        ).values_list('organization_id', flat=True)
+        organizations = Organization.objects.filter(
+            id__in=user_org_ids
+        ).select_related("owner", "created_by")
 
-    def get_queryset(self):
-        return Organization.objects.all().select_related(
-            "owner",
-            "created_by"
-        )
+    serializer = OrganizationSerializer(organizations, many=True, context={"request": request})
+    return Response(serializer.data)
 
-    def get_permissions(self):
-        if self.action in ["create", "destroy"]:
-            return [IsSuperAdmin()]
-        if self.action in [
-            "update",
-            "partial_update",
-            "add_member",
-            "issue_api_key",
-            "list_api_keys",
-            "revoke_api_key",
-            "modules",
-            "set_module",
-            "catalog_modules",
-        ]:
-            return [IsOrgAdminForObject()]
-        return super().get_permissions()
 
-    @extend_schema(
-        request=OrgMembershipSerializer,
-        responses=OrgMembershipSerializer,
+@extend_schema(
+    responses=OrganizationSerializer,
+    tags=["Organizations"],
+    methods=["GET"]
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def organization_detail_view(request, pk):
+    """
+    Retrieve a specific organization by ID.
+    """
+    try:
+        organization = Organization.objects.select_related("owner", "created_by").get(pk=pk)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user has access to this organization
+    if not request.user.is_staff:
+        if not organization.memberships.filter(user=request.user, is_active=True).exists():
+            raise PermissionDenied("You don't have access to this organization")
+
+    serializer = OrganizationSerializer(organization, context={"request": request})
+    return Response(serializer.data)
+
+
+@extend_schema(
+    request=OrganizationSerializer,
+    responses=OrganizationSerializer,
+    tags=["Organizations"],
+    methods=["PUT", "PATCH"]
+)
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def organization_update_view(request, pk):
+    """
+    Update an organization. Only org admins can update.
+    """
+    try:
+        organization = Organization.objects.get(pk=pk)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user is admin of the organization
+    if not (request.user.is_staff or
+            organization.memberships.filter(
+                user=request.user,
+                role='ADMIN',
+                is_active=True
+            ).exists()):
+        raise PermissionDenied("You don't have permission to update this organization")
+
+    partial = request.method == 'PATCH'
+    serializer = OrganizationSerializer(
+        organization,
+        data=request.data,
+        partial=partial,
+        context={"request": request}
     )
-    @action(detail=True, methods=["post"])
-    def add_member(self, request, pk=None):
-        organization = self.get_object()
-        serializer = OrgMembershipSerializer(
-            data={**request.data, "organization": organization.id},
-            context=self.get_serializer_context(),
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
+
+
+# Member Management Views
+@extend_schema(
+    request=OrgMembershipSerializer,
+    responses=OrgMembershipSerializer,
+    tags=["Organizations"],
+    methods=["POST"]
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def organization_add_member_view(request, org_id):
+    """
+    Add a member to an organization.
+    """
+    try:
+        organization = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user is admin of the organization
+    if not (request.user.is_staff or
+            organization.memberships.filter(
+                user=request.user,
+                role='ADMIN',
+                is_active=True
+            ).exists()):
+        raise PermissionDenied("You don't have permission to add members to this organization")
+
+    serializer = OrgMembershipSerializer(
+        data={**request.data, "organization": organization.id},
+        context={"request": request}
+    )
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(
+    responses=OrgMembershipSerializer(many=True),
+    tags=["Organizations"],
+    methods=["GET"]
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def organization_members_view(request, org_id):
+    """
+    List members of an organization.
+    """
+    try:
+        organization = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user has access to this organization
+    if not request.user.is_staff:
+        if not organization.memberships.filter(user=request.user, is_active=True).exists():
+            raise PermissionDenied("You don't have access to this organization")
+
+    queryset = OrgMembership.objects.filter(
+        organization=organization, is_active=True
+    ).select_related("user", "organization")
+    serializer = OrgMembershipSerializer(queryset, many=True, context={"request": request})
+    return Response(serializer.data)
+
+
+@extend_schema(
+    responses={"204": None},
+    tags=["Organizations"],
+    methods=["DELETE"]
+)
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def organization_remove_member_view(request, org_id, membership_id):
+    """
+    Remove a member from the organization.
+    """
+    try:
+        organization = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user is admin of the organization
+    if not (request.user.is_staff or
+            organization.memberships.filter(
+                user=request.user,
+                role='ADMIN',
+                is_active=True
+            ).exists()):
+        raise PermissionDenied("You don't have permission to remove members from this organization")
+
+    try:
+        membership = OrgMembership.objects.get(
+            organization=organization,
+            id=membership_id,
+            is_active=True
         )
+    except OrgMembership.DoesNotExist:
+        return Response({"detail": "Membership not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Prevent removing the organization owner
+    if membership.user == organization.owner:
+        return Response(
+            {"detail": "Cannot remove organization owner"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    membership.is_active = False
+    membership.save(update_fields=['is_active'])
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema(
+    request=OrgMembershipUpdateSerializer,
+    responses=OrgMembershipSerializer,
+    tags=["Organizations"],
+    methods=["PATCH"]
+)
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def organization_update_member_role_view(request, org_id, membership_id):
+    """
+    Update a member's role in the organization.
+    """
+    try:
+        organization = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user is admin of the organization
+    if not (request.user.is_staff or
+            organization.memberships.filter(
+                user=request.user,
+                role='ADMIN',
+                is_active=True
+            ).exists()):
+        raise PermissionDenied("You don't have permission to update member roles in this organization")
+
+    try:
+        membership = OrgMembership.objects.get(
+            organization=organization,
+            id=membership_id,
+            is_active=True
+        )
+    except OrgMembership.DoesNotExist:
+        return Response({"detail": "Membership not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Prevent changing the organization owner's role
+    if membership.user == organization.owner:
+        return Response(
+            {"detail": "Cannot change organization owner's role"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    serializer = OrgMembershipUpdateSerializer(
+        membership,
+        data=request.data,
+        partial=True,
+        context={"request": request}
+    )
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(OrgMembershipSerializer(membership, context={"request": request}).data)
+
+
+# API Key Management Views
+@extend_schema(
+    request=APIKeyIssueSerializer,
+    responses=APIKeySerializer,
+    tags=["Organizations"],
+    methods=["POST"]
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def organization_issue_api_key_view(request, org_id):
+    """
+    Issue a new API key for the organization.
+    """
+    try:
+        organization = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user is admin of the organization
+    if not (request.user.is_staff or
+            organization.memberships.filter(
+                user=request.user,
+                role='ADMIN',
+                is_active=True
+            ).exists()):
+        raise PermissionDenied("You don't have permission to issue API keys for this organization")
+
+    serializer = APIKeyIssueSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    api_key, key = APIKey.objects.create_key(name=serializer.validated_data["name"])
+    org_api_key = OrganizationAPIKey.objects.create(
+        api_key=api_key,
+        organization=organization,
+        name=serializer.validated_data["name"],
+        created_by=request.user,
+    )
+
+    return Response(
+        {
+            **APIKeySerializer(org_api_key, context={"request": request}).data,
+            "key": key,  # Include the actual key in response
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@extend_schema(
+    responses=APIKeySerializer(many=True),
+    tags=["Organizations"],
+    methods=["GET"]
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def organization_list_api_keys_view(request, org_id):
+    """
+    List API keys for the organization.
+    """
+    try:
+        organization = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user is admin of the organization
+    if not (request.user.is_staff or
+            organization.memberships.filter(
+                user=request.user,
+                role='ADMIN',
+                is_active=True
+            ).exists()):
+        raise PermissionDenied("You don't have permission to view API keys for this organization")
+
+    queryset = OrganizationAPIKey.objects.filter(
+        organization=organization
+    ).select_related("created_by", "organization", "organization__owner", "organization__created_by")
+    serializer = APIKeySerializer(queryset, many=True, context={"request": request})
+    return Response(serializer.data)
+
+
+@extend_schema(
+    responses=APIKeySerializer,
+    tags=["Organizations"],
+    methods=["POST"]
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def organization_revoke_api_key_view(request, org_id, key_id):
+    """
+    Revoke an API key for the organization.
+    """
+    try:
+        organization = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user is admin of the organization
+    if not (request.user.is_staff or
+            organization.memberships.filter(
+                user=request.user,
+                role='ADMIN',
+                is_active=True
+            ).exists()):
+        raise PermissionDenied("You don't have permission to revoke API keys for this organization")
+
+    try:
+        api_key = OrganizationAPIKey.objects.get(organization=organization, id=key_id)
+    except OrganizationAPIKey.DoesNotExist:
+        return Response({"detail": "API key not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    api_key.api_key.revoked = True
+    api_key.api_key.save()
+    return Response(APIKeySerializer(api_key, context={"request": request}).data)
+
+
+# Module Management Views
+@extend_schema(
+    responses=OrganizationModuleSerializer(many=True),
+    tags=["Organizations"],
+    methods=["GET"]
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def organization_modules_view(request, org_id):
+    """
+    List modules enabled for the organization.
+    """
+    try:
+        organization = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user has access to this organization
+    if not request.user.is_staff:
+        if not organization.memberships.filter(user=request.user, is_active=True).exists():
+            raise PermissionDenied("You don't have access to this organization")
+
+    queryset = OrganizationModule.objects.filter(
+        organization=organization
+    ).select_related("organization", "organization__owner", "organization__created_by", "module")
+    serializer = OrganizationModuleSerializer(queryset, many=True, context={"request": request})
+    return Response(serializer.data)
+
+
+@extend_schema(
+    responses=OrganizationModuleSerializer,
+    tags=["Organizations"],
+    methods=["POST"]
+)
+@extend_schema(
+    responses={"204": None},
+    tags=["Organizations"],
+    methods=["DELETE"]
+)
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def organization_set_module_view(request, org_id, code):
+    """
+    Enable or disable a module for the organization.
+    """
+    try:
+        organization = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user is admin of the organization
+    if not (request.user.is_staff or
+            organization.memberships.filter(
+                user=request.user,
+                role='ADMIN',
+                is_active=True
+            ).exists()):
+        raise PermissionDenied("You don't have permission to manage modules for this organization")
+
+    try:
+        module = Module.objects.get(code=code)
+    except Module.DoesNotExist:
+        return Response({"detail": "Module not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == "DELETE":
+        OrganizationModule.objects.filter(
+            organization=organization, module=module
+        ).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    obj, _ = OrganizationModule.objects.get_or_create(
+        organization=organization,
+        module=module,
+        defaults={"is_enabled": True},
+    )
+    serializer = OrganizationModuleSerializer(obj, context={"request": request})
+    return Response(serializer.data)
+
+
+@extend_schema(
+    responses=ModuleSerializer(many=True),
+    tags=["Organizations"],
+    methods=["GET"]
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def modules_catalog_view(request):
+    """
+    List all available modules that can be enabled.
+    """
+    queryset = Module.objects.all()
+    serializer = ModuleSerializer(queryset, many=True, context={"request": request})
+    return Response(serializer.data)
+
+
+# Membership Management Views
+@extend_schema(
+    responses=OrgMembershipSerializer(many=True),
+    tags=["Organization Memberships"],
+    methods=["GET"]
+)
+@extend_schema(
+    request=OrgMembershipSerializer,
+    responses=OrgMembershipSerializer,
+    tags=["Organization Memberships"],
+    methods=["POST"]
+)
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def membership_list_view(request):
+    """
+    List or create organization memberships.
+    """
+    if request.method == 'GET':
+        # Users can only see memberships for organizations they belong to
+        if request.user.is_staff:
+            memberships = OrgMembership.objects.all().select_related('user', 'organization')
+        else:
+            user_org_ids = request.user.memberships.filter(
+                is_active=True
+            ).values_list('organization_id', flat=True)
+            memberships = OrgMembership.objects.filter(
+                organization_id__in=user_org_ids,
+                is_active=True
+            ).select_related('user', 'organization')
+
+        serializer = OrgMembershipSerializer(memberships, many=True, context={"request": request})
+        return Response(serializer.data)
+
+    elif request.method == 'POST':
+        serializer = OrgMembershipSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
+
+        organization = serializer.validated_data['organization']
+        # Check if user is admin of the organization
+        if not (request.user.is_staff or
+                organization.memberships.filter(
+                    user=request.user,
+                    role='ADMIN',
+                    is_active=True
+                ).exists()):
+            raise PermissionDenied("You don't have permission to add members to this organization")
+
         serializer.save()
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-    @action(detail=True)
-    def members(self, request, pk=None):
-        organization = self.get_object()
-        queryset = OrgMembership.objects.filter(
-            organization=organization
-        ).select_related("user", "organization")
-        serializer = OrgMembershipSerializer(queryset, many=True)
-        return Response(serializer.data)
 
-    @extend_schema(
-        request=APIKeyIssueSerializer,
-        responses=APIKeySerializer,
-    )
-    @action(detail=True, methods=["post"])
-    def issue_api_key(self, request, pk=None):
-        organization = self.get_object()
-        serializer = APIKeyIssueSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        api_key, key = APIKey.objects.create_key(name=serializer.validated_data["name"])
-        org_api_key = OrganizationAPIKey.objects.create(
-            api_key=api_key,
-            organization=organization,
-            name=serializer.validated_data["name"],
-            created_by=request.user,
-        )
-
-        return Response(
-            {
-                **APIKeySerializer(org_api_key).data,
-                "key": key,  # Include the actual key in response
-            },
-            status=status.HTTP_201_CREATED,
-        )
-
-    @action(detail=True)
-    def list_api_keys(self, request, pk=None):
-        organization = self.get_object()
-        queryset = OrganizationAPIKey.objects.filter(
-            organization=organization
-        ).select_related("created_by", "organization", "organization__owner", "organization__created_by")
-        serializer = APIKeySerializer(queryset, many=True)
-        return Response(serializer.data)
-
-    @extend_schema(
-        request=APIKeyRevokeSerializer,
-        responses=APIKeySerializer,
-        parameters=[
-            OpenApiParameter(
-                name="key_id",
-                location=OpenApiParameter.PATH,
-                type=OpenApiTypes.UUID,
-                description="The UUID of the API key to revoke"
+@extend_schema(
+    responses=OrgMembershipSerializer,
+    tags=["Organization Memberships"],
+    methods=["GET"]
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def membership_detail_view(request, pk):
+    """
+    Retrieve a specific membership.
+    """
+    try:
+        if request.user.is_staff:
+            membership = OrgMembership.objects.select_related('user', 'organization').get(pk=pk)
+        else:
+            user_org_ids = request.user.memberships.filter(
+                is_active=True
+            ).values_list('organization_id', flat=True)
+            membership = OrgMembership.objects.select_related('user', 'organization').get(
+                pk=pk,
+                organization_id__in=user_org_ids
             )
-        ]
+    except OrgMembership.DoesNotExist:
+        return Response({"detail": "Membership not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    serializer = OrgMembershipSerializer(membership, context={"request": request})
+    return Response(serializer.data)
+
+
+@extend_schema(
+    request=OrgMembershipSerializer,
+    responses=OrgMembershipSerializer,
+    tags=["Organization Memberships"],
+    methods=["PUT", "PATCH"]
+)
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def membership_update_view(request, pk):
+    """
+    Update a membership.
+    """
+    try:
+        membership = OrgMembership.objects.get(pk=pk)
+    except OrgMembership.DoesNotExist:
+        return Response({"detail": "Membership not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user is admin of the organization
+    if not (request.user.is_staff or
+            membership.organization.memberships.filter(
+                user=request.user,
+                role='ADMIN',
+                is_active=True
+            ).exists()):
+        raise PermissionDenied("You don't have permission to update this membership")
+
+    partial = request.method == 'PATCH'
+    serializer = OrgMembershipSerializer(
+        membership,
+        data=request.data,
+        partial=partial,
+        context={"request": request}
     )
-    @action(detail=True, methods=["post"], url_path="api-keys/(?P<key_id>[^/.]+)/revoke")
-    def revoke_api_key(self, request, pk=None, key_id=None):
-        organization = self.get_object()
-        api_key = get_object_or_404(
-            OrganizationAPIKey, organization=organization, id=key_id
-        )
-        api_key.api_key.revoked = True
-        api_key.api_key.save()
-        return Response(APIKeySerializer(api_key).data)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
 
-    @action(detail=True)
-    def modules(self, request, pk=None):
-        organization = self.get_object()
-        queryset = OrganizationModule.objects.filter(
-            organization=organization
-        ).select_related("organization", "organization__owner", "organization__created_by", "module")
-        serializer = OrganizationModuleSerializer(queryset, many=True)
-        return Response(serializer.data)
 
-    @extend_schema(
-        parameters=[
-            OpenApiParameter(
-                name="code",
-                type=OpenApiTypes.STR,
-                location=OpenApiParameter.PATH,
-                description="Module code",
-            )
-        ],
-    )
-    @action(
-        detail=True,
-        methods=["post", "delete"],
-        url_path="modules/(?P<code>[^/.]+)",
-    )
-    def set_module(self, request, pk=None, code=None):
-        organization = self.get_object()
-        module = get_object_or_404(Module, code=code)
+@extend_schema(
+    responses={"204": None},
+    tags=["Organization Memberships"],
+    methods=["DELETE"]
+)
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def membership_delete_view(request, pk):
+    """
+    Delete (deactivate) a membership.
+    """
+    try:
+        membership = OrgMembership.objects.get(pk=pk)
+    except OrgMembership.DoesNotExist:
+        return Response({"detail": "Membership not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if request.method == "DELETE":
-            OrganizationModule.objects.filter(
-                organization=organization, module=module
-            ).delete()
-            return Response(status=status.HTTP_204_NO_CONTENT)
+    # Check if user is admin of the organization
+    if not (request.user.is_staff or
+            membership.organization.memberships.filter(
+                user=request.user,
+                role='ADMIN',
+                is_active=True
+            ).exists()):
+        raise PermissionDenied("You don't have permission to delete this membership")
 
-        obj, _ = OrganizationModule.objects.get_or_create(
-            organization=organization,
-            module=module,
-            defaults={"is_enabled": True},
-        )
-        serializer = OrganizationModuleSerializer(obj)
-        return Response(serializer.data)
+    # Prevent removing the organization owner
+    if membership.user == membership.organization.owner:
+        raise ValidationError("Cannot remove organization owner")
 
-    @action(detail=False, url_path="modules/catalog")
-    def catalog_modules(self, request):
-        """List all available modules that can be enabled."""
-        queryset = Module.objects.all()
-        serializer = ModuleSerializer(queryset, many=True)
-        return Response(serializer.data)
+    membership.is_active = False
+    membership.save(update_fields=['is_active'])
+    return Response(status=status.HTTP_204_NO_CONTENT)
