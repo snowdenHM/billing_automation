@@ -342,7 +342,7 @@ def analyze_bill_with_openai(file_content, file_extension):
 
         # Make OpenAI API call using the new v1.0+ API
         response = client.chat.completions.create(
-            model="gpt-4-vision-preview",
+            model="gpt-4o",  # Updated to current vision model
             messages=[
                 {
                     "role": "user",
