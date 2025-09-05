@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import environ
+import os
 
 # ------------------------------------------------------------
 # Paths & env
@@ -19,7 +20,8 @@ if ENV_FILE.exists():
 SECRET_KEY = env("SECRET_KEY", default="django-insecure-change-me")
 DEBUG = env.bool("DEBUG", default=False)
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*", "localhost:5173", "34.51.42.227"])
-OPENAI_API_KEY = env("OPENAI_API_KEY", "your_openai_api_key_here")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your_openai_api_key_here")
+
 
 
 # ------------------------------------------------------------
