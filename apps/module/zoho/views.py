@@ -196,7 +196,7 @@ def analyze_bill_with_openai(file_content, file_type):
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4-vision-preview",
+            model="gpt-4o",  # Updated from deprecated gpt-4-vision-preview
             messages=[{"role": "user", "content": content}],
             max_tokens=2000
         )
