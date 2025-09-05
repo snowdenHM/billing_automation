@@ -599,14 +599,24 @@ def tds_tcs_list_view(request, org_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def vendor_bills_list_view(request, org_id):
-    """List all vendor bills for the organization."""
+    """List all vendor bills for the organization with pagination."""
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     bills = VendorBill.objects.filter(organization=organization).order_by('-created_at')
+
+    # Apply pagination
+    paginator = DefaultPagination()
+    paginated_bills = paginator.paginate_queryset(bills, request)
+
+    if paginated_bills is not None:
+        serializer = ZohoVendorBillSerializer(paginated_bills, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+    # Fallback if pagination fails
     serializer = ZohoVendorBillSerializer(bills, many=True)
-    return Response(serializer.data)
+    return Response({"results": serializer.data})
 
 
 @extend_schema(
@@ -833,14 +843,24 @@ def vendor_bill_sync_view(request, bill_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def expense_bills_list_view(request, org_id):
-    """List all expense bills for the organization."""
+    """List all expense bills for the organization with pagination."""
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     bills = ExpenseBill.objects.filter(organization=organization).order_by('-created_at')
+
+    # Apply pagination
+    paginator = DefaultPagination()
+    paginated_bills = paginator.paginate_queryset(bills, request)
+
+    if paginated_bills is not None:
+        serializer = ZohoExpenseBillSerializer(paginated_bills, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+    # Fallback if pagination fails
     serializer = ZohoExpenseBillSerializer(bills, many=True)
-    return Response(serializer.data)
+    return Response({"results": serializer.data})
 
 
 @extend_schema(
