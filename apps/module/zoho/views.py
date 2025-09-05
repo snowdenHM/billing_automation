@@ -135,83 +135,290 @@ def make_zoho_api_request(credentials, endpoint, method='GET', data=None):
         raise
 
 
-def analyze_bill_with_openai(file_content, file_type):
-    """Analyze bill using OpenAI API."""
-    api_key = getattr(settings, "OPENAI_API_KEY", None)
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not configured")
+def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
+    """
+    Create VendorZohoBill and VendorZohoProduct objects from analyzed data.
+    This allows users to proceed to the verification step.
+    """
+    from datetime import datetime
 
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key)
+    logger.info(f"Creating Zoho objects for bill {bill.id} with analyzed data: {analyzed_data}")
 
-    # Convert file to images if PDF
-    if file_type.lower() == 'pdf':
-        images = convert_from_bytes(file_content)
-        image_bytes_list = []
-        for img in images:
-            img_bytes = BytesIO()
-            img.save(img_bytes, format='JPEG')
-            image_bytes_list.append(img_bytes.getvalue())
-    else:
-        image_bytes_list = [file_content]
+    # Try to find vendor by GST number or name
+    vendor = None
+    if analyzed_data.get('vendorGST'):
+        vendor = ZohoVendor.objects.filter(
+            organization=organization,
+            gstNo=analyzed_data['vendorGST']
+        ).first()
+        logger.info(f"Found vendor by GST {analyzed_data['vendorGST']}: {vendor}")
 
-    # OpenAI analysis schema
-    invoice_schema = {
-        "type": "object",
-        "properties": {
-            "invoiceNumber": {"type": "string"},
-            "dateIssued": {"type": "string"},
-            "vendorName": {"type": "string"},
-            "vendorGST": {"type": "string"},
-            "items": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "description": {"type": "string"},
-                        "quantity": {"type": "number"},
-                        "rate": {"type": "number"},
-                        "amount": {"type": "number"}
-                    }
-                }
-            },
-            "subtotal": {"type": "number"},
-            "igst": {"type": "number"},
-            "cgst": {"type": "number"},
-            "sgst": {"type": "number"},
-            "total": {"type": "number"}
-        }
-    }
+    if not vendor and analyzed_data.get('vendorName'):
+        vendor = ZohoVendor.objects.filter(
+            organization=organization,
+            companyName__icontains=analyzed_data['vendorName']
+        ).first()
+        logger.info(f"Found vendor by name {analyzed_data['vendorName']}: {vendor}")
 
-    content = [
-        {"type": "text", "text": f"Analyze this invoice and extract data according to this schema: {json.dumps(invoice_schema)}"}
-    ]
+    # Parse date with multiple format support
+    bill_date = None
+    if analyzed_data.get('dateIssued'):
+        date_formats = ['%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y', '%d/%m/%Y']
+        for date_format in date_formats:
+            try:
+                bill_date = datetime.strptime(analyzed_data['dateIssued'], date_format).date()
+                break
+            except (ValueError, TypeError):
+                continue
 
-    for img_bytes in image_bytes_list:
-        b64 = base64.b64encode(img_bytes).decode("utf-8")
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
-        })
+        if not bill_date:
+            logger.warning(f"Could not parse date: {analyzed_data.get('dateIssued')}")
 
+    # Validate numeric fields and convert to string
+    def safe_numeric_string(value, default='0'):
+        try:
+            if value is None:
+                return default
+            # Handle both int/float and string inputs
+            if isinstance(value, (int, float)):
+                return str(value)
+            # If it's already a string, validate it's numeric
+            float(str(value))  # This will raise ValueError if not numeric
+            return str(value)
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid numeric value: {value}, using default: {default}")
+            return default
+
+    # Create or update VendorZohoBill
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",  # Updated from deprecated gpt-4-vision-preview
-            messages=[{"role": "user", "content": content}],
-            max_tokens=2000
+        zoho_bill, created = VendorZohoBill.objects.get_or_create(
+            selectBill=bill,
+            organization=organization,
+            defaults={
+                'vendor': vendor,
+                'bill_no': analyzed_data.get('invoiceNumber', ''),
+                'bill_date': bill_date,
+                'total': safe_numeric_string(analyzed_data.get('total')),
+                'igst': safe_numeric_string(analyzed_data.get('igst')),
+                'cgst': safe_numeric_string(analyzed_data.get('cgst')),
+                'sgst': safe_numeric_string(analyzed_data.get('sgst')),
+                'note': f"Auto-created from analysis for {analyzed_data.get('vendorName', 'Unknown Vendor')}"
+            }
         )
 
-        result_text = response.choices[0].message.content
-        # Extract JSON from response
-        if "```json" in result_text:
-            json_start = result_text.find("```json") + 7
-            json_end = result_text.find("```", json_start)
-            result_text = result_text[json_start:json_end]
+        if created:
+            logger.info(f"Created new VendorZohoBill: {zoho_bill.id}")
+        else:
+            logger.info(f"Found existing VendorZohoBill: {zoho_bill.id}")
+            # Update the existing bill with new analyzed data
+            zoho_bill.vendor = vendor
+            zoho_bill.bill_no = analyzed_data.get('invoiceNumber', zoho_bill.bill_no)
+            zoho_bill.bill_date = bill_date or zoho_bill.bill_date
+            zoho_bill.total = safe_numeric_string(analyzed_data.get('total'), zoho_bill.total)
+            zoho_bill.igst = safe_numeric_string(analyzed_data.get('igst'), zoho_bill.igst)
+            zoho_bill.cgst = safe_numeric_string(analyzed_data.get('cgst'), zoho_bill.cgst)
+            zoho_bill.sgst = safe_numeric_string(analyzed_data.get('sgst'), zoho_bill.sgst)
+            zoho_bill.note = f"Updated from analysis for {analyzed_data.get('vendorName', 'Unknown Vendor')}"
+            zoho_bill.save()
+            logger.info(f"Updated existing VendorZohoBill: {zoho_bill.id}")
 
-        return json.loads(result_text)
+        # Delete existing products and recreate them
+        existing_products_count = zoho_bill.products.count()
+        if existing_products_count > 0:
+            zoho_bill.products.all().delete()
+            logger.info(f"Deleted {existing_products_count} existing products")
+
+        # Create VendorZohoProduct objects for each item
+        items = analyzed_data.get('items', [])
+        logger.info(f"Creating {len(items)} product line items")
+
+        created_products = []
+        for idx, item in enumerate(items):
+            try:
+                product = VendorZohoProduct.objects.create(
+                    zohoBill=zoho_bill,
+                    organization=organization,
+                    item_name=item.get('description', f'Item {idx + 1}')[:100],  # Truncate to field limit
+                    item_details=item.get('description', f'Item {idx + 1}')[:200],  # Truncate to field limit
+                    rate=safe_numeric_string(item.get('rate')),
+                    quantity=safe_numeric_string(item.get('quantity'), '1'),
+                    amount=safe_numeric_string(item.get('amount'))
+                )
+                created_products.append(product)
+                logger.info(f"Created product {idx + 1}: {product.item_name} - Rate: {product.rate}, Qty: {product.quantity}, Amount: {product.amount}")
+            except Exception as e:
+                logger.error(f"Error creating product {idx + 1}: {str(e)}")
+                # Continue with other products even if one fails
+
+        logger.info(f"Successfully created {len(created_products)} products for bill {zoho_bill.id}")
+
+        # Validate that the sum of product amounts matches the subtotal (if provided)
+        if analyzed_data.get('subtotal'):
+            try:
+                expected_subtotal = float(analyzed_data['subtotal'])
+                actual_subtotal = sum(float(p.amount) for p in created_products if p.amount)
+                if abs(expected_subtotal - actual_subtotal) > 0.01:  # Allow small rounding differences
+                    logger.warning(f"Subtotal mismatch: expected {expected_subtotal}, got {actual_subtotal}")
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Could not validate subtotal: {str(e)}")
+
+        return zoho_bill
+
     except Exception as e:
-        logger.error(f"OpenAI analysis failed: {str(e)}")
+        logger.error(f"Error creating Zoho objects for bill {bill.id}: {str(e)}")
         raise
+
+def analyze_bill_with_openai(file_content, file_extension):
+    """
+    Analyze bill content using OpenAI to extract structured data.
+    Supports PDF, JPG, PNG file formats.
+    """
+    import openai
+    import base64
+    from pdf2image import convert_from_bytes
+    from io import BytesIO
+    from django.conf import settings
+
+    logger.info(f"Starting bill analysis for file type: {file_extension}")
+
+    try:
+        # Configure OpenAI
+        openai.api_key = getattr(settings, 'OPENAI_API_KEY', None)
+        if not openai.api_key:
+            raise ValueError("OpenAI API key not configured in settings")
+
+        # Prepare image data based on file type
+        if file_extension.lower() == 'pdf':
+            # Convert PDF to image
+            images = convert_from_bytes(file_content, first_page=1, last_page=1)
+            if not images:
+                raise ValueError("Could not convert PDF to image")
+
+            # Convert PIL image to base64
+            buffer = BytesIO()
+            images[0].save(buffer, format='PNG')
+            image_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+        elif file_extension.lower() in ['jpg', 'jpeg', 'png']:
+            # Convert image to base64
+            image_data = base64.b64encode(file_content).decode('utf-8')
+
+        else:
+            raise ValueError(f"Unsupported file format: {file_extension}")
+
+        # Prepare OpenAI prompt for bill analysis
+        prompt = """
+        Analyze this invoice/bill image and extract the following information in JSON format:
+        
+        {
+          "invoiceNumber": "Invoice/Bill number",
+          "dateIssued": "Date in YYYY-MM-DD format",
+          "vendorName": "Vendor/Company name",
+          "vendorGST": "GST number if available",
+          "items": [
+            {
+              "description": "Item description",
+              "quantity": "Quantity as number",
+              "rate": "Rate per unit as number",
+              "amount": "Total amount for this item as number"
+            }
+          ],
+          "subtotal": "Subtotal amount as number",
+          "igst": "IGST amount as number (0 if not applicable)",
+          "cgst": "CGST amount as number (0 if not applicable)", 
+          "sgst": "SGST amount as number (0 if not applicable)",
+          "total": "Total amount as number"
+        }
+        
+        Important notes:
+        - Extract all numerical values as numbers, not strings
+        - If IGST is present, CGST and SGST should be 0
+        - If CGST and SGST are present, IGST should be 0
+        - Ensure all amounts are accurate and match the bill
+        - If any field is not found, use appropriate defaults (empty string for text, 0 for numbers)
+        """
+
+        # Make OpenAI API call
+        response = openai.ChatCompletion.create(
+            model="gpt-4-vision-preview",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{image_data}",
+                                "detail": "high"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=2000,
+            temperature=0.1
+        )
+
+        # Extract and parse response
+        content = response.choices[0].message.content
+        logger.info(f"OpenAI response: {content}")
+
+        # Try to extract JSON from the response
+        import json
+        import re
+
+        # Look for JSON content between ```json and ``` or just parse the whole content
+        json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+        if json_match:
+            json_content = json_match.group(1)
+        else:
+            # Try to find JSON object in the content
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                json_content = json_match.group(0)
+            else:
+                json_content = content
+
+        try:
+            analyzed_data = json.loads(json_content)
+            logger.info(f"Successfully parsed analyzed data: {analyzed_data}")
+            return analyzed_data
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON response: {e}")
+            logger.error(f"Raw content: {content}")
+            # Return a default structure if parsing fails
+            return {
+                "invoiceNumber": "",
+                "dateIssued": "",
+                "vendorName": "",
+                "vendorGST": "",
+                "items": [],
+                "subtotal": 0,
+                "igst": 0,
+                "cgst": 0,
+                "sgst": 0,
+                "total": 0,
+                "error": f"Failed to parse OpenAI response: {str(e)}"
+            }
+
+    except Exception as e:
+        logger.error(f"Error in bill analysis: {str(e)}")
+        return {
+            "invoiceNumber": "",
+            "dateIssued": "",
+            "vendorName": "",
+            "vendorGST": "",
+            "items": [],
+            "subtotal": 0,
+            "igst": 0,
+            "cgst": 0,
+            "sgst": 0,
+            "total": 0,
+            "error": f"Analysis failed: {str(e)}"
+        }
+
 
 # ============================================================================
 # Zoho Settings/Credentials Management
@@ -707,7 +914,11 @@ def vendor_bill_analyze_view(request, bill_id):
         # Update bill with analyzed data
         bill.analysed_data = analyzed_data
         bill.status = 'Analysed'
+        bill.process = True
         bill.save()
+
+        # Create Zoho bill and product objects from analysis
+        create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization)
 
         return Response({
             "detail": "Bill analyzed successfully",
