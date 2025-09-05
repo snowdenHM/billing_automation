@@ -377,8 +377,8 @@ class VendorBillAnalyzeView(GenericAPIView):
         responses={200: AnalysisResponseSerializer},
         tags=["Zoho Vendor Bills"],
     )
-    def post(self, request, bill_id):
-        organization = get_organization_from_request(request)
+    def post(self, request, org_id, bill_id):
+        organization = get_organization_from_request(request, org_id=org_id)
         if not organization:
             return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 

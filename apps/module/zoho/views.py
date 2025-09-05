@@ -378,7 +378,12 @@ def vendors_list_view(request, org_id):
 
     # Fallback if pagination fails
     serializer = ZohoVendorSerializer(vendors, many=True)
-    return Response({"results": serializer.data})
+    return Response({
+        "count": vendors.count(),
+        "next": None,
+        "previous": None,
+        "results": serializer.data
+    })
 
 
 @extend_schema(
@@ -584,7 +589,12 @@ def tds_tcs_list_view(request, org_id):
 
     # Fallback if pagination fails
     serializer = ZohoTdsTcsSerializer(tds_tcs, many=True)
-    return Response({"results": serializer.data})
+    return Response({
+        "count": tds_tcs.count(),
+        "next": None,
+        "previous": None,
+        "results": serializer.data
+    })
 
 
 # ============================================================================
