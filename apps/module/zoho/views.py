@@ -20,9 +20,11 @@ from rest_framework.decorators import api_view, permission_classes, parser_class
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from drf_spectacular.utils import extend_schema
 
 from apps.organizations.models import Organization
+from apps.common.pagination import DefaultPagination
 from .models import (
     ZohoCredentials,
     ZohoVendor,
@@ -359,14 +361,24 @@ def generate_token_view(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def vendors_list_view(request, org_id):
-    """List all vendors for the organization."""
+    """List all vendors for the organization with pagination."""
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    vendors = ZohoVendor.objects.filter(organization=organization)
+    vendors = ZohoVendor.objects.filter(organization=organization).order_by('companyName')
+
+    # Apply pagination
+    paginator = DefaultPagination()
+    paginated_vendors = paginator.paginate_queryset(vendors, request)
+
+    if paginated_vendors is not None:
+        serializer = ZohoVendorSerializer(paginated_vendors, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+    # Fallback if pagination fails
     serializer = ZohoVendorSerializer(vendors, many=True)
-    return Response(serializer.data)
+    return Response({"results": serializer.data})
 
 
 @extend_schema(
@@ -419,14 +431,24 @@ def vendors_sync_view(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def chart_of_accounts_list_view(request, org_id):
-    """List all chart of accounts for the organization."""
+    """List all chart of accounts for the organization with pagination."""
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    accounts = ZohoChartOfAccount.objects.filter(organization=organization)
+    accounts = ZohoChartOfAccount.objects.filter(organization=organization).order_by('accountName')
+
+    # Apply pagination
+    paginator = DefaultPagination()
+    paginated_accounts = paginator.paginate_queryset(accounts, request)
+
+    if paginated_accounts is not None:
+        serializer = ZohoChartOfAccountSerializer(paginated_accounts, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+    # Fallback if pagination fails
     serializer = ZohoChartOfAccountSerializer(accounts, many=True)
-    return Response(serializer.data)
+    return Response({"results": serializer.data})
 
 
 @extend_schema(
@@ -477,14 +499,24 @@ def chart_of_accounts_sync_view(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def taxes_list_view(request, org_id):
-    """List all taxes for the organization."""
+    """List all taxes for the organization with pagination."""
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    taxes = ZohoTaxes.objects.filter(organization=organization)
+    taxes = ZohoTaxes.objects.filter(organization=organization).order_by('taxName')
+
+    # Apply pagination
+    paginator = DefaultPagination()
+    paginated_taxes = paginator.paginate_queryset(taxes, request)
+
+    if paginated_taxes is not None:
+        serializer = ZohoTaxesSerializer(paginated_taxes, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+    # Fallback if pagination fails
     serializer = ZohoTaxesSerializer(taxes, many=True)
-    return Response(serializer.data)
+    return Response({"results": serializer.data})
 
 
 @extend_schema(
@@ -535,14 +567,24 @@ def taxes_sync_view(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def tds_tcs_list_view(request, org_id):
-    """List all TDS/TCS for the organization."""
+    """List all TDS/TCS for the organization with pagination."""
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    tds_tcs = ZohoTdsTcs.objects.filter(organization=organization)
+    tds_tcs = ZohoTdsTcs.objects.filter(organization=organization).order_by('taxName')
+
+    # Apply pagination
+    paginator = DefaultPagination()
+    paginated_tds_tcs = paginator.paginate_queryset(tds_tcs, request)
+
+    if paginated_tds_tcs is not None:
+        serializer = ZohoTdsTcsSerializer(paginated_tds_tcs, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+    # Fallback if pagination fails
     serializer = ZohoTdsTcsSerializer(tds_tcs, many=True)
-    return Response(serializer.data)
+    return Response({"results": serializer.data})
 
 
 # ============================================================================
