@@ -273,7 +273,7 @@ def analyze_bill_with_openai(file_content, file_extension):
     Analyze bill content using OpenAI to extract structured data.
     Supports PDF, JPG, PNG file formats.
     """
-    import openai
+    from openai import OpenAI
     import base64
     from pdf2image import convert_from_bytes
     from io import BytesIO
@@ -282,10 +282,12 @@ def analyze_bill_with_openai(file_content, file_extension):
     logger.info(f"Starting bill analysis for file type: {file_extension}")
 
     try:
-        # Configure OpenAI
-        openai.api_key = getattr(settings, 'OPENAI_API_KEY', None)
-        if not openai.api_key:
+        # Initialize OpenAI client
+        api_key = getattr(settings, 'OPENAI_API_KEY', None)
+        if not api_key:
             raise ValueError("OpenAI API key not configured in settings")
+
+        client = OpenAI(api_key=api_key)
 
         # Prepare image data based on file type
         if file_extension.lower() == 'pdf':
@@ -338,8 +340,8 @@ def analyze_bill_with_openai(file_content, file_extension):
         - If any field is not found, use appropriate defaults (empty string for text, 0 for numbers)
         """
 
-        # Make OpenAI API call
-        response = openai.ChatCompletion.create(
+        # Make OpenAI API call using the new v1.0+ API
+        response = client.chat.completions.create(
             model="gpt-4-vision-preview",
             messages=[
                 {
