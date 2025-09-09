@@ -609,7 +609,7 @@ class TallyExpenseBillViewSet(viewsets.ModelViewSet):
     @extend_schema(
         summary="Get All Synced Expense Bills",
         description="Get all synced expense bills with their products for the organization",
-        responses={200: TallyExpenseAnalyzedBillSerializer(many=True)},
+        responses={200: ExpenseBillSyncResponseSerializer(many=True)},
         tags=['Tally TCP']
     )
     @action(detail=False, methods=['get'])
@@ -633,8 +633,13 @@ class TallyExpenseBillViewSet(viewsets.ModelViewSet):
             'products__chart_of_accounts'
         ).order_by('-created_at')
 
-        serializer = TallyExpenseAnalyzedBillSerializer(analyzed_bills, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        # Convert each analyzed bill to the new sync format
+        sync_data_list = []
+        for analyzed_bill in analyzed_bills:
+            sync_data = self._prepare_expense_sync_data(analyzed_bill, organization)
+            sync_data_list.append(sync_data)
+
+        return Response(sync_data_list, status=status.HTTP_200_OK)
 
     @extend_schema(
         summary="Sync Expense Bill to External System",
@@ -705,44 +710,50 @@ class TallyExpenseBillViewSet(viewsets.ModelViewSet):
         bill_date_str = (analyzed_bill.bill_date.strftime('%Y-%m-%d')
                         if analyzed_bill.bill_date else None)
 
+        # Build DR_LEDGER (empty for expenses as they are typically credits to vendor)
+        dr_ledger = []
+
+        # Build CR_LEDGER from expense line items
+        cr_ledger = []
+        for item in analyzed_bill.products.all():
+            if item.amount and item.amount > 0:
+                cr_ledger.append({
+                    "LEDGERNAME": str(item.chart_of_accounts) if item.chart_of_accounts else "No COA Ledger",
+                    "AMOUNT": float(item.amount)
+                })
+
+        # Add tax amounts to CR_LEDGER if they exist
+        if analyzed_bill.igst and analyzed_bill.igst > 0:
+            cr_ledger.append({
+                "LEDGERNAME": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "IGST",
+                "AMOUNT": float(analyzed_bill.igst)
+            })
+
+        if analyzed_bill.cgst and analyzed_bill.cgst > 0:
+            cr_ledger.append({
+                "LEDGERNAME": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "CGST",
+                "AMOUNT": float(analyzed_bill.cgst)
+            })
+
+        if analyzed_bill.sgst and analyzed_bill.sgst > 0:
+            cr_ledger.append({
+                "LEDGERNAME": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "SGST",
+                "AMOUNT": float(analyzed_bill.sgst)
+            })
+
         # Build sync payload
         sync_data = {
-            "vendor": {
-                "master_id": vendor_ledger.master_id if vendor_ledger else "No Ledger",
-                "name": vendor_ledger.name if vendor_ledger else "No Ledger",
-                "gst_in": vendor_ledger.gst_in if vendor_ledger else "No Ledger",
-                "company": vendor_ledger.company if vendor_ledger else "No Ledger",
-            },
-            "bill_details": {
-                "voucher": analyzed_bill.voucher or "",
-                "bill_number": analyzed_bill.bill_no,
-                "date": bill_date_str,
-                "total_amount": float(analyzed_bill.total or 0),
-                "company_id": str(organization.id),
-            },
-            "taxes": {
-                "igst": {
-                    "amount": float(analyzed_bill.igst or 0),
-                    "ledger": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "No Tax Ledger",
-                },
-                "cgst": {
-                    "amount": float(analyzed_bill.cgst or 0),
-                    "ledger": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "No Tax Ledger",
-                },
-                "sgst": {
-                    "amount": float(analyzed_bill.sgst or 0),
-                    "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
-                }
-            },
-            "line_items": [
-                {
-                    "item_details": item.item_details or "",
-                    "chart_of_accounts": str(item.chart_of_accounts) if item.chart_of_accounts else "No COA Ledger",
-                    "amount": float(item.amount or 0),
-                    "debit_or_credit": item.debit_or_credit or "debit",
-                }
-                for item in analyzed_bill.products.all()
-            ],
+            "id": str(analyzed_bill.selected_bill.id),
+            "voucher": analyzed_bill.voucher or "",
+            "bill_no": analyzed_bill.bill_no or "",
+            "bill_date": bill_date_str,
+            "total": float(analyzed_bill.total or 0),
+            "name": vendor_ledger.name if vendor_ledger else "No Ledger",
+            "company": vendor_ledger.company if vendor_ledger else "No Ledger",
+            "gst_in": vendor_ledger.gst_in if vendor_ledger else "0",
+            "DR_LEDGER": dr_ledger,
+            "CR_LEDGER": cr_ledger,
+            "note": analyzed_bill.note or "AI Analyzed Expense Bill",
         }
 
         return sync_data

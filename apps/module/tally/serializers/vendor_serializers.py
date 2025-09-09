@@ -131,7 +131,13 @@ class BillSyncRequestSerializer(serializers.Serializer):
 
 class BillSyncResponseSerializer(serializers.Serializer):
     """Serializer for bill sync response data"""
+    id = serializers.UUIDField()
+    bill_no = serializers.CharField()
+    bill_date = serializers.CharField(allow_null=True)
+    total = serializers.FloatField()
+    igst = serializers.FloatField()
+    cgst = serializers.FloatField()
+    sgst = serializers.FloatField()
     vendor = serializers.DictField()
-    bill_details = serializers.DictField()
-    taxes = serializers.DictField()
-    line_items = serializers.ListField(child=serializers.DictField())
+    customer_id = serializers.UUIDField(allow_null=True)
+    transactions = serializers.ListField(child=serializers.DictField())

@@ -130,7 +130,14 @@ class ExpenseBillSyncRequestSerializer(serializers.Serializer):
 
 class ExpenseBillSyncResponseSerializer(serializers.Serializer):
     """Serializer for expense bill sync response data"""
-    vendor = serializers.DictField()
-    bill_details = serializers.DictField()
-    taxes = serializers.DictField()
-    line_items = serializers.ListField(child=serializers.DictField())
+    id = serializers.CharField()
+    voucher = serializers.CharField()
+    bill_no = serializers.CharField()
+    bill_date = serializers.CharField(allow_null=True)
+    total = serializers.FloatField()
+    name = serializers.CharField()
+    company = serializers.CharField()
+    gst_in = serializers.CharField()
+    DR_LEDGER = serializers.ListField(child=serializers.DictField())
+    CR_LEDGER = serializers.ListField(child=serializers.DictField())
+    note = serializers.CharField()

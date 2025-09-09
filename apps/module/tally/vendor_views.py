@@ -699,53 +699,36 @@ class TallyVendorBillViewSet(viewsets.ModelViewSet):
         """Prepare bill data for Tally sync"""
         vendor_ledger = analyzed_bill.vendor
 
-        # Convert bill date to string format
-        bill_date_str = (analyzed_bill.bill_date.strftime('%Y-%m-%d')
-                         if analyzed_bill.bill_date else None)
-
-        # Build sync payload
+        # Build sync payload with new format
         sync_data = {
+            "id": analyzed_bill.id,
+            "bill_no": analyzed_bill.bill_no,
+            "bill_date": analyzed_bill.bill_date.strftime('%Y-%m-%d') if analyzed_bill.bill_date else None,
+            "total": float(analyzed_bill.total or 0),
+            "igst": float(analyzed_bill.igst or 0),
+            "cgst": float(analyzed_bill.cgst or 0),
+            "sgst": float(analyzed_bill.sgst or 0),
             "vendor": {
-                "master_id": vendor_ledger.master_id if vendor_ledger else "No Ledger",
-                "name": vendor_ledger.name if vendor_ledger else "No Ledger",
-                "gst_in": vendor_ledger.gst_in if vendor_ledger else "No Ledger",
-                "company": vendor_ledger.company if vendor_ledger else "No Ledger",
+                "name": vendor_ledger.name if vendor_ledger else "No Vendor",
+                "company": vendor_ledger.company if vendor_ledger else "No Company",
+                "gst_in": vendor_ledger.gst_in if vendor_ledger else "No GST",
             },
-            "bill_details": {
-                "bill_number": analyzed_bill.bill_no,
-                "date": bill_date_str,
-                "total_amount": float(analyzed_bill.total or 0),
-                "company_id": str(organization.id),
-            },
-            "taxes": {
-                "igst": {
-                    "amount": float(analyzed_bill.igst or 0),
-                    "ledger": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "No Tax Ledger",
-                },
-                "cgst": {
-                    "amount": float(analyzed_bill.cgst or 0),
-                    "ledger": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "No Tax Ledger",
-                },
-                "sgst": {
-                    "amount": float(analyzed_bill.sgst or 0),
-                    "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
-                }
-            },
-            "line_items": [
+            "customer_id": analyzed_bill.selected_bill.organization.id if analyzed_bill.selected_bill.organization else None,
+            "transactions": [
                 {
-                    "item_name": item.item_name or "",
-                    "item_details": item.item_details or "",
-                    "tax_ledger": str(item.taxes) if item.taxes else "No Tax Ledger",
-                    "price": float(item.price or 0),
-                    "quantity": int(item.quantity or 0),
-                    "amount": float(item.amount or 0),
-                    "gst": item.product_gst or "",
-                    "igst": float(item.igst or 0),
-                    "cgst": float(item.cgst or 0),
-                    "sgst": float(item.sgst or 0),
+                    "id": transaction.id,
+                    "item_name": transaction.item_name or "",
+                    "item_details": transaction.item_details or "",
+                    "price": float(transaction.price or 0),
+                    "quantity": int(transaction.quantity or 0),
+                    "amount": float(transaction.amount or 0),
+                    "gst": transaction.product_gst or "",
+                    "igst": float(transaction.igst or 0),
+                    "cgst": float(transaction.cgst or 0),
+                    "sgst": float(transaction.sgst or 0),
                 }
-                for item in analyzed_bill.products.all()
-            ],
+                for transaction in analyzed_bill.products.all()
+            ]
         }
 
         return sync_data
@@ -773,7 +756,7 @@ class TallyVendorBillViewSet(viewsets.ModelViewSet):
     @extend_schema(
         summary="Get All Synced Bills",
         description="Get all synced bills with their products for the organization",
-        responses={200: TallyVendorAnalyzedBillSerializer(many=True)},
+        responses={200: BillSyncResponseSerializer(many=True)},
         tags=['Tally TCP']
     )
     @action(detail=False, methods=['get'])
@@ -797,8 +780,13 @@ class TallyVendorBillViewSet(viewsets.ModelViewSet):
             'products__taxes'
         ).order_by('-created_at')
 
-        serializer = TallyVendorAnalyzedBillSerializer(analyzed_bills, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        # Convert each analyzed bill to the new sync format
+        sync_data_list = []
+        for analyzed_bill in analyzed_bills:
+            sync_data = self._prepare_sync_data(analyzed_bill, organization)
+            sync_data_list.append(sync_data)
+
+        return Response(sync_data_list, status=status.HTTP_200_OK)
 
     @extend_schema(
         summary="Sync Bill to External System",
