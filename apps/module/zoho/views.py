@@ -1565,7 +1565,7 @@ def generate_token_view(request):
 
 @extend_schema(
     responses={"200": {"gst": "string"}},
-    tags=["Zoho Vendors"],
+    tags=["Zoho Vendor Bills"],
     methods=["GET"]
 )
 @api_view(['GET'])
