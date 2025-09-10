@@ -774,13 +774,17 @@ class TallyVendorBillViewSet(viewsets.ModelViewSet):
             'products__taxes'
         ).order_by('-created_at')
 
-        # Convert each analyzed bill to the new sync format
-        sync_data_list = []
+        # Convert each analyzed bill to the new sync format and extract just the data portion
+        bills_data = []
         for analyzed_bill in analyzed_bills:
             sync_data = self._prepare_sync_data(analyzed_bill, organization)
-            sync_data_list.append(sync_data)
+            # Extract the data portion (remove the wrapper)
+            bills_data.append(sync_data["data"])
 
-        return Response(sync_data_list, status=status.HTTP_200_OK)
+        # Return all bills under a single "data" key
+        return Response({
+            "data": bills_data
+        }, status=status.HTTP_200_OK)
 
     @extend_schema(
         summary="Sync Bill to External System",
