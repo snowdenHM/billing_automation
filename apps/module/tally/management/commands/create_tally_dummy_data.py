@@ -508,7 +508,7 @@ class Command(BaseCommand):
                     igst_taxes=selected_igst_taxes,
                     cgst=cgst_amount,
                     cgst_taxes=selected_cgst_taxes,
-                    sgst=sgt_amount,
+                    sgst=sgst_amount,
                     sgst_taxes=selected_sgst_taxes,
                     note="Sample expense bill for testing",
                     organization=organization
