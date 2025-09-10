@@ -11,6 +11,7 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.http import JsonResponse
 
 import requests
 from pdf2image import convert_from_bytes
@@ -1556,3 +1557,40 @@ def generate_token_view(request):
             {"detail": f"Unexpected error: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# ============================================================================
+# Vendor GST Fetching
+# ============================================================================
+
+@extend_schema(
+    responses={"200": {"gst": "string"}},
+    tags=["Zoho Vendors"],
+    methods=["GET"]
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def fetch_vendor_gst_view(request, org_id):
+    """Fetch GST number for a specific vendor by vendor_id."""
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return JsonResponse({"detail": "Organization not found", "gst": "N/A"}, status=404)
+
+    if request.method == 'GET':
+        vendor_id = request.GET.get('vendor_id')
+
+        if not vendor_id:
+            return JsonResponse({"detail": "vendor_id parameter is required", "gst": "N/A"}, status=400)
+
+        try:
+            # Fetch GST information based on the vendor_id
+            vendor = ZohoVendor.objects.get(id=vendor_id, organization=organization)
+            return JsonResponse({"gst": vendor.gstNo or "N/A"})
+        except ZohoVendor.DoesNotExist:
+            return JsonResponse({"detail": "Vendor not found", "gst": "N/A"}, status=404)
+        except Exception as e:
+            logger.error(f"Error fetching vendor GST: {str(e)}")
+            return JsonResponse({"detail": f"Error fetching vendor GST: {str(e)}", "gst": "N/A"}, status=500)
+    else:
+        return JsonResponse({"detail": "Only GET method is allowed", "gst": "N/A"}, status=405)
+

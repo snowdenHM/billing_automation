@@ -56,6 +56,7 @@ urlpatterns = [
         path("vendors/sync/", VendorsSyncView.as_view(), name="vendors-sync"),
         path("chart-of-accounts/", chart_of_accounts_list_view, name="chart-of-accounts-list"),
         path("chart-of-accounts/sync/", ChartOfAccountsSyncView.as_view(), name="chart-of-accounts-sync"),
+        path("vendors/gst/", fetch_vendor_gst_view, name="fetch-vendor-gst"),
         path("taxes/", taxes_list_view, name="taxes-list"),
         path("taxes/sync/", TaxesSyncView.as_view(), name="taxes-sync"),
         path("tds-tcs/", tds_tcs_list_view, name="tds-tcs-list"),
