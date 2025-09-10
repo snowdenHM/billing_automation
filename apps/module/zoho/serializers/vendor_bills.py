@@ -87,13 +87,49 @@ class ZohoVendorBillSerializer(serializers.ModelSerializer):
 
 
 class ZohoVendorBillDetailSerializer(serializers.Serializer):
-    """Serializer for detailed Zoho Vendor Bill view including analysis data"""
+    """Serializer for detailed Zoho Vendor Bill view including analysis data and Zoho objects"""
 
-    bill = ZohoVendorBillSerializer(read_only=True)
+    # Basic bill information
+    id = serializers.UUIDField(read_only=True)
+    billmunshiName = serializers.CharField(read_only=True)
+    file = serializers.FileField(read_only=True)
+    fileType = serializers.CharField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    process = serializers.BooleanField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    update_at = serializers.DateTimeField(read_only=True)
+
+    # Analysis data
     analysed_data = serializers.JSONField(read_only=True)
+
+    # VendorZohoBill information
+    zoho_bill = VendorZohoBillSerializer(read_only=True)
+
+    # Vendor information (from VendorZohoBill)
+    vendor_info = serializers.SerializerMethodField()
+
+    # Products count
+    products_count = serializers.SerializerMethodField()
 
     class Meta:
         ref_name = "ZohoVendorBillDetail"
+
+    def get_vendor_info(self, obj):
+        """Get vendor information from VendorZohoBill if available"""
+        if hasattr(obj, 'zoho_bill') and obj.zoho_bill and obj.zoho_bill.vendor:
+            return {
+                'id': str(obj.zoho_bill.vendor.id),
+                'companyName': obj.zoho_bill.vendor.companyName,
+                'gstNo': obj.zoho_bill.vendor.gstNo,
+                'contactId': obj.zoho_bill.vendor.contactId
+            }
+        return None
+
+    def get_products_count(self, obj):
+        """Get count of products from VendorZohoProduct"""
+        if hasattr(obj, 'zoho_bill') and obj.zoho_bill:
+            return obj.zoho_bill.products.count()
+        return 0
 
 
 class VendorBillUploadSerializer(serializers.ModelSerializer):

@@ -399,10 +399,15 @@ class VendorBillAnalyzeView(GenericAPIView):
             # Analyze with OpenAI
             analyzed_data = analyze_bill_with_openai(file_content, file_extension)
 
-            # Update bill with analyzed data
-            bill.analysed_data = analyzed_data
-            bill.status = 'Analysed'
-            bill.save()
+            # Update bill with analyzed data and status
+            with transaction.atomic():
+                bill.analysed_data = analyzed_data
+                bill.status = 'Analysed'
+                bill.process = True
+                bill.save()
+
+                # Create VendorZohoBill and VendorZohoProduct objects
+                self._create_zoho_objects(bill, analyzed_data, organization)
 
             return Response({
                 "detail": "Bill analyzed successfully",
@@ -419,6 +424,157 @@ class VendorBillAnalyzeView(GenericAPIView):
                 {"detail": f"Analysis failed: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    def _create_zoho_objects(self, bill, analyzed_data, organization):
+        """
+        Create VendorZohoBill and VendorZohoProduct objects from analyzed data.
+        """
+        from datetime import datetime
+        from decimal import Decimal
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"Creating Zoho objects for bill {bill.id} with analyzed data")
+
+        # Extract required fields safely
+        invoice_number = analyzed_data.get('invoiceNumber', '').strip()
+        date_issued = analyzed_data.get('dateIssued', '')
+        vendor_name = analyzed_data.get('vendorName', '').strip()
+        vendor_gst = analyzed_data.get('vendorGST', '').strip()
+
+        # Parse date with multiple format support
+        bill_date = None
+        if date_issued:
+            date_formats = ['%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y', '%d/%m/%Y']
+            for date_format in date_formats:
+                try:
+                    bill_date = datetime.strptime(date_issued, date_format).date()
+                    break
+                except (ValueError, TypeError):
+                    continue
+
+            if not bill_date:
+                logger.warning(f"Could not parse date: {date_issued}")
+
+        # Find vendor by GST number first, then by name (case-insensitive search)
+        vendor = None
+        if vendor_gst:
+            vendor = ZohoVendor.objects.filter(
+                organization=organization,
+                gstNo__iexact=vendor_gst
+            ).first()
+            logger.info(f"Found vendor by GST {vendor_gst}: {vendor}")
+
+        if not vendor and vendor_name:
+            vendor = ZohoVendor.objects.filter(
+                organization=organization,
+                companyName__icontains=vendor_name
+            ).first()
+            logger.info(f"Found vendor by name {vendor_name}: {vendor}")
+
+        # Validate and convert numeric fields
+        def safe_decimal_str(value, default='0'):
+            try:
+                if value is None:
+                    return default
+                # Handle both int/float and string inputs
+                if isinstance(value, (int, float)):
+                    return str(value)
+                # If it's already a string, validate it's numeric
+                float(str(value))  # This will raise ValueError if not numeric
+                return str(value)
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid numeric value: {value}, using default: {default}")
+                return default
+
+        # Create or update VendorZohoBill
+        try:
+            zoho_bill, created = VendorZohoBill.objects.get_or_create(
+                selectBill=bill,
+                organization=organization,
+                defaults={
+                    'vendor': vendor,
+                    'bill_no': invoice_number,
+                    'bill_date': bill_date,
+                    'total': safe_decimal_str(analyzed_data.get('total')),
+                    'igst': safe_decimal_str(analyzed_data.get('igst')),
+                    'cgst': safe_decimal_str(analyzed_data.get('cgst')),
+                    'sgst': safe_decimal_str(analyzed_data.get('sgst')),
+                    'note': f"AI Analyzed Bill - {vendor_name or 'Unknown Vendor'}"
+                }
+            )
+
+            if created:
+                logger.info(f"Created new VendorZohoBill: {zoho_bill.id}")
+            else:
+                logger.info(f"Found existing VendorZohoBill: {zoho_bill.id}")
+                # Update the existing bill with new analyzed data
+                zoho_bill.vendor = vendor
+                zoho_bill.bill_no = invoice_number or zoho_bill.bill_no
+                zoho_bill.bill_date = bill_date or zoho_bill.bill_date
+                zoho_bill.total = safe_decimal_str(analyzed_data.get('total'), zoho_bill.total)
+                zoho_bill.igst = safe_decimal_str(analyzed_data.get('igst'), zoho_bill.igst)
+                zoho_bill.cgst = safe_decimal_str(analyzed_data.get('cgst'), zoho_bill.cgst)
+                zoho_bill.sgst = safe_decimal_str(analyzed_data.get('sgst'), zoho_bill.sgst)
+                zoho_bill.note = f"AI Analyzed Bill - {vendor_name or 'Unknown Vendor'}"
+                zoho_bill.save()
+                logger.info(f"Updated existing VendorZohoBill: {zoho_bill.id}")
+
+            # Delete existing products and recreate them
+            existing_products_count = zoho_bill.products.count()
+            if existing_products_count > 0:
+                zoho_bill.products.all().delete()
+                logger.info(f"Deleted {existing_products_count} existing products")
+
+            # Create VendorZohoProduct objects for each item
+            items = analyzed_data.get('items', [])
+            logger.info(f"Creating {len(items)} product line items")
+
+            from .models import VendorZohoProduct
+
+            created_products = []
+            for idx, item in enumerate(items):
+                try:
+                    # Calculate amount if not provided
+                    rate = item.get('rate', 0) or 0
+                    quantity = item.get('quantity', 1) or 1
+                    amount = item.get('amount')
+
+                    if amount is None:
+                        amount = rate * quantity
+
+                    product = VendorZohoProduct.objects.create(
+                        zohoBill=zoho_bill,
+                        organization=organization,
+                        item_name=item.get('description', f'Item {idx + 1}')[:100],  # Truncate to field limit
+                        item_details=item.get('description', f'Item {idx + 1}')[:200],  # Truncate to field limit
+                        rate=safe_decimal_str(rate),
+                        quantity=safe_decimal_str(quantity, '1'),
+                        amount=safe_decimal_str(amount)
+                    )
+                    created_products.append(product)
+                    logger.info(f"Created product {idx + 1}: {product.item_name} - Rate: {product.rate}, Qty: {product.quantity}, Amount: {product.amount}")
+                except Exception as e:
+                    logger.error(f"Error creating product {idx + 1}: {str(e)}")
+                    # Continue with other products even if one fails
+
+            logger.info(f"Successfully created {len(created_products)} products for bill {zoho_bill.id}")
+
+            # Validate that the sum of product amounts matches the subtotal (if provided)
+            if analyzed_data.get('subtotal'):
+                try:
+                    expected_subtotal = float(analyzed_data['subtotal'])
+                    actual_subtotal = sum(float(p.amount) for p in created_products if p.amount)
+                    if abs(expected_subtotal - actual_subtotal) > 0.01:  # Allow small rounding differences
+                        logger.warning(f"Subtotal mismatch: expected {expected_subtotal}, got {actual_subtotal}")
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Could not validate subtotal: {str(e)}")
+
+            return zoho_bill
+
+        except Exception as e:
+            logger.error(f"Error creating Zoho objects for bill {bill.id}: {str(e)}")
+            raise
 
 
 class VendorBillSyncView(GenericAPIView):
@@ -512,8 +668,8 @@ class ExpenseBillAnalyzeView(GenericAPIView):
         responses={200: AnalysisResponseSerializer},
         tags=["Zoho Expense Bills"],
     )
-    def post(self, request, bill_id):
-        organization = get_organization_from_request(request)
+    def post(self, request, org_id, bill_id):
+        organization = get_organization_from_request(request, org_id=org_id)
         if not organization:
             return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -536,7 +692,7 @@ class ExpenseBillAnalyzeView(GenericAPIView):
 
             # Update bill with analyzed data
             bill.analysed_data = analyzed_data
-            bill.status = 'Analysed'
+            bill.status = 'Analyzed'
             bill.save()
 
             return Response({
