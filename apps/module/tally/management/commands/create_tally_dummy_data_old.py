@@ -1,7 +1,7 @@
 import os
 import uuid
 from decimal import Decimal
-from datetime import date
+from datetime import date, datetime, timedelta
 from django.core.management.base import BaseCommand
 from django.core.files.base import ContentFile
 from django.db import transaction
@@ -349,7 +349,7 @@ class Command(BaseCommand):
                     cgst=Decimal("0.00"),  # Start with zero
                     cgst_taxes=cgst_ledgers[0] if cgst_amount > 0 else None,
                     sgst=Decimal("0.00"),  # Start with zero
-                    sgst_taxes=sgst_ledgers[0] if sgst_amount > 0 else None,
+                    sgst_taxes=sgt_ledgers[0] if sgst_amount > 0 else None,
                     gst_type=gst_type,
                     note="Sample vendor bill for testing",
                     organization=organization
@@ -559,7 +559,7 @@ class Command(BaseCommand):
                         expense_bill=analyzed_bill,
                         item_details=f"SGST @ 9% on {expense_details[i % len(expense_details)]}",
                         chart_of_accounts=selected_sgst_taxes,
-                        amount=sgst_amount,
+                        amount=sgt_amount,
                         debit_or_credit=TallyExpenseAnalyzedProduct.DebitCredit.DEBIT,
                         organization=organization
                     )
