@@ -707,7 +707,7 @@ class TallyExpenseBillViewSet(viewsets.ModelViewSet):
         vendor_ledger = analyzed_bill.vendor
 
         # Convert bill date to string format
-        bill_date_str = (analyzed_bill.bill_date.strftime('%Y-%m-%d')
+        bill_date_str = (analyzed_bill.bill_date.strftime('%d-%m-%Y')
                         if analyzed_bill.bill_date else None)
 
         # Build DR_LEDGER (empty for expenses as they are typically credits to vendor)
@@ -754,6 +754,9 @@ class TallyExpenseBillViewSet(viewsets.ModelViewSet):
             "DR_LEDGER": dr_ledger,
             "CR_LEDGER": cr_ledger,
             "note": analyzed_bill.note or "AI Analyzed Expense Bill",
+        }
+        sync_data = {
+            "data": sync_data
         }
 
         return sync_data

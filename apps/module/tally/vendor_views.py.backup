@@ -400,7 +400,7 @@ class TallyVendorBillViewSet(viewsets.ModelViewSet):
             bill_date = None
             if date_issued:
                 try:
-                    bill_date = datetime.strptime(date_issued, '%d-%m-%Y').date()
+                    bill_date = datetime.strptime(date_issued, '%Y-%m-%d').date()
                 except ValueError:
                     pass
 
@@ -699,148 +699,12 @@ class TallyVendorBillViewSet(viewsets.ModelViewSet):
         """Prepare bill data for Tally sync"""
         vendor_ledger = analyzed_bill.vendor
 
-        # Get products for this analyzed bill
-        products = analyzed_bill.products.all()
-        products_data = []
-
-        for product in products:
-            product_data = {
-                "id": str(product.id),
-                "item_name": product.item_name or "",
-                "item_details": product.item_details or "",
-                "taxes": str(product.taxes.id) if product.taxes else None,
-                "price": str(product.price or 0),
-                "quantity": product.quantity or 0,
-                "amount": str(product.amount or 0),
-                "product_gst": product.product_gst or "",
-                "igst": str(product.igst or 0),
-                "cgst": str(product.cgst or 0),
-                "sgst": str(product.sgst or 0),
-                "created_at": product.created_at.isoformat() if hasattr(product, 'created_at') else None
-            }
-            products_data.append(product_data)
-
         # Build sync payload with new format
-        bill_data = {
-            "id": str(analyzed_bill.id),
-            "selected_bill": str(analyzed_bill.selected_bill.id),
-            "selected_bill_name": analyzed_bill.selected_bill.file.name.split('/')[-1] if analyzed_bill.selected_bill.file else "",
-            "vendor": str(vendor_ledger.id) if vendor_ledger else None,
-            "vendor_name": vendor_ledger.name if vendor_ledger else "",
-            "bill_no": analyzed_bill.bill_no or "",
-            "bill_date": analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None,
-            "total": str(analyzed_bill.total or 0),
-            "igst": str(analyzed_bill.igst or 0),
-            "igst_taxes": str(analyzed_bill.igst_taxes.id) if analyzed_bill.igst_taxes else None,
-            "cgst": str(analyzed_bill.cgst or 0),
-            "cgst_taxes": str(analyzed_bill.cgst_taxes.id) if analyzed_bill.cgst_taxes else None,
-            "sgst": str(analyzed_bill.sgst or 0),
-            "sgst_taxes": str(analyzed_bill.sgst_taxes.id) if analyzed_bill.sgst_taxes else None,
-            "gst_type": analyzed_bill.gst_type,
-            "note": analyzed_bill.note or "",
-            "products": products_data,
-            "created_at": analyzed_bill.created_at.isoformat() if hasattr(analyzed_bill, 'created_at') else None
-        }
-
-        # Wrap in data key as requested
         sync_data = {
-            "data": bill_data
-        }
-
-        return sync_data
-
-    @extend_schema(
-        summary="Get All Synced Bills",
-        description="Get all synced bills with their products for the organization",
-        responses={200: BillSyncResponseSerializer(many=True)},
-        tags=['Tally TCP']
-    )
-    @action(detail=False, methods=['get'])
-    def sync_bills(self, request, *args, **kwargs):
-        """Get all synced bills with their products"""
-        organization = self.get_organization()
-
-        if not organization:
-            return Response(
-                {'error': 'Organization not found'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Get all analyzed bills where the main bill status is "Synced"
-        analyzed_bills = TallyVendorAnalyzedBill.objects.filter(
-            organization=organization,
-            selected_bill__status=TallyVendorBill.BillStatus.SYNCED
-        ).select_related(
-            'selected_bill', 'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes'
-        ).prefetch_related(
-            'products__taxes'
-        ).order_by('-created_at')
-
-        # Convert each analyzed bill to the new sync format
-        sync_data_list = []
-        for analyzed_bill in analyzed_bills:
-            sync_data = self._prepare_sync_data(analyzed_bill, organization)
-            sync_data_list.append(sync_data)
-
-        return Response(sync_data_list, status=status.HTTP_200_OK)
-
-    @extend_schema(
-        summary="Sync Bill to External System",
-        description="Send bill data to external system via POST request",
-        request=BillSyncRequestSerializer,
-        responses={
-            200: OpenApiResponse(description="Bill synced successfully"),
-            400: OpenApiResponse(description="Sync failed")
-        },
-        tags=['Tally TCP']
-    )
-    @action(detail=False, methods=['post'])
-    def sync_external(self, request, *args, **kwargs):
-        """Sync bill to external system"""
-        serializer = BillSyncRequestSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        bill_id = serializer.validated_data['bill_id']
-        organization = self.get_organization()
-
-        try:
-            bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
-            analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill)
-        except (TallyVendorBill.DoesNotExist, TallyVendorAnalyzedBill.DoesNotExist):
-            return Response(
-                {'error': 'Bill or analyzed data not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        if bill.status != TallyVendorBill.BillStatus.VERIFIED:
-            return Response(
-                {'error': 'Bill must be verified before syncing'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        try:
-            # Prepare the sync payload
-            sync_payload = self._prepare_sync_data(analyzed_bill, organization)
-
-            # Log the sync attempt
-            logger.info(f"Syncing bill {bill_id} for organization {organization.id}")
-
-            # Update bill status to synced
-            bill.status = TallyVendorBill.BillStatus.SYNCED
-            bill.save(update_fields=['status'])
-
-            # Return success response with the payload that would be sent
-            return Response({
-                'message': 'Bill synced successfully',
-                'bill_id': str(bill_id),
-                'status': 'Synced',
-                'sync_data': sync_payload
-            }, status=status.HTTP_200_OK)
-
-        except Exception as e:
-            logger.error(f"Bill sync failed for bill {bill_id}: {str(e)}")
-            return Response(
-                {'error': f'Sync failed: {str(e)}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            "id": analyzed_bill.id,
+            "bill_no": analyzed_bill.bill_no,
+            "bill_date": analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None,
+            "total": float(analyzed_bill.total or 0),
+            "igst": float(analyzed_bill.igst or 0),
+            "cgst": float(analyzed_bill.cgst or 0),
+            "sgt
