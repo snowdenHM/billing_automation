@@ -743,11 +743,9 @@ class TallyVendorBillViewSet(viewsets.ModelViewSet):
         }
 
         # Wrap in data key as requested
-        sync_data = {
+        return {
             "data": bill_data
         }
-
-        return sync_data
 
     @extend_schema(
         summary="Get All Synced Bills",

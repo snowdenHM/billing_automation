@@ -417,7 +417,7 @@ class TallyExpenseBillViewSet(viewsets.ModelViewSet):
                     bill_date=bill_date,
                     igst=float(relevant_data.get('igst') or 0),
                     cgst=float(relevant_data.get('cgst') or 0),
-                    sgst=float(relevant_data.get('sgst') or 0),
+                    sgst=float(relevant_data.get('sgt') or 0),
                     total=relevant_data.get('total', 0),
                     note="AI Analyzed Expense Bill",
                     organization=organization
@@ -531,7 +531,7 @@ class TallyExpenseBillViewSet(viewsets.ModelViewSet):
                     pass
 
             # Update basic fields
-            for field in ['voucher', 'bill_no', 'bill_date', 'note', 'igst', 'cgst', 'sgst']:
+            for field in ['voucher', 'bill_no', 'bill_date', 'note', 'igst', 'cgst', 'sgt']:
                 if field in verification_data:
                     setattr(analyzed_bill, field, verification_data[field])
 
@@ -706,7 +706,7 @@ class TallyExpenseBillViewSet(viewsets.ModelViewSet):
         """Prepare expense bill data for sync"""
         vendor_ledger = analyzed_bill.vendor
 
-        # Convert bill date to string format
+        # Convert bill date to dd-mm-yyyy format
         bill_date_str = (analyzed_bill.bill_date.strftime('%d-%m-%Y')
                         if analyzed_bill.bill_date else None)
 
@@ -715,6 +715,9 @@ class TallyExpenseBillViewSet(viewsets.ModelViewSet):
         cr_ledger = []
 
         # Process expense line items based ONLY on their debit_or_credit field
+        total_debit = 0
+        total_credit = 0
+
         for item in analyzed_bill.products.all():
             if item.amount and item.amount > 0:
                 ledger_entry = {
@@ -725,9 +728,24 @@ class TallyExpenseBillViewSet(viewsets.ModelViewSet):
                 # Simple rule: debit goes to DR_LEDGER, credit goes to CR_LEDGER
                 if item.debit_or_credit == 'debit':
                     dr_ledger.append(ledger_entry)
+                    total_debit += float(item.amount)
                 elif item.debit_or_credit == 'credit':
                     cr_ledger.append(ledger_entry)
+                    total_credit += float(item.amount)
 
+        # Ensure debit and credit are balanced
+        # If only debits exist, add vendor as credit
+        if total_debit > 0 and total_credit == 0:
+            cr_ledger.append({
+                "LEDGERNAME": vendor_ledger.name if vendor_ledger else "No Vendor Ledger",
+                "AMOUNT": total_debit
+            })
+        # If only credits exist, add vendor as debit
+        elif total_credit > 0 and total_debit == 0:
+            dr_ledger.append({
+                "LEDGERNAME": vendor_ledger.name if vendor_ledger else "No Vendor Ledger",
+                "AMOUNT": total_credit
+            })
 
         # Build sync payload
         sync_data = {
@@ -743,8 +761,7 @@ class TallyExpenseBillViewSet(viewsets.ModelViewSet):
             "CR_LEDGER": cr_ledger,
             "note": analyzed_bill.note or "AI Analyzed Expense Bill",
         }
-        sync_data = {
+
+        return {
             "data": sync_data
         }
-
-        return sync_data
