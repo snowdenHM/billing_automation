@@ -10,6 +10,8 @@ from .models import (
     TallyVendorAnalyzedBill,
     TallyVendorAnalyzedProduct,
     TallyExpenseBill,
+    TallyExpenseAnalyzedBill,
+    TallyExpenseAnalyzedProduct,
 )
 
 
@@ -106,6 +108,32 @@ class TallyExpenseBillAdmin(admin.ModelAdmin):
     display_file.short_description = "File"
 
 
+class TallyExpenseAnalyzedProductInline(admin.TabularInline):
+    model = TallyExpenseAnalyzedProduct
+    extra = 0
+    fields = ('item_details', 'chart_of_accounts', 'amount', 'debit_or_credit')
+    readonly_fields = ('created_at',)
+
+
+class TallyExpenseAnalyzedBillAdmin(admin.ModelAdmin):
+    list_display = ('__str__', 'vendor', 'bill_no', 'bill_date', 'total', 'organization')
+    list_filter = ('organization', 'created_at')
+    search_fields = ('bill_no', 'vendor__name', 'selected_bill__bill_munshi_name', 'voucher')
+    readonly_fields = ('created_at',)
+    inlines = [TallyExpenseAnalyzedProductInline]
+    fieldsets = (
+        (None, {
+            'fields': ('selected_bill', 'vendor', 'voucher', 'bill_no', 'bill_date', 'note')
+        }),
+        ('GST Details', {
+            'fields': ('total', 'igst', 'igst_taxes', 'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes')
+        }),
+        ('Meta', {
+            'fields': ('organization', 'created_at')
+        }),
+    )
+
+
 # Register models with the admin site
 admin.site.register(ParentLedger, ParentLedgerAdmin)
 admin.site.register(Ledger, LedgerAdmin)
@@ -113,3 +141,4 @@ admin.site.register(TallyConfig, TallyConfigAdmin)
 admin.site.register(TallyVendorBill, TallyVendorBillAdmin)
 admin.site.register(TallyVendorAnalyzedBill, TallyVendorAnalyzedBillAdmin)
 admin.site.register(TallyExpenseBill, TallyExpenseBillAdmin)
+admin.site.register(TallyExpenseAnalyzedBill, TallyExpenseAnalyzedBillAdmin)
