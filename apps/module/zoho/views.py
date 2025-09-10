@@ -1564,7 +1564,7 @@ def generate_token_view(request):
 # ============================================================================
 
 @extend_schema(
-    responses={"200": {"gst": "string"}},
+    responses={"200": {"gst": "string", "vendor_name": "string"}},
     tags=["Zoho Vendor Bills"],
     methods=["GET"]
 )
@@ -1574,23 +1574,36 @@ def fetch_vendor_gst_view(request, org_id):
     """Fetch GST number for a specific vendor by vendor_id."""
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
-        return JsonResponse({"detail": "Organization not found", "gst": "N/A"}, status=404)
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    if request.method == 'GET':
-        vendor_id = request.GET.get('vendor_id')
+    vendor_id = request.GET.get('vendor_id')
 
-        if not vendor_id:
-            return JsonResponse({"detail": "vendor_id parameter is required", "gst": "N/A"}, status=400)
+    if not vendor_id:
+        return Response({
+            "detail": "vendor_id parameter is required",
+            "gst": "N/A"
+        }, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            # Fetch GST information based on the vendor_id
-            vendor = ZohoVendor.objects.get(id=vendor_id, organization=organization)
-            return JsonResponse({"gst": vendor.gstNo or "N/A"})
-        except ZohoVendor.DoesNotExist:
-            return JsonResponse({"detail": "Vendor not found", "gst": "N/A"}, status=404)
-        except Exception as e:
-            logger.error(f"Error fetching vendor GST: {str(e)}")
-            return JsonResponse({"detail": f"Error fetching vendor GST: {str(e)}", "gst": "N/A"}, status=500)
-    else:
-        return JsonResponse({"detail": "Only GET method is allowed", "gst": "N/A"}, status=405)
+    try:
+        # Fetch GST information based on the vendor_id
+        vendor = ZohoVendor.objects.get(id=vendor_id, organization=organization)
 
+        return Response({
+            "gst": vendor.gstNo or "N/A",
+            "vendor_name": vendor.companyName or "N/A",
+            "vendor_id": str(vendor.id),
+            "contact_id": vendor.contactId or "N/A"
+        })
+
+    except ZohoVendor.DoesNotExist:
+        return Response({
+            "detail": "Vendor not found",
+            "gst": "N/A"
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    except Exception as e:
+        logger.error(f"Error fetching vendor GST for vendor_id {vendor_id}: {str(e)}")
+        return Response({
+            "detail": f"Error fetching vendor GST: {str(e)}",
+            "gst": "N/A"
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
