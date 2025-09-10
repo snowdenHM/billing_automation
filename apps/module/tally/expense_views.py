@@ -710,36 +710,24 @@ class TallyExpenseBillViewSet(viewsets.ModelViewSet):
         bill_date_str = (analyzed_bill.bill_date.strftime('%d-%m-%Y')
                         if analyzed_bill.bill_date else None)
 
-        # Build DR_LEDGER (empty for expenses as they are typically credits to vendor)
+        # Initialize DR and CR ledgers
         dr_ledger = []
-
-        # Build CR_LEDGER from expense line items
         cr_ledger = []
+
+        # Process expense line items based ONLY on their debit_or_credit field
         for item in analyzed_bill.products.all():
             if item.amount and item.amount > 0:
-                cr_ledger.append({
+                ledger_entry = {
                     "LEDGERNAME": str(item.chart_of_accounts) if item.chart_of_accounts else "No COA Ledger",
                     "AMOUNT": float(item.amount)
-                })
+                }
+                
+                # Simple rule: debit goes to DR_LEDGER, credit goes to CR_LEDGER
+                if item.debit_or_credit == 'debit':
+                    dr_ledger.append(ledger_entry)
+                elif item.debit_or_credit == 'credit':
+                    cr_ledger.append(ledger_entry)
 
-        # Add tax amounts to CR_LEDGER if they exist
-        if analyzed_bill.igst and analyzed_bill.igst > 0:
-            cr_ledger.append({
-                "LEDGERNAME": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "IGST",
-                "AMOUNT": float(analyzed_bill.igst)
-            })
-
-        if analyzed_bill.cgst and analyzed_bill.cgst > 0:
-            cr_ledger.append({
-                "LEDGERNAME": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "CGST",
-                "AMOUNT": float(analyzed_bill.cgst)
-            })
-
-        if analyzed_bill.sgst and analyzed_bill.sgst > 0:
-            cr_ledger.append({
-                "LEDGERNAME": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "SGST",
-                "AMOUNT": float(analyzed_bill.sgst)
-            })
 
         # Build sync payload
         sync_data = {
