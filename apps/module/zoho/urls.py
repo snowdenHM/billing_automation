@@ -21,6 +21,7 @@ from .views import (
 
     # Zoho Settings
     zoho_credentials_view,
+    fetch_vendor_gst_view
 )
 
 from .class_views import (
