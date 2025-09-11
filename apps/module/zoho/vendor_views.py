@@ -450,13 +450,8 @@ def vendor_bill_detail_view(request, org_id, bill_id):
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        # Fetch the VendorBill with related VendorZohoBill and VendorZohoProduct data
-        bill = VendorBill.objects.select_related().prefetch_related(
-            'vendorzoho_bill__vendor',
-            'vendorzoho_bill__products__chart_of_accounts',
-            'vendorzoho_bill__products__taxes',
-            'vendorzoho_bill__tds_tcs_id'
-        ).get(id=bill_id, organization=organization)
+        # Fetch the VendorBill without prefetch_related to avoid relationship errors
+        bill = VendorBill.objects.get(id=bill_id, organization=organization)
 
         # Get the related VendorZohoBill if it exists
         try:
@@ -471,8 +466,8 @@ def vendor_bill_detail_view(request, org_id, bill_id):
             # If no VendorZohoBill exists, set it to None
             bill.zoho_bill = None
 
-        # Serialize the data
-        serializer = ZohoVendorBillDetailSerializer(bill)
+        # Serialize the data with request context for full URLs
+        serializer = ZohoVendorBillDetailSerializer(bill, context={'request': request})
         return Response(serializer.data)
 
     except VendorBill.DoesNotExist:
