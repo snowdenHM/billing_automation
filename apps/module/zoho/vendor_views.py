@@ -350,7 +350,7 @@ def vendor_bills_list_view(request, org_id):
     paginated_bills = paginator.paginate_queryset(bills, request)
 
     if paginated_bills is not None:
-        serializer = ZohoVendorBillSerializer(paginated_bills, many=True)
+        serializer = ZohoVendorBillSerializer(paginated_bills, many=True, context={'request': request})
         return paginator.get_paginated_response(serializer.data)
 
     # Fallback if pagination fails
