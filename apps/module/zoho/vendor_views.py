@@ -435,7 +435,7 @@ def vendor_bill_upload_view(request, org_id):
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
+# ✅
 @extend_schema(
     responses=ZohoVendorBillDetailSerializer,
     tags=["Zoho Vendor Bills"],
@@ -499,6 +499,7 @@ def vendor_bill_image_view(request, org_id, bill_id):
         return Response({"detail": "Vendor bill not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
+# ✅
 @extend_schema(
     responses=AnalysisResponseSerializer,
     tags=["Zoho Vendor Bills"],
@@ -827,7 +828,7 @@ def vendor_bill_delete_view(request, org_id, bill_id):
 # ============================================================================
 # Filtered Views for Different Bill Status
 # ============================================================================
-
+# ✅
 @extend_schema(
     responses=ZohoVendorBillSerializer(many=True),
     tags=["Zoho Vendor Bills"],
@@ -858,7 +859,7 @@ def vendor_bills_draft_view(request, org_id):
     serializer = ZohoVendorBillSerializer(draft_bills, many=True)
     return Response({"results": serializer.data})
 
-
+# ✅
 @extend_schema(
     responses=ZohoVendorBillSerializer(many=True),
     tags=["Zoho Vendor Bills"],
@@ -889,7 +890,7 @@ def vendor_bills_analyzed_view(request, org_id):
     serializer = ZohoVendorBillSerializer(analyzed_bills, many=True)
     return Response({"results": serializer.data})
 
-
+# ✅
 @extend_schema(
     responses=ZohoVendorBillSerializer(many=True),
     tags=["Zoho Vendor Bills"],

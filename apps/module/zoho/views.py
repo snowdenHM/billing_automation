@@ -465,17 +465,35 @@ def taxes_sync_view(request, org_id):
 @extend_schema(
     responses=ZohoTdsTcsSerializer(many=True),
     tags=["Zoho Ops"],
-    methods=["GET"]
+    methods=["GET"],
+    parameters=[
+        {
+            "name": "tax_type",
+            "in": "query",
+            "description": "Filter by tax type (TDS or TCS)",
+            "required": False,
+            "schema": {"type": "string", "enum": ["TDS", "TCS"]}
+        }
+    ]
 )
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def tds_tcs_list_view(request, org_id):
-    """List all TDS/TCS for the organization with pagination."""
+    """List all TDS/TCS for the organization with pagination and optional filtering by tax type."""
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    tds_tcs = ZohoTdsTcs.objects.filter(organization=organization).order_by('taxName')
+    # Start with base queryset
+    tds_tcs = ZohoTdsTcs.objects.filter(organization=organization)
+
+    # Apply tax_type filter if provided
+    tax_type = request.query_params.get('tax_type')
+    if tax_type and tax_type.upper() in ['TDS', 'TCS']:
+        tds_tcs = tds_tcs.filter(taxType=tax_type.upper())
+
+    # Order by taxName
+    tds_tcs = tds_tcs.order_by('taxName')
 
     # Apply pagination
     paginator = DefaultPagination()
