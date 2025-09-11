@@ -329,7 +329,7 @@ def refresh_zoho_access_token(current_token):
 # ============================================================================
 # Vendor Bills API Views
 # ============================================================================
-
+# ✅
 @extend_schema(
     responses=ZohoVendorBillSerializer(many=True),
     tags=["Zoho Vendor Bills"],
@@ -358,6 +358,7 @@ def vendor_bills_list_view(request, org_id):
     return Response({"results": serializer.data})
 
 
+# ✅
 @extend_schema(
     request=ZohoVendorBillUploadSerializer,
     responses=ZohoVendorBillSerializer,
@@ -408,8 +409,8 @@ def vendor_bill_upload_view(request, org_id):
                         )
                         created_bills.append(bill)
 
-                # Return list of created bills
-                response_serializer = ZohoVendorBillSerializer(created_bills, many=True)
+                # Return list of created bills with full URLs
+                response_serializer = ZohoVendorBillSerializer(created_bills, many=True, context={'request': request})
                 return Response({
                     "detail": f"PDF split into {len(created_bills)} bills successfully",
                     "bills": response_serializer.data
@@ -429,7 +430,7 @@ def vendor_bill_upload_view(request, org_id):
 
         # Save regular file upload
         bill = serializer.save(organization=organization, status='Draft')
-        response_serializer = ZohoVendorBillSerializer(bill)
+        response_serializer = ZohoVendorBillSerializer(bill, context={'request': request})
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -791,6 +792,7 @@ def vendor_bill_sync_view(request, org_id, bill_id):
         )
 
 
+# ✅
 @extend_schema(
     responses={"200": {"detail": "Vendor bill deleted successfully"}},
     tags=["Zoho Vendor Bills"],
@@ -960,3 +962,4 @@ def vendor_product_update_view(request, org_id, product_id):
 
     except VendorZohoProduct.DoesNotExist:
         return Response({"detail": "Product not found"}, status=status.HTTP_404_NOT_FOUND)
+
