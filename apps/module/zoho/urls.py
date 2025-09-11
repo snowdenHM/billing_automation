@@ -63,7 +63,7 @@ urlpatterns = [
         # ============================================================================
         # Zoho Settings/Credentials Management
         # ============================================================================
-        path('credentials/', zoho_credentials_view, name='zoho_credentials'),
+        path('settings/credentials/', zoho_credentials_view, name='zoho_credentials'),
         path('generate-token/', generate_token_view, name='generate_token'),
 
         # ============================================================================
