@@ -70,47 +70,38 @@ def admin_change_url_for_instance(obj):
 
 @admin.register(ZohoCredentials)
 class ZohoCredentialsAdmin(BaseOrgScopedAdmin):
-    list_display = ("organization", "clientId", "organisationId", "created_at", "update_at")
-    search_fields = ("clientId", "organisationId", "organization__name")
-    list_filter = ("organization",)
-    readonly_fields = ("created_at", "update_at")
-    autocomplete_fields = ("organization",)
+    list_display = ["organization", "clientId", "token_expiry", "created_at"]
+    list_filter = ["created_at", "token_expiry"]
+    search_fields = ["organization__name", "clientId"]
+    readonly_fields = ["accessToken", "refreshToken", "token_expiry"]
 
 
 @admin.register(ZohoVendor)
 class ZohoVendorAdmin(BaseOrgScopedAdmin):
-    list_display = ("organization", "companyName", "contactId", "gstNo", "created_at")
-    search_fields = ("companyName", "contactId", "gstNo", "organization__name")
-    list_filter = ("organization",)
-    readonly_fields = ("created_at",)
-    autocomplete_fields = ("organization",)
+    list_display = ["companyName", "gstNo", "contactId", "organization"]
+    list_filter = ["organization"]
+    search_fields = ["companyName", "gstNo", "contactId"]
 
 
 @admin.register(ZohoChartOfAccount)
 class ZohoChartOfAccountAdmin(BaseOrgScopedAdmin):
-    list_display = ("organization", "accountName", "accountId", "created_at")
-    search_fields = ("accountName", "accountId", "organization__name")
-    list_filter = ("organization",)
-    readonly_fields = ("created_at",)
-    autocomplete_fields = ("organization",)
+    list_display = ["accountName", "accountId", "organization"]
+    list_filter = ["organization"]
+    search_fields = ["accountName", "accountId"]
 
 
 @admin.register(ZohoTaxes)
 class ZohoTaxesAdmin(BaseOrgScopedAdmin):
-    list_display = ("organization", "taxName", "taxId", "created_at")
-    search_fields = ("taxName", "taxId", "organization__name")
-    list_filter = ("organization",)
-    readonly_fields = ("created_at",)
-    autocomplete_fields = ("organization",)
+    list_display = ["taxName", "taxId", "organization"]
+    list_filter = ["organization"]
+    search_fields = ["taxName", "taxId"]
 
 
 @admin.register(ZohoTdsTcs)
 class ZohoTDSTCSAdmin(BaseOrgScopedAdmin):
-    list_display = ("organization", "taxName", "taxType", "taxPercentage", "created_at")
-    search_fields = ("taxName", "taxType", "organization__name")
-    list_filter = ("organization", "taxType")
-    readonly_fields = ("created_at",)
-    autocomplete_fields = ("organization",)
+    list_display = ["taxName", "taxId", "organization"]
+    list_filter = ["organization"]
+    search_fields = ["taxName", "taxId"]
 
 
 # @admin.register(ZohoVendorCredit)
@@ -147,10 +138,10 @@ class VendorZohoProductInline(admin.TabularInline):
 
 @admin.register(VendorBill)
 class VendorBillAdmin(BaseOrgScopedAdmin):
-    list_display = ("organization", "billmunshiName", "file_link", "fileType", "status", "process", "created_at", "update_at")
-    search_fields = ("billmunshiName", "status", "organization__name")
-    list_filter = ("organization", "status", "fileType", "process", "created_at")
-    readonly_fields = ("created_at", "update_at")
+    list_display = ["billmunshiName", "fileType", "status", "process", "organization", "created_at"]
+    list_filter = ["status", "fileType", "process", "organization", "created_at"]
+    search_fields = ["billmunshiName"]
+    readonly_fields = ["analysed_data", "created_at", "update_at"]
     fields = (
         "organization",
         "billmunshiName",
@@ -173,22 +164,15 @@ class VendorBillAdmin(BaseOrgScopedAdmin):
 
 @admin.register(VendorZohoBill)
 class VendorZohoBillAdmin(BaseOrgScopedAdmin):
-    list_display = (
-        "organization",
+    list_display = [
         "bill_no",
         "vendor",
         "bill_date",
         "total",
-        "igst",
-        "cgst",
-        "sgst",
-        "is_tax",
-        "tds_tcs_id",
-        "selectBill_link",
-        "created_at",
-    )
-    search_fields = ("bill_no", "vendor__companyName", "organization__name", "selectBill__billmunshiName")
-    list_filter = ("organization", "is_tax", "bill_date", "created_at")
+        "organization",
+    ]
+    list_filter = ["bill_date", "organization", "vendor"]
+    search_fields = ["bill_no", "vendor__companyName"]
     readonly_fields = ("created_at",)
     inlines = [VendorZohoProductInline]
     autocomplete_fields = ("organization", "vendor", "selectBill", "tds_tcs_id")
@@ -216,10 +200,10 @@ class ExpenseZohoProductInline(admin.TabularInline):
 
 @admin.register(ExpenseBill)
 class ExpenseBillAdmin(BaseOrgScopedAdmin):
-    list_display = ("organization", "billmunshiName", "file_link", "fileType", "status", "process", "created_at", "update_at")
-    search_fields = ("billmunshiName", "status", "organization__name")
-    list_filter = ("organization", "status", "fileType", "process", "created_at")
-    readonly_fields = ("created_at", "update_at")
+    list_display = ["billmunshiName", "fileType", "status", "process", "organization", "created_at"]
+    list_filter = ["status", "fileType", "process", "organization", "created_at"]
+    search_fields = ["billmunshiName"]
+    readonly_fields = ["analysed_data", "created_at", "update_at"]
     fields = (
         "organization",
         "billmunshiName",
@@ -242,20 +226,9 @@ class ExpenseBillAdmin(BaseOrgScopedAdmin):
 
 @admin.register(ExpenseZohoBill)
 class ExpenseZohoBillAdmin(BaseOrgScopedAdmin):
-    list_display = (
-        "organization",
-        "bill_no",
-        "vendor",
-        "bill_date",
-        "total",
-        "igst",
-        "cgst",
-        "sgst",
-        "selectBill_link",
-        "created_at",
-    )
-    search_fields = ("bill_no", "vendor__companyName", "organization__name", "selectBill__billmunshiName")
-    list_filter = ("organization", "bill_date", "created_at")
+    list_display = ["bill_no", "vendor", "bill_date", "total", "organization"]
+    list_filter = ["bill_date", "organization", "vendor"]
+    search_fields = ["bill_no", "vendor__companyName"]
     readonly_fields = ("created_at",)
     inlines = [ExpenseZohoProductInline]
     autocomplete_fields = ("organization", "vendor", "selectBill")

@@ -14,6 +14,7 @@ from .views import (
     taxes_list_view,
     taxes_sync_view,
     tds_tcs_list_view,
+    tds_tcs_sync_view,
 )
 
 # Import vendor bill views from vendor_views.py
@@ -75,6 +76,7 @@ urlpatterns = [
         path('taxes/', taxes_list_view, name='taxes_list'),
         path('taxes/sync/', taxes_sync_view, name='taxes_sync'),
         path('tds-tcs/', tds_tcs_list_view, name='tds_tcs_list'),
+        path('tds-tcs/sync/', tds_tcs_sync_view, name='tds_tcs_sync'),
 
         # ============================================================================
         # Vendor Bills API Endpoints

@@ -3,7 +3,6 @@
 import logging
 import requests
 
-from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -80,7 +79,11 @@ def make_zoho_api_request(credentials, endpoint, method='GET', data=None):
         'Content-Type': 'application/json'
     }
 
-    url = f"https://www.zohoapis.in/books/v3/{endpoint}?organization_id={credentials.organisationId}"
+    # Handle endpoints that already have query parameters
+    if '?' in endpoint:
+        url = f"https://www.zohoapis.in/books/v3/{endpoint}&organization_id={credentials.organisationId}"
+    else:
+        url = f"https://www.zohoapis.in/books/v3/{endpoint}?organization_id={credentials.organisationId}"
 
     try:
         if method == 'GET':
@@ -422,25 +425,37 @@ def taxes_sync_view(request, org_id):
 
     try:
         credentials = get_zoho_credentials(organization)
-        zoho_data = make_zoho_api_request(credentials, "taxes")
+        zoho_data = make_zoho_api_request(credentials, "settings/taxes")
+
+        zoho_taxes = zoho_data.get("taxes", [])
+
+        # Get existing tax IDs to avoid duplicates
+        existing_taxes = ZohoTaxes.objects.filter(
+            taxId__in=[tax["tax_id"] for tax in zoho_taxes],
+            organization=organization
+        ).values_list('taxId', flat=True)
+
+        # Create new taxes
+        new_taxes = []
+        for tax in zoho_taxes:
+            if tax["tax_id"] not in existing_taxes:
+                new_taxes.append(ZohoTaxes(
+                    taxId=tax["tax_id"],
+                    taxName=tax["tax_name"],
+                    organization=organization
+                ))
 
         synced_count = 0
-        for tax in zoho_data.get('taxes', []):
-            tax_obj, created = ZohoTaxes.objects.update_or_create(
-                organization=organization,
-                taxId=tax['tax_id'],
-                defaults={
-                    'taxName': tax.get('tax_name', '')
-                }
-            )
-            if created:
-                synced_count += 1
+        if new_taxes:
+            ZohoTaxes.objects.bulk_create(new_taxes)
+            synced_count = len(new_taxes)
 
         return Response({
             "detail": f"Successfully synced {synced_count} taxes",
             "synced_count": synced_count
         })
     except Exception as e:
+        logger.error(f"Taxes sync failed: {str(e)}")
         return Response(
             {"detail": f"Sync failed: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -478,3 +493,92 @@ def tds_tcs_list_view(request, org_id):
         "previous": None,
         "results": serializer.data
     })
+
+
+@extend_schema(
+    responses={"200": {"detail": "TDS/TCS synced successfully"}},
+    tags=["Zoho Ops"],
+    methods=["POST"]
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def tds_tcs_sync_view(request, org_id):
+    """Sync TDS/TCS taxes from Zoho Books."""
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        credentials = get_zoho_credentials(organization)
+
+        synced_count = 0
+
+        # Fetch TDS taxes
+        tds_data = make_zoho_api_request(credentials, "settings/taxes?is_tds_request=true")
+
+        tds_taxes = tds_data.get('taxes', [])
+
+        # Get existing TDS tax IDs to avoid duplicates
+        existing_tds_taxes = ZohoTdsTcs.objects.filter(
+            taxId__in=[tax["tax_id"] for tax in tds_taxes],
+            taxType="TDS",
+            organization=organization
+        ).values_list('taxId', flat=True)
+
+        # Create new TDS taxes
+        new_tds_taxes = []
+        for tax in tds_taxes:
+            if tax["tax_id"] not in existing_tds_taxes:
+                new_tds_taxes.append(ZohoTdsTcs(
+                    taxId=tax["tax_id"],
+                    taxName=tax["tax_name"],
+                    taxPercentage=tax.get("tax_percentage", 0),
+                    taxType="TDS",
+                    organization=organization
+                ))
+
+        # Fetch TCS taxes
+        tcs_data = make_zoho_api_request(credentials, "settings/taxes?is_tcs_request=true&filter_by=Taxes.All")
+        tcs_taxes = tcs_data.get('taxes', [])
+
+        # Get existing TCS tax IDs to avoid duplicates
+        existing_tcs_taxes = ZohoTdsTcs.objects.filter(
+            taxId__in=[tax["tax_id"] for tax in tcs_taxes],
+            taxType="TCS",
+            organization=organization
+        ).values_list('taxId', flat=True)
+
+        # Create new TCS taxes
+        new_tcs_taxes = []
+        for tax in tcs_taxes:
+            if tax["tax_id"] not in existing_tcs_taxes:
+                new_tcs_taxes.append(ZohoTdsTcs(
+                    taxId=tax["tax_id"],
+                    taxName=tax["tax_name"],
+                    taxPercentage=tax.get("tax_percentage", 0),
+                    taxType="TCS",
+                    organization=organization
+                ))
+
+        # Bulk create new taxes
+        if new_tds_taxes:
+            ZohoTdsTcs.objects.bulk_create(new_tds_taxes)
+            synced_count += len(new_tds_taxes)
+
+        if new_tcs_taxes:
+            ZohoTdsTcs.objects.bulk_create(new_tcs_taxes)
+            synced_count += len(new_tcs_taxes)
+
+        return Response({
+            "detail": f"Successfully synced {synced_count} TDS/TCS taxes",
+            "synced_count": synced_count,
+            "tds_count": len(new_tds_taxes),
+            "tcs_count": len(new_tcs_taxes)
+        })
+
+    except Exception as e:
+        logger.error(f"TDS/TCS sync failed: {str(e)}")
+        return Response(
+            {"detail": f"Sync failed: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
