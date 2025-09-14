@@ -241,16 +241,16 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
     bill_no = models.CharField(max_length=50, blank=True, null=True)
     bill_date = models.DateField(blank=True, null=True)
 
-    total = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
-    igst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    total = models.DecimalField(max_digits=12, decimal_places=10, blank=True, null=True, default=Decimal("0"))
+    igst = models.DecimalField(max_digits=12, decimal_places=10, blank=True, null=True, default=Decimal("0"))
     igst_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="igst_tally_vendor_analysed_bills"
     )
-    cgst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    cgst = models.DecimalField(max_digits=12, decimal_places=10, blank=True, null=True, default=Decimal("0"))
     cgst_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="cgst_tally_vendor_analysed_bills"
     )
-    sgst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    sgst = models.DecimalField(max_digits=12, decimal_places=10, blank=True, null=True, default=Decimal("0"))
     sgst_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="sgst_tally_vendor_analysed_bills"
     )
@@ -270,29 +270,6 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
     def clean(self):
         super().clean()
         self.validate_gst_calculations()
-
-    def validate_gst_calculations(self):
-        """Validate that GST totals match sum of product GSTs"""
-        if not self.pk:  # Skip validation for new unsaved records
-            return
-
-        if self.gst_type == self.GSTType.IGST:
-            product_igst_sum = sum(p.igst or 0 for p in self.products.all())
-            if abs(product_igst_sum - (self.igst or 0)) > 0.01:
-                raise ValidationError({
-                    'igst': f"IGST total ({self.igst}) doesn't match sum of product IGSTs ({product_igst_sum})"
-                })
-        elif self.gst_type == self.GSTType.CGST_SGST:
-            product_cgst_sum = sum(p.cgst or 0 for p in self.products.all())
-            product_sgst_sum = sum(p.sgst or 0 for p in self.products.all())
-            if abs(product_cgst_sum - (self.cgst or 0)) > 0.01:
-                raise ValidationError({
-                    'cgst': f"CGST total ({self.cgst}) doesn't match sum of product CGSTs ({product_cgst_sum})"
-                })
-            if abs(product_sgst_sum - (self.sgst or 0)) > 0.01:
-                raise ValidationError({
-                    'sgst': f"SGST total ({self.sgst}) doesn't match sum of product SGSTs ({product_sgst_sum})"
-                })
 
     def save(self, *args, **kwargs):
         self.full_clean()
