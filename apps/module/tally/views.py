@@ -70,10 +70,17 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
     permission_classes = [OrganizationAPIKeyOrBearerToken]
 
     def get_queryset(self):
-        """Filter queryset based on organization UUID"""
+        """Filter queryset based on organization UUID with proper prefetching"""
         organization = self.get_organization()
-        # Add explicit ordering to prevent pagination warnings
-        return TallyConfig.objects.filter(organization=organization).order_by('-id')
+        # Add explicit ordering and prefetch related parent ledgers for better performance
+        return TallyConfig.objects.filter(organization=organization).prefetch_related(
+            'igst_parents',
+            'cgst_parents',
+            'sgst_parents',
+            'vendor_parents',
+            'chart_of_accounts_parents',
+            'chart_of_accounts_expense_parents'
+        ).order_by('-id')
 
     def get_organization(self):
         """Get organization from URL UUID parameter or API key"""
@@ -278,16 +285,56 @@ class LedgerViewSet(viewsets.GenericViewSet):
 
     @extend_schema(
         summary="List Ledgers",
-        description="Get all ledgers for the organization (No authentication required for testing)",
+        description="Get all ledgers for the organization grouped by parent ledger (No authentication required for testing)",
         responses={200: LedgerSerializer(many=True)},
     )
     def list(self, request, *args, **kwargs):
-        """List all ledgers for the organization"""
+        """List all ledgers for the organization grouped by parent ledger"""
         print(f"LedgerViewSet.list called - TEST MODE")
         queryset = self.get_queryset()
         print(f"Found {queryset.count()} ledgers")
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
+
+        # Group ledgers by parent ledger
+        grouped_ledgers = {}
+
+        for ledger in queryset:
+            parent_name = ledger.parent.parent if ledger.parent else "Uncategorized"
+            parent_id = str(ledger.parent.id) if ledger.parent else "uncategorized"
+
+            # Initialize parent group if not exists
+            if parent_name not in grouped_ledgers:
+                grouped_ledgers[parent_name] = {
+                    "parent_id": parent_id,
+                    "parent_name": parent_name,
+                    "ledger_count": 0,
+                    "ledgers": []
+                }
+
+            # Add ledger to parent group
+            ledger_data = {
+                "id": str(ledger.id),
+                "master_id": ledger.master_id,
+                "alter_id": ledger.alter_id,
+                "name": ledger.name,
+                "alias": ledger.alias,
+                "opening_balance": str(ledger.opening_balance),
+                "gst_in": ledger.gst_in,
+                "company": ledger.company
+            }
+
+            grouped_ledgers[parent_name]["ledgers"].append(ledger_data)
+            grouped_ledgers[parent_name]["ledger_count"] += 1
+
+        # Convert to list format for consistent API response
+        response_data = {
+            "success": True,
+            "total_parents": len(grouped_ledgers),
+            "total_ledgers": queryset.count(),
+            "grouped_ledgers": grouped_ledgers
+        }
+
+        print(f"Grouped into {len(grouped_ledgers)} parent categories")
+        return Response(response_data)
 
     @extend_schema(
         summary="Bulk Create Ledgers from Tally",
