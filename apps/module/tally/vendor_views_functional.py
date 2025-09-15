@@ -17,7 +17,7 @@ from pdf2image import convert_from_bytes
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework.response import Response
 
 from apps.common.pagination import DefaultPagination
@@ -54,6 +54,52 @@ logger = logging.getLogger(__name__)
 
 # ============================================================================
 # Helper Functions
+
+class OrganizationAPIKeyOrBearerToken(BasePermission):
+    """
+    Custom permission class that allows access via API key OR Bearer token authentication.
+    This is an OR condition between authentication methods.
+    """
+
+    def has_permission(self, request, view):
+        # Check for API key in the Authorization header
+        auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+
+        if auth_header.startswith('Api-Key '):
+            api_key_value = auth_header.replace('Api-Key ', '', 1)
+
+            # Check if the API key exists and is valid
+            from rest_framework_api_key.models import APIKey
+            from apps.organizations.models import OrganizationAPIKey
+
+            try:
+                # Check if the API key is valid
+                api_key_obj = APIKey.objects.get_from_key(api_key_value)
+
+                if api_key_obj:
+                    # Check if it's linked to an organization
+                    org_api_key = OrganizationAPIKey.objects.get(api_key=api_key_obj)
+
+                    # Store the organization in the request for later use
+                    request.organization = org_api_key.organization
+                    return True
+
+            except (APIKey.DoesNotExist, OrganizationAPIKey.DoesNotExist):
+                # API key doesn't exist or not linked to organization
+                pass
+            except Exception as e:
+                # Log other exceptions for debugging
+                print(f"API Key validation error: {str(e)}")
+                pass
+
+        # If not authenticated via API key, check for Bearer token
+        bearer_auth = IsAuthenticated().has_permission(request, view)
+        if bearer_auth:
+            # If authenticated via bearer token, also check admin permission
+            return IsOrgAdmin().has_permission(request, view)
+
+        return False
+
 
 def get_organization_from_request(request, org_id=None):
     """Get organization from URL parameter or user membership"""
@@ -814,7 +860,7 @@ def vendor_bill_detail(request, org_id, bill_id):
                 },
                 "line_items": [
                     {
-                        "item_id" : item.id,
+                        "item_id": item.id,
                         "item_name": item.item_name,
                         "item_details": item.item_details,
                         "tax_ledger": str(item.taxes) if item.taxes else "No Tax Ledger",
@@ -1470,7 +1516,7 @@ def vendor_bill_delete(request, org_id, bill_id):
     tags=['Tally TCP']
 )
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([OrganizationAPIKeyOrBearerToken])
 def vendor_bills_sync_list(request, org_id):
     """Get all synced bills with their products"""
     print("vendor_bills_sync_list called")
@@ -1488,9 +1534,22 @@ def vendor_bills_sync_list(request, org_id):
     except Exception as e:
         logger.warning(f"Failed to log request headers: {e}")
 
-    organization = get_organization_from_request(request, org_id)
+    # For API Key auth, organization might be in request.organization
+    if hasattr(request, 'organization'):
+        organization = request.organization
+    else:
+        # Fallback to getting organization from org_id
+        organization = get_organization_from_request(request, org_id)
+
     if not organization:
         return Response({'error': 'Organization not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Check if the requested org_id matches the authenticated organization
+    if str(organization.id) != org_id:
+        return Response(
+            {'error': 'You do not have permission to access this organization'},
+            status=status.HTTP_403_FORBIDDEN
+        )
 
     analyzed_bills = (
         TallyVendorAnalyzedBill.objects.filter(
