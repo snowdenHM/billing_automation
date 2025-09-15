@@ -1,7 +1,19 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from .expense_views import TallyExpenseBillViewSet
+# Import functional expense views
+from .expense_views_functional import (
+    expense_bills_list,
+    expense_bills_upload,
+    expense_bill_detail,
+    expense_bill_delete,
+    expense_bill_analyze,
+    expense_bill_verify,
+    expense_bill_sync,
+    expense_bills_by_status,
+    expense_bills_sync_list,
+    expense_bill_sync_external
+)
 from .vendor_views_functional import (
     vendor_bills_list,
     vendor_bills_upload,
@@ -15,10 +27,9 @@ from .vendor_views_functional import (
 )
 from .views import LedgerViewSet, TallyConfigViewSet
 
-# Create router for the viewsets
+# Create router for the remaining viewsets
 router = DefaultRouter()
 router.register(r'configs', TallyConfigViewSet, basename='tally-config')
-router.register(r'expense-bills', TallyExpenseBillViewSet, basename='expense-bill')
 
 app_name = 'tally'
 
@@ -39,5 +50,17 @@ urlpatterns = [
         path('vendor-bills/sync/', vendor_bill_sync, name='vendor-bill-sync'),
         path('vendor-bills/sync_bills/', vendor_bills_sync_list, name='vendor-bills-sync-list'),
         path('vendor-bills/sync_external/', vendor_bill_sync_external, name='vendor-bill-sync-external'),
+
+        # Function-based expense bill endpoints
+        path('expense-bills/', expense_bills_list, name='expense-bills-list'),
+        path('expense-bills/upload/', expense_bills_upload, name='expense-bills-upload'),
+        path('expense-bills/<uuid:bill_id>/delete/', expense_bill_delete, name='expense-bill-delete'),
+        path('expense-bills/analyze/', expense_bill_analyze, name='expense-bill-analyze'),
+        path('expense-bills/<uuid:bill_id>/details/', expense_bill_detail, name='expense-bill-detail'),
+        path('expense-bills/verify/', expense_bill_verify, name='expense-bill-verify'),
+        path('expense-bills/sync/', expense_bill_sync, name='expense-bill-sync'),
+        path('expense-bills/by_status/', expense_bills_by_status, name='expense-bills-by-status'),
+        path('expense-bills/sync_bills/', expense_bills_sync_list, name='expense-bills-sync-list'),
+        path('expense-bills/sync_external/', expense_bill_sync_external, name='expense-bill-sync-external'),
     ])),
 ]
