@@ -938,10 +938,22 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
         if vendor_data and vendor_data.get('name') != "No Ledger":
             vendor_name = vendor_data.get('name')
             if vendor_name:
-                # Try to find existing vendor or create if needed
-                vendor = find_or_create_vendor_ledger(vendor_name, vendor_data, organization)
-                if vendor:
-                    analyzed_bill.vendor = vendor
+                # Check if vendor is different from current one
+                current_vendor = analyzed_bill.vendor
+                if not current_vendor or current_vendor.name != vendor_name.strip():
+                    # Only find/create if vendor has changed
+                    vendor = find_or_create_vendor_ledger(vendor_name, vendor_data, organization)
+                    if vendor:
+                        analyzed_bill.vendor = vendor
+                else:
+                    # Update existing vendor details if provided
+                    if vendor_data.get('master_id') and vendor_data['master_id'] != "No Ledger":
+                        current_vendor.master_id = vendor_data['master_id']
+                    if vendor_data.get('gst_in') and vendor_data['gst_in'] != "No Ledger":
+                        current_vendor.gst_in = vendor_data['gst_in']
+                    if vendor_data.get('company') and vendor_data['company'] != "No Ledger":
+                        current_vendor.company = vendor_data['company']
+                    current_vendor.save()
 
         # Update bill details
         bill_details = analyzed_data.get('bill_details', {})
@@ -959,30 +971,41 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
         # Update tax information
         taxes_data = analyzed_data.get('taxes', {})
         if taxes_data:
-            # Update tax amounts with proper rounding to 2 decimal places
+            # Update IGST
             igst_data = taxes_data.get('igst', {})
             if 'amount' in igst_data:
                 analyzed_bill.igst = round(float(igst_data['amount']), 2)
             if 'ledger' in igst_data and igst_data['ledger'] != "No Tax Ledger":
-                igst_ledger = find_or_create_tax_ledger(igst_data['ledger'], 'IGST', organization)
-                if igst_ledger:
-                    analyzed_bill.igst_taxes = igst_ledger
+                # Check if current IGST tax ledger is different
+                current_igst_ledger = analyzed_bill.igst_taxes
+                if not current_igst_ledger or str(current_igst_ledger) != igst_data['ledger']:
+                    igst_ledger = find_or_create_tax_ledger(igst_data['ledger'], 'IGST', organization)
+                    if igst_ledger:
+                        analyzed_bill.igst_taxes = igst_ledger
 
+            # Update CGST
             cgst_data = taxes_data.get('cgst', {})
             if 'amount' in cgst_data:
                 analyzed_bill.cgst = round(float(cgst_data['amount']), 2)
             if 'ledger' in cgst_data and cgst_data['ledger'] != "No Tax Ledger":
-                cgst_ledger = find_or_create_tax_ledger(cgst_data['ledger'], 'CGST', organization)
-                if cgst_ledger:
-                    analyzed_bill.cgst_taxes = cgst_ledger
+                # Check if current CGST tax ledger is different
+                current_cgst_ledger = analyzed_bill.cgst_taxes
+                if not current_cgst_ledger or str(current_cgst_ledger) != cgst_data['ledger']:
+                    cgst_ledger = find_or_create_tax_ledger(cgst_data['ledger'], 'CGST', organization)
+                    if cgst_ledger:
+                        analyzed_bill.cgst_taxes = cgst_ledger
 
+            # Update SGST
             sgst_data = taxes_data.get('sgst', {})
             if 'amount' in sgst_data:
                 analyzed_bill.sgst = round(float(sgst_data['amount']), 2)
             if 'ledger' in sgst_data and sgst_data['ledger'] != "No Tax Ledger":
-                sgst_ledger = find_or_create_tax_ledger(sgst_data['ledger'], 'SGST', organization)
-                if sgst_ledger:
-                    analyzed_bill.sgst_taxes = sgst_ledger
+                # Check if current SGST tax ledger is different
+                current_sgst_ledger = analyzed_bill.sgst_taxes
+                if not current_sgst_ledger or str(current_sgst_ledger) != sgst_data['ledger']:
+                    sgst_ledger = find_or_create_tax_ledger(sgst_data['ledger'], 'SGST', organization)
+                    if sgst_ledger:
+                        analyzed_bill.sgst_taxes = sgst_ledger
 
         # Determine GST type based on updated amounts
         if analyzed_bill.igst and analyzed_bill.igst > 0:
@@ -1142,7 +1165,7 @@ def find_or_create_tax_ledger(ledger_name, tax_type, organization):
 
 
 def update_analyzed_products(analyzed_bill, line_items, organization):
-    """Update existing products and create new ones"""
+    """Update existing products and create new ones - only when necessary"""
 
     # Get existing products
     existing_products = {str(p.id): p for p in analyzed_bill.products.all()}
@@ -1152,43 +1175,95 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
         product_id = item_data.get('id')  # This might be provided for existing products
 
         if product_id and str(product_id) in existing_products:
-            # Update existing product
+            # Update existing product only if data has changed
             product = existing_products[str(product_id)]
             updated_product_ids.add(str(product_id))
+
+            # Check if any field has actually changed before updating
+            needs_update = False
+
+            if 'item_name' in item_data and product.item_name != item_data['item_name']:
+                product.item_name = item_data['item_name']
+                needs_update = True
+            if 'item_details' in item_data and product.item_details != item_data['item_details']:
+                product.item_details = item_data['item_details']
+                needs_update = True
+            if 'price' in item_data and product.price != item_data['price']:
+                product.price = item_data['price']
+                needs_update = True
+            if 'quantity' in item_data and product.quantity != item_data['quantity']:
+                product.quantity = item_data['quantity']
+                needs_update = True
+            if 'amount' in item_data and product.amount != item_data['amount']:
+                product.amount = item_data['amount']
+                needs_update = True
+            if 'gst' in item_data and product.product_gst != item_data['gst']:
+                product.product_gst = item_data['gst']
+                needs_update = True
+            if 'igst' in item_data and product.igst != item_data['igst']:
+                product.igst = item_data['igst']
+                needs_update = True
+            if 'cgst' in item_data and product.cgst != item_data['cgst']:
+                product.cgst = item_data['cgst']
+                needs_update = True
+            if 'sgst' in item_data and product.sgst != item_data['sgst']:
+                product.sgst = item_data['sgst']
+                needs_update = True
+
+            # Handle tax ledger - only update if different
+            if 'tax_ledger' in item_data and item_data['tax_ledger'] != "No Tax Ledger":
+                current_tax_ledger_name = str(product.taxes) if product.taxes else "No Tax Ledger"
+                if current_tax_ledger_name != item_data['tax_ledger']:
+                    tax_ledger = find_or_create_tax_ledger(item_data['tax_ledger'], 'Product Tax', organization)
+                    if tax_ledger:
+                        product.taxes = tax_ledger
+                        needs_update = True
+
+            # Only save if something actually changed
+            if needs_update:
+                product.save()
+                logger.info(f"Updated existing product {product_id}")
+            else:
+                logger.info(f"No changes needed for product {product_id}")
+
         else:
-            # Create new product
+            # Create new product only if it doesn't exist
             product = TallyVendorAnalyzedProduct(
                 vendor_bill_analyzed=analyzed_bill,
                 organization=organization
             )
 
-        # Update product fields
-        if 'item_name' in item_data:
-            product.item_name = item_data['item_name']
-        if 'item_details' in item_data:
-            product.item_details = item_data['item_details']
-        if 'price' in item_data:
-            product.price = item_data['price']
-        if 'quantity' in item_data:
-            product.quantity = item_data['quantity']
-        if 'amount' in item_data:
-            product.amount = item_data['amount']
-        if 'gst' in item_data:
-            product.product_gst = item_data['gst']
-        if 'igst' in item_data:
-            product.igst = item_data['igst']
-        if 'cgst' in item_data:
-            product.cgst = item_data['cgst']
-        if 'sgst' in item_data:
-            product.sgst = item_data['sgst']
+            # Set product fields
+            if 'item_name' in item_data:
+                product.item_name = item_data['item_name']
+            if 'item_details' in item_data:
+                product.item_details = item_data['item_details']
+            if 'price' in item_data:
+                product.price = item_data['price']
+            if 'quantity' in item_data:
+                product.quantity = item_data['quantity']
+            if 'amount' in item_data:
+                product.amount = item_data['amount']
+            if 'gst' in item_data:
+                product.product_gst = item_data['gst']
+            if 'igst' in item_data:
+                product.igst = item_data['igst']
+            if 'cgst' in item_data:
+                product.cgst = item_data['cgst']
+            if 'sgst' in item_data:
+                product.sgst = item_data['sgst']
 
-        # Handle tax ledger
-        if 'tax_ledger' in item_data and item_data['tax_ledger'] != "No Tax Ledger":
-            tax_ledger = find_or_create_tax_ledger(item_data['tax_ledger'], 'Product Tax', organization)
-            if tax_ledger:
-                product.taxes = tax_ledger
+            # Handle tax ledger
+            if 'tax_ledger' in item_data and item_data['tax_ledger'] != "No Tax Ledger":
+                tax_ledger = find_or_create_tax_ledger(item_data['tax_ledger'], 'Product Tax', organization)
+                if tax_ledger:
+                    product.taxes = tax_ledger
 
-        product.save()
+            product.save()
+            logger.info(f"Created new product for item: {item_data.get('item_name', 'Unknown')}")
+
+    # Log summary
+    logger.info(f"Product update summary: {len(updated_product_ids)} existing products processed, {len(line_items) - len(updated_product_ids)} new products created")
 
 
 def get_structured_bill_data(analyzed_bill, organization):

@@ -174,50 +174,50 @@ class TallyVendorBill(BaseOrgModel):
             self.bill_munshi_name = f"BM-TB-{next_num}"
 
         # Perform status transition validation for existing records
-        if self.pk:  # Skip validation for new records
-            try:
-                old_instance = TallyVendorBill.objects.get(pk=self.pk)
-                if old_instance.status != self.status:
-                    valid_transitions = {
-                        self.BillStatus.DRAFT: [self.BillStatus.ANALYSED],
-                        self.BillStatus.ANALYSED: [self.BillStatus.VERIFIED],
-                        self.BillStatus.VERIFIED: [self.BillStatus.SYNCED],
-                        self.BillStatus.SYNCED: [],  # No further transitions allowed
-                    }
-
-                    if self.status not in valid_transitions.get(old_instance.status, []):
-                        raise ValidationError({
-                            'status': f"Invalid status transition from {old_instance.status} to {self.status}. "
-                                    f"Valid next states are: {', '.join(valid_transitions.get(old_instance.status, []))}"
-                        })
-            except TallyVendorBill.DoesNotExist:
-                pass  # Handle case where pk exists but object doesn't (unlikely)
+        # if self.pk:  # Skip validation for new records
+        #     try:
+        #         old_instance = TallyVendorBill.objects.get(pk=self.pk)
+        #         if old_instance.status != self.status:
+        #             valid_transitions = {
+        #                 self.BillStatus.DRAFT: [self.BillStatus.ANALYSED],
+        #                 self.BillStatus.ANALYSED: [self.BillStatus.VERIFIED],
+        #                 self.BillStatus.VERIFIED: [self.BillStatus.SYNCED],
+        #                 self.BillStatus.SYNCED: [],  # No further transitions allowed
+        #             }
+        #
+        #             if self.status not in valid_transitions.get(old_instance.status, []):
+        #                 raise ValidationError({
+        #                     'status': f"Invalid status transition from {old_instance.status} to {self.status}. "
+        #                             f"Valid next states are: {', '.join(valid_transitions.get(old_instance.status, []))}"
+        #                 })
+        #     except TallyVendorBill.DoesNotExist:
+        #         pass  # Handle case where pk exists but object doesn't (unlikely)
 
         super().save(*args, **kwargs)
 
-    def clean(self):
-        """Validate status transitions"""
-        super().clean()
-        if not self.pk:  # Skip validation for new records
-            return
-
-        try:
-            old_instance = TallyVendorBill.objects.get(pk=self.pk)
-            if old_instance.status != self.status:
-                valid_transitions = {
-                    self.BillStatus.DRAFT: [self.BillStatus.ANALYSED],
-                    self.BillStatus.ANALYSED: [self.BillStatus.VERIFIED],
-                    self.BillStatus.VERIFIED: [self.BillStatus.SYNCED],
-                    self.BillStatus.SYNCED: [],  # No further transitions allowed
-                }
-
-                if self.status not in valid_transitions.get(old_instance.status, []):
-                    raise ValidationError({
-                        'status': f"Invalid status transition from {old_instance.status} to {self.status}. "
-                                 f"Valid next states are: {', '.join(valid_transitions.get(old_instance.status, []))}"
-                    })
-        except TallyVendorBill.DoesNotExist:
-            pass  # Handle case where pk exists but object doesn't (unlikely)
+    # def clean(self):
+    #     """Validate status transitions"""
+    #     super().clean()
+    #     if not self.pk:  # Skip validation for new records
+    #         return
+    #
+    #     try:
+    #         old_instance = TallyVendorBill.objects.get(pk=self.pk)
+    #         if old_instance.status != self.status:
+    #             valid_transitions = {
+    #                 self.BillStatus.DRAFT: [self.BillStatus.ANALYSED],
+    #                 self.BillStatus.ANALYSED: [self.BillStatus.VERIFIED],
+    #                 self.BillStatus.VERIFIED: [self.BillStatus.SYNCED],
+    #                 self.BillStatus.SYNCED: [],  # No further transitions allowed
+    #             }
+    #
+    #             if self.status not in valid_transitions.get(old_instance.status, []):
+    #                 raise ValidationError({
+    #                     'status': f"Invalid status transition from {old_instance.status} to {self.status}. "
+    #                              f"Valid next states are: {', '.join(valid_transitions.get(old_instance.status, []))}"
+    #                 })
+    #     except TallyVendorBill.DoesNotExist:
+    #         pass  # Handle case where pk exists but object doesn't (unlikely)
 
 
 class TallyVendorAnalyzedBill(BaseOrgModel):
