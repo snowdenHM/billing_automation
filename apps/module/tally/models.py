@@ -241,16 +241,16 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
     bill_no = models.CharField(max_length=50, blank=True, null=True)
     bill_date = models.DateField(blank=True, null=True)
 
-    total = models.DecimalField(max_digits=12, decimal_places=10, blank=True, null=True, default=Decimal("0"))
-    igst = models.DecimalField(max_digits=12, decimal_places=10, blank=True, null=True, default=Decimal("0"))
+    total = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    igst = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     igst_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="igst_tally_vendor_analysed_bills"
     )
-    cgst = models.DecimalField(max_digits=12, decimal_places=10, blank=True, null=True, default=Decimal("0"))
+    cgst = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     cgst_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="cgst_tally_vendor_analysed_bills"
     )
-    sgst = models.DecimalField(max_digits=12, decimal_places=10, blank=True, null=True, default=Decimal("0"))
+    sgst = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     sgst_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="sgst_tally_vendor_analysed_bills"
     )
@@ -267,12 +267,43 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
     def __str__(self) -> str:
         return (self.selected_bill.bill_munshi_name if self.selected_bill else None) or f"VendorAnalysed:{self.id}"
 
+    def validate_gst_calculations(self):
+        """Validate GST calculations and consistency"""
+        # Skip validation if no amounts are set
+        if not any([self.total, self.igst, self.cgst, self.sgst]):
+            return
+
+        # Convert to Decimal for accurate calculations
+        total = self.total or Decimal("0")
+        igst = self.igst or Decimal("0")
+        cgst = self.cgst or Decimal("0")
+        sgst = self.sgst or Decimal("0")
+
+        # Basic validation: GST amounts should not be negative
+        if igst < 0 or cgst < 0 or sgst < 0:
+            raise ValidationError("GST amounts cannot be negative")
+
+        # Validate GST type consistency
+        if self.gst_type == self.GSTType.IGST and igst == 0:
+            # Allow this - user might set IGST type but amount could be 0
+            pass
+        elif self.gst_type == self.GSTType.CGST_SGST and (cgst == 0 and sgst == 0):
+            # Allow this - user might set CGST+SGST type but amounts could be 0
+            pass
+
+        # For inter-state transactions, CGST and SGST should be zero when IGST is present
+        if igst > 0 and (cgst > 0 or sgst > 0):
+            raise ValidationError("Cannot have both IGST and CGST/SGST for the same transaction")
+
     def clean(self):
         super().clean()
         self.validate_gst_calculations()
 
     def save(self, *args, **kwargs):
-        self.full_clean()
+        # Skip full_clean for bulk operations or when explicitly requested
+        skip_validation = kwargs.pop('skip_validation', False)
+        if not skip_validation:
+            self.full_clean()
         super().save(*args, **kwargs)
 
 

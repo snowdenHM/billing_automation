@@ -1,7 +1,30 @@
 from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_field
 from typing import List, Dict, Any
+from decimal import Decimal, InvalidOperation
 from ..models import TallyVendorBill, TallyVendorAnalyzedBill, TallyVendorAnalyzedProduct, Ledger
+
+
+class SafeDecimalField(serializers.DecimalField):
+    """Custom decimal field that handles invalid decimal values gracefully"""
+
+    def to_representation(self, value):
+        if value is None:
+            return None
+
+        try:
+            # Convert to Decimal if it's not already
+            if not isinstance(value, Decimal):
+                value = Decimal(str(value))
+
+            # Check for invalid decimal values
+            if value.is_nan() or value.is_infinite():
+                return "0.00"
+
+            return super().to_representation(value)
+        except (InvalidOperation, ValueError, TypeError):
+            # Return 0.00 for any invalid decimal values
+            return "0.00"
 
 
 class TallyVendorBillSerializer(serializers.ModelSerializer):
@@ -34,6 +57,13 @@ class TallyVendorBillSerializer(serializers.ModelSerializer):
 class TallyVendorAnalyzedProductSerializer(serializers.ModelSerializer):
     taxes_name = serializers.CharField(source='taxes.name', read_only=True)
 
+    # Use SafeDecimalField for all decimal fields that might have invalid values
+    price = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    amount = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    igst = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    cgst = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    sgst = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+
     class Meta:
         model = TallyVendorAnalyzedProduct
         fields = [
@@ -48,6 +78,12 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
     products = TallyVendorAnalyzedProductSerializer(many=True, read_only=True)
     vendor_name = serializers.CharField(source='vendor.name', read_only=True)
     selected_bill_name = serializers.CharField(source='selected_bill.bill_munshi_name', read_only=True)
+
+    # Use SafeDecimalField for all decimal fields that might have invalid values
+    total = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    igst = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    cgst = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    sgst = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
 
     class Meta:
         model = TallyVendorAnalyzedBill

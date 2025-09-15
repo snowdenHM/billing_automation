@@ -11,7 +11,6 @@ from PyPDF2 import PdfReader
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 from pdf2image import convert_from_bytes
@@ -22,14 +21,15 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.common.pagination import DefaultPagination
-from apps.organizations.models import Organization
 from apps.common.permissions import IsOrgAdmin
+from apps.organizations.models import Organization
 from .models import (
     TallyVendorBill,
     TallyVendorAnalyzedBill,
     TallyVendorAnalyzedProduct,
     Ledger,
-    ParentLedger
+    ParentLedger,
+    TallyConfig
 )
 from .serializers import (
     TallyVendorBillSerializer,
@@ -44,6 +44,7 @@ from .serializers import (
 # OpenAI Client
 try:
     from openai import OpenAI
+
     client = OpenAI(api_key=getattr(settings, 'OPENAI_API_KEY', None))
 except ImportError:
     client = None
@@ -348,16 +349,35 @@ def parse_bill_date(date_string):
 
 
 def find_vendor_ledger(company_name, organization):
-    """Find matching vendor ledger"""
+    """Find matching vendor ledger using TallyConfig"""
     try:
-        parent_ledger = ParentLedger.objects.get(
-            parent="Sundry Creditors",
-            organization=organization
-        )
-        vendor_list = Ledger.objects.filter(
-            parent=parent_ledger,
-            organization=organization
-        )
+        # Get TallyConfig for the organization
+        tally_config = TallyConfig.objects.filter(organization=organization).first()
+
+        if not tally_config:
+            # Fallback to default "Sundry Creditors" if no config exists
+            parent_ledger = ParentLedger.objects.filter(
+                parent="Sundry Creditors",
+                organization=organization
+            ).first()
+
+            if parent_ledger:
+                vendor_list = Ledger.objects.filter(
+                    parent=parent_ledger,
+                    organization=organization
+                )
+            else:
+                return None
+        else:
+            # Use configured vendor parent ledgers
+            vendor_parent_ledgers = tally_config.vendor_parents.all()
+            if not vendor_parent_ledgers.exists():
+                return None
+
+            vendor_list = Ledger.objects.filter(
+                parent__in=vendor_parent_ledgers,
+                organization=organization
+            )
 
         # Find matching vendor (case-insensitive exact match first)
         vendor = vendor_list.filter(name__iexact=company_name).first()
@@ -366,7 +386,8 @@ def find_vendor_ledger(company_name, organization):
 
         return vendor
 
-    except ParentLedger.DoesNotExist:
+    except Exception as e:
+        logger.error(f"Error finding vendor ledger: {str(e)}")
         return None
 
 
@@ -411,55 +432,6 @@ def process_pdf_splitting(pdf_file, organization, file_type):
     return created_bills
 
 
-def prepare_sync_data(analyzed_bill, organization):
-    """Prepare bill data for Tally sync"""
-    vendor_ledger = analyzed_bill.vendor
-
-    # Get products for this analyzed bill
-    products = analyzed_bill.products.all()
-    products_data = []
-
-    for product in products:
-        product_data = {
-            "id": str(product.id),
-            "item_name": product.item_name or "",
-            "item_details": product.item_details or "",
-            "taxes": str(product.taxes.id) if product.taxes else None,
-            "price": str(product.price or 0),
-            "quantity": product.quantity or 0,
-            "amount": str(product.amount or 0),
-            "product_gst": product.product_gst or "",
-            "igst": str(product.igst or 0),
-            "cgst": str(product.cgst or 0),
-            "sgst": str(product.sgst or 0),
-            "created_at": product.created_at.isoformat() if hasattr(product, 'created_at') else None
-        }
-        products_data.append(product_data)
-
-    # Build sync payload
-    bill_data = {
-        "id": str(analyzed_bill.id),
-        "selected_bill": str(analyzed_bill.selected_bill.id),
-        "selected_bill_name": analyzed_bill.selected_bill.file.name.split('/')[-1] if analyzed_bill.selected_bill.file else "",
-        "vendor": str(vendor_ledger.id) if vendor_ledger else None,
-        "vendor_name": vendor_ledger.name if vendor_ledger else "",
-        "bill_no": analyzed_bill.bill_no or "",
-        "bill_date": analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None,
-        "total": str(analyzed_bill.total or 0),
-        "igst": str(analyzed_bill.igst or 0),
-        "igst_taxes": str(analyzed_bill.igst_taxes.id) if analyzed_bill.igst_taxes else None,
-        "cgst": str(analyzed_bill.cgst or 0),
-        "cgst_taxes": str(analyzed_bill.cgst_taxes.id) if analyzed_bill.cgst_taxes else None,
-        "sgst": str(analyzed_bill.sgst or 0),
-        "sgst_taxes": str(analyzed_bill.sgst_taxes.id) if analyzed_bill.sgst_taxes else None,
-        "gst_type": analyzed_bill.gst_type,
-        "note": analyzed_bill.note or "",
-        "products": products_data,
-        "created_at": analyzed_bill.created_at.isoformat() if hasattr(analyzed_bill, 'created_at') else None
-    }
-
-    return {"data": bill_data}
-
 
 # ============================================================================
 # API Views
@@ -495,7 +467,8 @@ def vendor_bills_list(request, org_id):
     serializer = TallyVendorBillSerializer(bills, many=True)
     return Response(serializer.data)
 
-#✅
+
+# ✅
 @extend_schema(
     summary="Upload Vendor Bills",
     description="Upload single or multiple vendor bill files (PDF, JPG, PNG)",
@@ -555,158 +528,8 @@ def vendor_bills_upload(request, org_id):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-# ✅
-@extend_schema(
-    summary="Get Draft Bills",
-    description="Get all draft vendor bills for the organization",
-    responses={200: TallyVendorBillSerializer(many=True)},
-    tags=['Tally Vendor Bills']
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
-def vendor_bills_drafts(request, org_id):
-    """Get all draft vendor bills"""
-    organization = get_organization_from_request(request, org_id)
-    if not organization:
-        return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    draft_bills = TallyVendorBill.objects.filter(
-        organization=organization,
-        status=TallyVendorBill.BillStatus.DRAFT
-    ).order_by('-created_at')
-
-    serializer = TallyVendorBillSerializer(draft_bills, many=True)
-    return Response(serializer.data)
 
 # ✅
-@extend_schema(
-    summary="Get Analyzed Bills",
-    description="Get all analyzed vendor bills for the organization",
-    responses={200: TallyVendorBillSerializer(many=True)},
-    tags=['Tally Vendor Bills']
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
-def vendor_bills_analyzed(request, org_id):
-    """Get all analyzed vendor bills"""
-    organization = get_organization_from_request(request, org_id)
-    if not organization:
-        return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    analyzed_bills = TallyVendorBill.objects.filter(
-        Q(organization=organization) &
-        (Q(status=TallyVendorBill.BillStatus.ANALYSED) |
-         Q(status=TallyVendorBill.BillStatus.VERIFIED))
-    ).order_by('-created_at')
-
-    serializer = TallyVendorBillSerializer(analyzed_bills, many=True)
-    return Response(serializer.data)
-
-# ✅
-@extend_schema(
-    summary="Get Synced Bills",
-    description="Get all synced vendor bills for the organization",
-    responses={200: TallyVendorBillSerializer(many=True)},
-    tags=['Tally Vendor Bills']
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
-def vendor_bills_synced(request, org_id):
-    """Get all synced vendor bills"""
-    organization = get_organization_from_request(request, org_id)
-    if not organization:
-        return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    synced_bills = TallyVendorBill.objects.filter(
-        organization=organization,
-        status=TallyVendorBill.BillStatus.SYNCED
-    ).order_by('-created_at')
-
-    serializer = TallyVendorBillSerializer(synced_bills, many=True)
-    return Response(serializer.data)
-
-
-@extend_schema(
-    summary="Get Bill Detail",
-    description="Get detailed information about a specific vendor bill",
-    responses={200: TallyVendorBillSerializer},
-    tags=['Tally Vendor Bills']
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
-def vendor_bill_detail(request, org_id, bill_id):
-    """Get vendor bill detail"""
-    organization = get_organization_from_request(request, org_id)
-    if not organization:
-        return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    try:
-        bill = TallyVendorBill.objects.get(
-            id=bill_id,
-            organization=organization
-        )
-    except TallyVendorBill.DoesNotExist:
-        return Response(
-            {'error': 'Bill not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-
-    serializer = TallyVendorBillSerializer(bill)
-    return Response(serializer.data)
-
-
-@extend_schema(
-    summary="Delete Vendor Bill",
-    description="Delete a vendor bill and its associated file",
-    responses={204: None},
-    tags=['Tally Vendor Bills']
-)
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
-def vendor_bill_delete(request, org_id, bill_id):
-    """Delete vendor bill"""
-    organization = get_organization_from_request(request, org_id)
-    if not organization:
-        return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    try:
-        bill = TallyVendorBill.objects.get(
-            id=bill_id,
-            organization=organization
-        )
-    except TallyVendorBill.DoesNotExist:
-        return Response(
-            {'error': 'Bill not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-
-    # Delete the file from storage if it exists
-    if bill.file:
-        file_path = os.path.join(settings.MEDIA_ROOT, str(bill.file))
-        if os.path.exists(file_path):
-            os.remove(file_path)
-
-    # Delete the bill record from the database
-    bill.delete()
-
-    return Response(status=status.HTTP_204_NO_CONTENT)
-
-
 @extend_schema(
     summary="Analyze Vendor Bill",
     description="Analyze vendor bill using OpenAI to extract invoice data",
@@ -739,10 +562,10 @@ def vendor_bill_analyze(request, org_id):
             status=status.HTTP_404_NOT_FOUND
         )
 
-    if bill.status != TallyVendorBill.BillStatus.DRAFT:
+    if bill.process:
         return Response(
-            {'error': 'Bill is not in draft status'},
-            status=status.HTTP_400_BAD_REQUEST
+            {'data': 'Bill is already Processed'},
+            status=status.HTTP_200_OK
         )
 
     try:
@@ -761,333 +584,6 @@ def vendor_bill_analyze(request, org_id):
         logger.error(f"Bill analysis failed: {str(e)}")
         return Response(
             {'error': f'Analysis failed: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-
-@extend_schema(
-    summary="Verify Vendor Bill",
-    description="Verify analyzed vendor bill data and mark as verified",
-    request=BillVerificationSerializer,
-    responses={200: TallyVendorAnalyzedBillSerializer},
-    tags=['Tally Vendor Bills']
-)
-@api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
-def vendor_bill_verify(request, org_id):
-    """Verify analyzed vendor bill"""
-    serializer = BillVerificationSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    bill_id = request.data.get('bill_id')
-    organization = get_organization_from_request(request, org_id)
-
-    try:
-        bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
-        analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill)
-    except (TallyVendorBill.DoesNotExist, TallyVendorAnalyzedBill.DoesNotExist):
-        return Response(
-            {'error': 'Bill or analyzed data not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-
-    if bill.status != TallyVendorBill.BillStatus.ANALYSED:
-        return Response(
-            {'error': 'Bill is not in analyzed status'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    try:
-        verified_bill = verify_bill_data(analyzed_bill, serializer.validated_data, organization)
-
-        # Update bill status
-        bill.status = TallyVendorBill.BillStatus.VERIFIED
-        bill.save(update_fields=['status'])
-
-        response_serializer = TallyVendorAnalyzedBillSerializer(verified_bill)
-        return Response(response_serializer.data, status=status.HTTP_200_OK)
-
-    except Exception as e:
-        logger.error(f"Bill verification failed: {str(e)}")
-        return Response(
-            {'error': f'Verification failed: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-
-def verify_bill_data(analyzed_bill, verification_data, organization):
-    """Verify and update bill data"""
-    with transaction.atomic():
-        # Update bill fields
-        if 'vendor_id' in verification_data and verification_data['vendor_id']:
-            try:
-                analyzed_bill.vendor = Ledger.objects.get(
-                    id=verification_data['vendor_id'],
-                    organization=organization
-                )
-            except Ledger.DoesNotExist:
-                pass
-
-        # Update basic fields
-        for field in ['bill_no', 'bill_date', 'note', 'igst', 'cgst', 'sgst']:
-            if field in verification_data:
-                setattr(analyzed_bill, field, verification_data[field])
-
-        # Update tax ledgers
-        tax_fields = ['igst_taxes_id', 'cgst_taxes_id', 'sgst_taxes_id']
-        for tax_field in tax_fields:
-            if tax_field in verification_data and verification_data[tax_field]:
-                ledger_field = tax_field.replace('_id', '')
-                try:
-                    tax_ledger = Ledger.objects.get(
-                        id=verification_data[tax_field],
-                        organization=organization
-                    )
-                    setattr(analyzed_bill, ledger_field, tax_ledger)
-                except Ledger.DoesNotExist:
-                    pass
-
-        analyzed_bill.save()
-
-        # Update products if provided
-        if 'products' in verification_data:
-            update_products(analyzed_bill, verification_data['products'], organization)
-
-        # Validate tax calculations
-        validate_tax_calculations(analyzed_bill)
-
-        return analyzed_bill
-
-
-def update_products(analyzed_bill, products_data, organization):
-    """Update analyzed products"""
-    for product_data in products_data:
-        try:
-            product = TallyVendorAnalyzedProduct.objects.get(
-                id=product_data['id'],
-                vendor_bill_analyzed=analyzed_bill
-            )
-
-            # Update product fields
-            for field in ['item_name', 'item_details', 'price', 'quantity', 'amount', 'product_gst']:
-                if field in product_data:
-                    setattr(product, field, product_data[field])
-
-            # Update taxes ledger
-            if 'taxes_id' in product_data and product_data['taxes_id']:
-                try:
-                    product.taxes = Ledger.objects.get(
-                        id=product_data['taxes_id'],
-                        organization=organization
-                    )
-                except Ledger.DoesNotExist:
-                    pass
-
-            # Calculate GST amounts based on product_gst and bill's gst_type
-            if 'product_gst' in product_data:
-                calculate_product_gst(product, analyzed_bill)
-
-            product.save()
-
-        except TallyVendorAnalyzedProduct.DoesNotExist:
-            continue
-
-
-def calculate_product_gst(product, analyzed_bill):
-    """Calculate GST amounts for product"""
-    try:
-        if product.product_gst and product.amount:
-            gst_percent = float(product.product_gst.strip('%')) if "%" in product.product_gst else 0
-            gst_amount = (gst_percent / 100) * float(product.amount or 0)
-
-            # Reset GST amounts
-            product.igst = 0
-            product.cgst = 0
-            product.sgst = 0
-
-            if analyzed_bill.gst_type == TallyVendorAnalyzedBill.GSTType.IGST:
-                product.igst = round(gst_amount, 2)
-            elif analyzed_bill.gst_type == TallyVendorAnalyzedBill.GSTType.CGST_SGST:
-                product.cgst = round(gst_amount / 2, 2)
-                product.sgst = round(gst_amount / 2, 2)
-
-    except (ValueError, TypeError) as e:
-        logger.warning(f"GST calculation failed for product {product.id}: {e}")
-
-
-def validate_tax_calculations(analyzed_bill):
-    """Validate that bill taxes match sum of product taxes"""
-    products = analyzed_bill.products.all()
-
-    total_product_igst = sum(p.igst or 0 for p in products)
-    total_product_cgst = sum(p.cgst or 0 for p in products)
-    total_product_sgst = sum(p.sgst or 0 for p in products)
-
-    if analyzed_bill.gst_type == TallyVendorAnalyzedBill.GSTType.IGST:
-        if abs(total_product_igst - (analyzed_bill.igst or 0)) > 0.01:
-            raise Exception(
-                f"IGST mismatch: Product total={total_product_igst}, Bill total={analyzed_bill.igst}"
-            )
-    elif analyzed_bill.gst_type == TallyVendorAnalyzedBill.GSTType.CGST_SGST:
-        if (abs(total_product_cgst - (analyzed_bill.cgst or 0)) > 0.01 or
-                abs(total_product_sgst - (analyzed_bill.sgst or 0)) > 0.01):
-            raise Exception(
-                f"CGST/SGST mismatch: Product CGST/SGST={total_product_cgst}/{total_product_sgst}, "
-                f"Bill CGST/SGST={analyzed_bill.cgst}/{analyzed_bill.sgst}"
-            )
-
-
-@extend_schema(
-    summary="Sync Vendor Bill",
-    description="Sync verified vendor bill with Tally system",
-    request=BillSyncRequestSerializer,
-    responses={200: BillSyncResponseSerializer},
-    tags=['Tally Vendor Bills']
-)
-@api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
-def vendor_bill_sync(request, org_id):
-    """Sync verified vendor bill with Tally"""
-    serializer = BillSyncRequestSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    bill_id = serializer.validated_data['bill_id']
-    organization = get_organization_from_request(request, org_id)
-
-    try:
-        bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
-        analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill)
-    except (TallyVendorBill.DoesNotExist, TallyVendorAnalyzedBill.DoesNotExist):
-        return Response(
-            {'error': 'Bill or analyzed data not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-
-    if bill.status != TallyVendorBill.BillStatus.VERIFIED:
-        return Response(
-            {'error': 'Bill is not verified'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    try:
-        sync_data = prepare_sync_data(analyzed_bill, organization)
-
-        # Update bill status to synced
-        bill.status = TallyVendorBill.BillStatus.SYNCED
-        bill.save(update_fields=['status'])
-
-        return Response(sync_data, status=status.HTTP_200_OK)
-
-    except Exception as e:
-        logger.error(f"Bill sync failed: {str(e)}")
-        return Response(
-            {'error': f'Sync failed: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-
-@extend_schema(
-    summary="Get All Synced Bills",
-    description="Get all synced bills with their products for the organization",
-    responses={200: BillSyncResponseSerializer(many=True)},
-    tags=['Tally TCP']
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
-def vendor_bills_sync_list(request, org_id):
-    """Get all synced bills with their products"""
-    organization = get_organization_from_request(request, org_id)
-
-    if not organization:
-        return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    # Get all analyzed bills where the main bill status is "Synced"
-    analyzed_bills = TallyVendorAnalyzedBill.objects.filter(
-        organization=organization,
-        selected_bill__status=TallyVendorBill.BillStatus.SYNCED
-    ).select_related(
-        'selected_bill', 'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes'
-    ).prefetch_related(
-        'products__taxes'
-    ).order_by('-created_at')
-
-    # Convert each analyzed bill to the new sync format and extract just the data portion
-    bills_data = []
-    for analyzed_bill in analyzed_bills:
-        sync_data = prepare_sync_data(analyzed_bill, organization)
-        # Extract the data portion (remove the wrapper)
-        bills_data.append(sync_data["data"])
-
-    # Return all bills under a single "data" key
-    return Response({
-        "data": bills_data
-    }, status=status.HTTP_200_OK)
-
-
-@extend_schema(
-    summary="Sync Bill to External System",
-    description="Send bill data to external system via POST request",
-    request=BillSyncRequestSerializer,
-    responses={
-        200: OpenApiResponse(description="Bill synced successfully"),
-        400: OpenApiResponse(description="Sync failed")
-    },
-    tags=['Tally TCP']
-)
-@api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
-def vendor_bill_sync_external(request, org_id):
-    """Sync bill to external system"""
-    serializer = BillSyncRequestSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    bill_id = serializer.validated_data['bill_id']
-    organization = get_organization_from_request(request, org_id)
-
-    try:
-        bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
-        analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill)
-    except (TallyVendorBill.DoesNotExist, TallyVendorAnalyzedBill.DoesNotExist):
-        return Response(
-            {'error': 'Bill or analyzed data not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-
-    if bill.status != TallyVendorBill.BillStatus.VERIFIED:
-        return Response(
-            {'error': 'Bill must be verified before syncing'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    try:
-        # Prepare the sync payload
-        sync_payload = prepare_sync_data(analyzed_bill, organization)
-
-        # Log the sync attempt
-        logger.info(f"Syncing bill {bill_id} for organization {organization.id}")
-
-        # Update bill status to synced
-        bill.status = TallyVendorBill.BillStatus.SYNCED
-        bill.save(update_fields=['status'])
-
-        # Return success response with the payload that would be sent
-        return Response({
-            'message': 'Bill synced successfully',
-            'bill_id': str(bill_id),
-            'status': 'Synced',
-            'sync_data': sync_payload
-        }, status=status.HTTP_200_OK)
-
-    except Exception as e:
-        logger.error(f"Bill sync failed for bill {bill_id}: {str(e)}")
-        return Response(
-            {'error': f'Sync failed: {str(e)}'},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -1153,7 +649,7 @@ def process_existing_analysis_data(bill, existing_data, organization):
             )
 
             # Save without calling clean() to skip validation
-            analyzed_bill.save(force_insert=True)
+            analyzed_bill.save(skip_validation=True)
 
             # Create analyzed products with proper GST calculation
             product_instances = []
@@ -1241,3 +737,793 @@ def process_existing_analysis_data(bill, existing_data, organization):
         logger.error(f"Error processing existing analysis data: {str(e)}")
         raise Exception(f"Error processing existing analysis data: {str(e)}")
 
+
+# ============================================================================
+# Get Vendor Bill Detail
+# ✅
+@extend_schema(
+    summary="Get Bill Detail",
+    description="Get detailed information about a specific vendor bill including analysis data",
+    responses={200: TallyVendorBillSerializer},
+    tags=['Tally Vendor Bills']
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def vendor_bill_detail(request, org_id, bill_id):
+    """Get vendor bill detail including analysis data"""
+    organization = get_organization_from_request(request, org_id)
+    if not organization:
+        return Response(
+            {'error': 'Organization not found'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        # Fetch the TallyVendorBill
+        bill = TallyVendorBill.objects.get(
+            id=bill_id,
+            organization=organization
+        )
+
+        # Get the related TallyVendorAnalyzedBill if it exists
+        try:
+            analyzed_bill = TallyVendorAnalyzedBill.objects.select_related(
+                'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes'
+            ).prefetch_related(
+                'products__taxes'
+            ).get(selected_bill=bill, organization=organization)
+
+            # Get vendor ledger
+            vendor_ledger = analyzed_bill.vendor
+
+            # Get analyzed bill products
+            analyzed_bill_products = analyzed_bill.products.all()
+
+            # Format bill date
+            bill_date_str = analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
+
+            # Get organization name as team_slug (you might need to adjust this based on your Organization model)
+            team_slug = organization.name if hasattr(organization, 'name') else str(organization.id)
+
+            # Structure the analyzed data in the requested format
+            bill_data = {
+                "vendor": {
+                    "master_id": vendor_ledger.master_id if vendor_ledger else "No Ledger",
+                    "name": vendor_ledger.name if vendor_ledger else "No Ledger",
+                    "gst_in": vendor_ledger.gst_in if vendor_ledger else "No Ledger",
+                    "company": vendor_ledger.company if vendor_ledger else "No Ledger",
+                },
+                "bill_details": {
+                    "bill_number": analyzed_bill.bill_no,
+                    "date": bill_date_str,
+                    "total_amount": float(analyzed_bill.total or 0),
+                    "company_id": team_slug,
+                },
+                "taxes": {
+                    "igst": {
+                        "amount": float(analyzed_bill.igst or 0),
+                        "ledger": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "No Tax Ledger",
+                    },
+                    "cgst": {
+                        "amount": float(analyzed_bill.cgst or 0),
+                        "ledger": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "No Tax Ledger",
+                    },
+                    "sgst": {
+                        "amount": float(analyzed_bill.sgst or 0),
+                        "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
+                    }
+                },
+                "line_items": [
+                    {
+                        "item_name": item.item_name,
+                        "item_details": item.item_details,
+                        "tax_ledger": str(item.taxes) if item.taxes else "No Tax Ledger",
+                        "price": float(item.price or 0),
+                        "quantity": int(item.quantity or 0),
+                        "amount": float(item.amount or 0),
+                        "gst": item.product_gst,
+                        "igst": float(item.igst or 0),
+                        "cgst": float(item.cgst or 0),
+                        "sgst": float(item.sgst or 0),
+                    }
+                    for item in analyzed_bill_products
+                ],
+            }
+
+            # Include the base bill information
+            bill_serializer = TallyVendorBillSerializer(bill, context={'request': request})
+
+            response_data = {
+                "bill": bill_serializer.data,
+                "analyzed_data": bill_data
+            }
+
+            return Response(response_data)
+
+        except TallyVendorAnalyzedBill.DoesNotExist:
+            # If no analyzed bill exists, return just the base bill info
+            bill_serializer = TallyVendorBillSerializer(bill, context={'request': request})
+            return Response({
+                "bill": bill_serializer.data,
+                "analyzed_data": None,
+                "message": "Bill has not been analyzed yet"
+            })
+
+    except TallyVendorBill.DoesNotExist:
+        return Response(
+            {'error': 'Bill not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+
+# ===========================================================================
+# Bill Verify View
+# ✅
+@extend_schema(
+    summary="Verify Vendor Bill",
+    description="Verify analyzed vendor bill data and mark as verified",
+    request=BillVerificationSerializer,
+    responses={200: TallyVendorAnalyzedBillSerializer},
+    tags=['Tally Vendor Bills']
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def vendor_bill_verify(request, org_id):
+    """Verify analyzed vendor bill with user modifications"""
+    bill_id = request.data.get('bill_id')
+    analyzed_data = request.data.get('analyzed_data')  # This will contain the modified structure
+
+    organization = get_organization_from_request(request, org_id)
+    if not organization:
+        return Response(
+            {'error': 'Organization not found'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    if not bill_id:
+        return Response(
+            {'error': 'bill_id is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
+        analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill)
+    except (TallyVendorBill.DoesNotExist, TallyVendorAnalyzedBill.DoesNotExist):
+        return Response(
+            {'error': 'Bill or analyzed data not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    if bill.status != TallyVendorBill.BillStatus.ANALYSED:
+        return Response(
+            {'error': 'Bill is not in analyzed status'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        # Update the analyzed bill with user modifications
+        verified_bill = update_analyzed_bill_data(analyzed_bill, analyzed_data, organization)
+
+        # Update bill status to verified
+        bill.status = TallyVendorBill.BillStatus.VERIFIED
+        bill.save(update_fields=['status'])
+
+        # Return the updated data in the same structured format
+        response_data = get_structured_bill_data(verified_bill, organization)
+
+        return Response({
+            "message": "Bill verified successfully",
+            "analyzed_data": response_data
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Bill verification failed: {str(e)}")
+        return Response(
+            {'error': f'Verification failed: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+
+def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
+    """Update analyzed bill with user modifications"""
+
+    if not analyzed_data:
+        return analyzed_bill
+
+    with transaction.atomic():
+        # Update vendor information
+        vendor_data = analyzed_data.get('vendor', {})
+        if vendor_data and vendor_data.get('name') != "No Ledger":
+            vendor_name = vendor_data.get('name')
+            if vendor_name:
+                # Try to find existing vendor or create if needed
+                vendor = find_or_create_vendor_ledger(vendor_name, vendor_data, organization)
+                if vendor:
+                    analyzed_bill.vendor = vendor
+
+        # Update bill details
+        bill_details = analyzed_data.get('bill_details', {})
+        if bill_details:
+            if 'bill_number' in bill_details:
+                analyzed_bill.bill_no = bill_details['bill_number']
+            if 'date' in bill_details:
+                # Parse date string (format: "08-03-2021")
+                bill_date = parse_bill_date(bill_details['date'])
+                if bill_date:
+                    analyzed_bill.bill_date = bill_date
+            if 'total_amount' in bill_details:
+                analyzed_bill.total = round(float(bill_details['total_amount']), 2)
+
+        # Update tax information
+        taxes_data = analyzed_data.get('taxes', {})
+        if taxes_data:
+            # Update tax amounts with proper rounding to 2 decimal places
+            igst_data = taxes_data.get('igst', {})
+            if 'amount' in igst_data:
+                analyzed_bill.igst = round(float(igst_data['amount']), 2)
+            if 'ledger' in igst_data and igst_data['ledger'] != "No Tax Ledger":
+                igst_ledger = find_or_create_tax_ledger(igst_data['ledger'], 'IGST', organization)
+                if igst_ledger:
+                    analyzed_bill.igst_taxes = igst_ledger
+
+            cgst_data = taxes_data.get('cgst', {})
+            if 'amount' in cgst_data:
+                analyzed_bill.cgst = round(float(cgst_data['amount']), 2)
+            if 'ledger' in cgst_data and cgst_data['ledger'] != "No Tax Ledger":
+                cgst_ledger = find_or_create_tax_ledger(cgst_data['ledger'], 'CGST', organization)
+                if cgst_ledger:
+                    analyzed_bill.cgst_taxes = cgst_ledger
+
+            sgst_data = taxes_data.get('sgst', {})
+            if 'amount' in sgst_data:
+                analyzed_bill.sgst = round(float(sgst_data['amount']), 2)
+            if 'ledger' in sgst_data and sgst_data['ledger'] != "No Tax Ledger":
+                sgst_ledger = find_or_create_tax_ledger(sgst_data['ledger'], 'SGST', organization)
+                if sgst_ledger:
+                    analyzed_bill.sgst_taxes = sgst_ledger
+
+        # Determine GST type based on updated amounts
+        if analyzed_bill.igst and analyzed_bill.igst > 0:
+            analyzed_bill.gst_type = TallyVendorAnalyzedBill.GSTType.IGST
+        elif (analyzed_bill.cgst and analyzed_bill.cgst > 0) or (analyzed_bill.sgst and analyzed_bill.sgst > 0):
+            analyzed_bill.gst_type = TallyVendorAnalyzedBill.GSTType.CGST_SGST
+        else:
+            analyzed_bill.gst_type = TallyVendorAnalyzedBill.GSTType.UNKNOWN
+
+        # Save the analyzed bill
+        analyzed_bill.save(skip_validation=True)
+
+        # Update line items (products)
+        line_items = analyzed_data.get('line_items', [])
+        if line_items:
+            update_analyzed_products(analyzed_bill, line_items, organization)
+
+        return analyzed_bill
+
+
+def find_or_create_vendor_ledger(vendor_name, vendor_data, organization):
+    """Find existing vendor ledger or create new one using TallyConfig"""
+    try:
+        # First try to find exact match
+        vendor = Ledger.objects.filter(
+            name__iexact=vendor_name.strip(),
+            organization=organization
+        ).first()
+
+        if vendor:
+            # Update vendor details if provided
+            if vendor_data.get('master_id') and vendor_data['master_id'] != "No Ledger":
+                vendor.master_id = vendor_data['master_id']
+            if vendor_data.get('gst_in') and vendor_data['gst_in'] != "No Ledger":
+                vendor.gst_in = vendor_data['gst_in']
+            if vendor_data.get('company') and vendor_data['company'] != "No Ledger":
+                vendor.company = vendor_data['company']
+            vendor.save()
+            return vendor
+
+        # Get TallyConfig for the organization
+        tally_config = TallyConfig.objects.filter(organization=organization).first()
+
+        if not tally_config:
+            # Fallback: try to find or create default parent ledger
+            try:
+                parent_ledger = ParentLedger.objects.get(
+                    parent="Sundry Creditors",
+                    organization=organization
+                )
+            except ParentLedger.DoesNotExist:
+                parent_ledger = ParentLedger.objects.create(
+                    parent="Sundry Creditors",
+                    organization=organization
+                )
+        else:
+            # Use first configured vendor parent ledger or create default
+            vendor_parent_ledgers = tally_config.vendor_parents.all()
+            if vendor_parent_ledgers.exists():
+                parent_ledger = vendor_parent_ledgers.first()
+            else:
+                # Create default if no vendor parents configured
+                try:
+                    parent_ledger = ParentLedger.objects.get(
+                        parent="Sundry Creditors",
+                        organization=organization
+                    )
+                except ParentLedger.DoesNotExist:
+                    parent_ledger = ParentLedger.objects.create(
+                        parent="Sundry Creditors",
+                        organization=organization
+                    )
+
+        # Create new vendor ledger
+        vendor = Ledger.objects.create(
+            name=vendor_name.strip(),
+            parent=parent_ledger,
+            master_id=vendor_data.get('master_id') if vendor_data.get('master_id') != "No Ledger" else None,
+            gst_in=vendor_data.get('gst_in') if vendor_data.get('gst_in') != "No Ledger" else None,
+            company=vendor_data.get('company') if vendor_data.get('company') != "No Ledger" else None,
+            organization=organization
+        )
+        return vendor
+
+    except Exception as e:
+        logger.error(f"Error finding/creating vendor ledger: {str(e)}")
+        return None
+
+
+def find_or_create_tax_ledger(ledger_name, tax_type, organization):
+    """Find existing tax ledger or create new one using TallyConfig"""
+    try:
+        # First try to find exact match
+        tax_ledger = Ledger.objects.filter(
+            name__iexact=ledger_name.strip(),
+            organization=organization
+        ).first()
+
+        if tax_ledger:
+            return tax_ledger
+
+        # Get TallyConfig for the organization
+        tally_config = TallyConfig.objects.filter(organization=organization).first()
+
+        if not tally_config:
+            # Fallback to default "Duties & Taxes"
+            try:
+                parent_ledger = ParentLedger.objects.get(
+                    parent="Duties & Taxes",
+                    organization=organization
+                )
+            except ParentLedger.DoesNotExist:
+                parent_ledger = ParentLedger.objects.create(
+                    parent="Duties & Taxes",
+                    organization=organization
+                )
+        else:
+            # Use configured tax parent ledgers based on tax type
+            if tax_type == 'IGST':
+                tax_parent_ledgers = tally_config.igst_parents.all()
+            elif tax_type == 'CGST':
+                tax_parent_ledgers = tally_config.cgst_parents.all()
+            elif tax_type == 'SGST':
+                tax_parent_ledgers = tally_config.sgst_parents.all()
+            else:
+                # For Product Tax or other types, use any available tax parent
+                tax_parent_ledgers = (tally_config.igst_parents.all() |
+                                    tally_config.cgst_parents.all() |
+                                    tally_config.sgst_parents.all())
+
+            if tax_parent_ledgers.exists():
+                parent_ledger = tax_parent_ledgers.first()
+            else:
+                # Create default if no tax parents configured
+                try:
+                    parent_ledger = ParentLedger.objects.get(
+                        parent="Duties & Taxes",
+                        organization=organization
+                    )
+                except ParentLedger.DoesNotExist:
+                    parent_ledger = ParentLedger.objects.create(
+                        parent="Duties & Taxes",
+                        organization=organization
+                    )
+
+        # Create new tax ledger
+        tax_ledger = Ledger.objects.create(
+            name=ledger_name.strip(),
+            parent=parent_ledger,
+            organization=organization
+        )
+        return tax_ledger
+
+    except Exception as e:
+        logger.error(f"Error finding/creating tax ledger: {str(e)}")
+        return None
+
+
+def update_analyzed_products(analyzed_bill, line_items, organization):
+    """Update existing products and create new ones"""
+
+    # Get existing products
+    existing_products = {str(p.id): p for p in analyzed_bill.products.all()}
+    updated_product_ids = set()
+
+    for item_data in line_items:
+        product_id = item_data.get('id')  # This might be provided for existing products
+
+        if product_id and str(product_id) in existing_products:
+            # Update existing product
+            product = existing_products[str(product_id)]
+            updated_product_ids.add(str(product_id))
+        else:
+            # Create new product
+            product = TallyVendorAnalyzedProduct(
+                vendor_bill_analyzed=analyzed_bill,
+                organization=organization
+            )
+
+        # Update product fields
+        if 'item_name' in item_data:
+            product.item_name = item_data['item_name']
+        if 'item_details' in item_data:
+            product.item_details = item_data['item_details']
+        if 'price' in item_data:
+            product.price = item_data['price']
+        if 'quantity' in item_data:
+            product.quantity = item_data['quantity']
+        if 'amount' in item_data:
+            product.amount = item_data['amount']
+        if 'gst' in item_data:
+            product.product_gst = item_data['gst']
+        if 'igst' in item_data:
+            product.igst = item_data['igst']
+        if 'cgst' in item_data:
+            product.cgst = item_data['cgst']
+        if 'sgst' in item_data:
+            product.sgst = item_data['sgst']
+
+        # Handle tax ledger
+        if 'tax_ledger' in item_data and item_data['tax_ledger'] != "No Tax Ledger":
+            tax_ledger = find_or_create_tax_ledger(item_data['tax_ledger'], 'Product Tax', organization)
+            if tax_ledger:
+                product.taxes = tax_ledger
+
+        product.save()
+
+
+def get_structured_bill_data(analyzed_bill, organization):
+    """Get structured bill data in the same format as detail view"""
+    vendor_ledger = analyzed_bill.vendor
+    analyzed_bill_products = analyzed_bill.products.all()
+    bill_date_str = analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
+    team_slug = organization.name if hasattr(organization, 'name') else str(organization.id)
+
+    return {
+        "vendor": {
+            "master_id": vendor_ledger.master_id if vendor_ledger and vendor_ledger.master_id else "No Ledger",
+            "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
+            "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
+            "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "No Ledger",
+        },
+        "bill_details": {
+            "bill_number": analyzed_bill.bill_no,
+            "date": bill_date_str,
+            "total_amount": float(analyzed_bill.total or 0),
+            "company_id": team_slug,
+        },
+        "taxes": {
+            "igst": {
+                "amount": float(analyzed_bill.igst or 0),
+                "ledger": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "No Tax Ledger",
+            },
+            "cgst": {
+                "amount": float(analyzed_bill.cgst or 0),
+                "ledger": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "No Tax Ledger",
+            },
+            "sgst": {
+                "amount": float(analyzed_bill.sgst or 0),
+                "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
+            }
+        },
+        "line_items": [
+            {
+                "id": str(item.id),  # Include ID for future updates
+                "item_name": item.item_name,
+                "item_details": item.item_details,
+                "tax_ledger": str(item.taxes) if item.taxes else "No Tax Ledger",
+                "price": float(item.price or 0),
+                "quantity": int(item.quantity or 0),
+                "amount": float(item.amount or 0),
+                "gst": item.product_gst,
+                "igst": float(item.igst or 0),
+                "cgst": float(item.cgst or 0),
+                "sgst": float(item.sgst or 0),
+            }
+            for item in analyzed_bill_products
+        ],
+    }
+
+
+# ============================================================================
+# Bill Sync View
+# ✅
+@extend_schema(
+    summary="Sync Vendor Bill",
+    description="Sync verified vendor bill with Tally system",
+    request=BillSyncRequestSerializer,
+    responses={200: BillSyncResponseSerializer},
+    tags=['Tally Vendor Bills']
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def vendor_bill_sync(request, org_id):
+    """Sync verified vendor bill with Tally"""
+    serializer = BillSyncRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    bill_id = serializer.validated_data['bill_id']
+    organization = get_organization_from_request(request, org_id)
+
+    try:
+        bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
+        analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill)
+    except (TallyVendorBill.DoesNotExist, TallyVendorAnalyzedBill.DoesNotExist):
+        return Response(
+            {'error': 'Bill or analyzed data not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    if bill.status != TallyVendorBill.BillStatus.VERIFIED:
+        return Response(
+            {'error': 'Bill is not verified'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        # Get structured bill data in the same format as verify view
+        sync_data = get_structured_bill_data(analyzed_bill, organization)
+
+        # Update bill status to synced
+        bill.status = TallyVendorBill.BillStatus.SYNCED
+        bill.save(update_fields=['status'])
+
+        # Send the payload to vendor_bill_sync_external
+        try:
+            # Create a new request-like object with the sync data
+            sync_response = vendor_bill_sync_external_handler(sync_data, org_id, organization)
+
+            return Response({
+                "message": "Bill synced successfully",
+                "bill_id": str(bill_id),
+                "status": "Synced",
+                "data": sync_response
+            }, status=status.HTTP_200_OK)
+
+        except Exception as sync_error:
+            logger.warning(f"External sync failed but bill status updated: {str(sync_error)}")
+            return Response({
+                "message": "Bill synced successfully but external sync failed",
+                "bill_id": str(bill_id),
+                "status": "Synced",
+                "sync_data": sync_data,
+                "external_sync_error": str(sync_error)
+            }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Bill sync failed: {str(e)}")
+        return Response(
+            {'error': f'Sync failed: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+
+def vendor_bill_sync_external_handler(sync_data, org_id, organization):
+    """Handle external sync with the provided payload"""
+    try:
+        # Log the sync attempt
+        logger.info(f"External sync handler called for organization {organization.id}")
+        # logger.info(f"Sync data: {json.dumps(sync_data, indent=2)}")
+
+        # Here you can add any external API calls or processing
+        # For now, we'll just return a success response
+        return sync_data
+
+    except Exception as e:
+        logger.error(f"External sync handler failed: {str(e)}")
+        raise Exception(f"External sync failed: {str(e)}")
+
+
+# ============================================================================
+# Delete Vendor Bill
+# ✅
+@extend_schema(
+    summary="Delete Vendor Bill",
+    description="Delete a vendor bill and its associated file",
+    responses={204: None},
+    tags=['Tally Vendor Bills']
+)
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def vendor_bill_delete(request, org_id, bill_id):
+    """Delete vendor bill"""
+    organization = get_organization_from_request(request, org_id)
+    if not organization:
+        return Response(
+            {'error': 'Organization not found'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        bill = TallyVendorBill.objects.get(
+            id=bill_id,
+            organization=organization
+        )
+    except TallyVendorBill.DoesNotExist:
+        return Response(
+            {'error': 'Bill not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    # Delete the file from storage if it exists
+    if bill.file:
+        file_path = os.path.join(settings.MEDIA_ROOT, str(bill.file))
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+    # Delete the bill record from the database
+    bill.delete()
+
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ============================================================================
+# Tally TCP Integration Views
+# ✅
+@extend_schema(
+    summary="Get All Synced Bills",
+    description="Get all synced bills with their products for the organization",
+    responses={200: BillSyncResponseSerializer(many=True)},
+    tags=['Tally TCP']
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def vendor_bills_sync_list(request, org_id):
+    """Get all synced bills with their products"""
+    organization = get_organization_from_request(request, org_id)
+
+    if not organization:
+        return Response(
+            {'error': 'Organization not found'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Get all analyzed bills where the main bill status is "Synced"
+    analyzed_bills = TallyVendorAnalyzedBill.objects.filter(
+        organization=organization,
+        selected_bill__status=TallyVendorBill.BillStatus.SYNCED
+    ).select_related(
+        'selected_bill', 'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes'
+    ).prefetch_related(
+        'products__taxes'
+    ).order_by('-created_at')
+
+    # Convert each analyzed bill to the new sync format and extract just the data portion
+    bills_data = []
+    for analyzed_bill in analyzed_bills:
+        sync_data = prepare_sync_data(analyzed_bill, organization)
+        # Extract the data portion (remove the wrapper)
+        bills_data.append(sync_data["data"])
+
+    # Return all bills under a single "data" key
+    return Response({
+        "data": bills_data
+    }, status=status.HTTP_200_OK)
+
+
+def prepare_sync_data(analyzed_bill, organization):
+    """Prepare bill data for Tally sync using structured format"""
+    vendor_ledger = analyzed_bill.vendor
+    analyzed_bill_products = analyzed_bill.products.all()
+    bill_date_str = analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
+    team_slug = organization.name if hasattr(organization, 'name') else str(organization.id)
+
+    # Use the same structured format as get_structured_bill_data
+    bill_data = {
+        "vendor": {
+            "master_id": vendor_ledger.master_id if vendor_ledger and vendor_ledger.master_id else "No Ledger",
+            "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
+            "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
+            "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "No Ledger",
+        },
+        "bill_details": {
+            "bill_number": analyzed_bill.bill_no,
+            "date": bill_date_str,
+            "total_amount": float(analyzed_bill.total or 0),
+            "company_id": team_slug,
+        },
+        "taxes": {
+            "igst": {
+                "amount": float(analyzed_bill.igst or 0),
+                "ledger": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "No Tax Ledger",
+            },
+            "cgst": {
+                "amount": float(analyzed_bill.cgst or 0),
+                "ledger": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "No Tax Ledger",
+            },
+            "sgst": {
+                "amount": float(analyzed_bill.sgst or 0),
+                "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
+            }
+        },
+        "line_items": [
+            {
+                "id": str(item.id),
+                "item_name": item.item_name,
+                "item_details": item.item_details,
+                "tax_ledger": str(item.taxes) if item.taxes else "No Tax Ledger",
+                "price": float(item.price or 0),
+                "quantity": int(item.quantity or 0),
+                "amount": float(item.amount or 0),
+                "gst": item.product_gst,
+                "igst": float(item.igst or 0),
+                "cgst": float(item.cgst or 0),
+                "sgst": float(item.sgst or 0),
+            }
+            for item in analyzed_bill_products
+        ],
+    }
+
+    return {"data": bill_data}
+
+
+@extend_schema(
+    summary="Sync Bill to External System",
+    description="Accept bill data payload for external system sync",
+    responses={
+        200: OpenApiResponse(description="Payload accepted successfully"),
+        400: OpenApiResponse(description="Invalid payload")
+    },
+    tags=['Tally TCP']
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def vendor_bill_sync_external(request, org_id):
+    """Accept bill payload for external system sync"""
+    organization = get_organization_from_request(request, org_id)
+    if not organization:
+        return Response(
+            {'error': 'Organization not found'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Get the payload from request data
+    payload = request.data
+
+    if not payload:
+        return Response(
+            {'error': 'No payload provided'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        # Log the received payload
+        logger.info(f"External sync received payload for organization {organization.id}")
+        logger.info(f"Payload: {json.dumps(payload, indent=2)}")
+
+        # Here you can process the payload as needed
+        # For now, we'll just acknowledge receipt
+
+        return Response({
+            'message': 'Payload received and processed successfully',
+            'organization_id': str(organization.id),
+            'payload_received': True,
+            'timestamp': datetime.now().isoformat()
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"External sync failed: {str(e)}")
+        return Response(
+            {'error': f'External sync failed: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
