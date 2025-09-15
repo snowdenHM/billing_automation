@@ -1470,38 +1470,52 @@ def vendor_bill_delete(request, org_id, bill_id):
     tags=['Tally TCP']
 )
 @api_view(['GET'])
-# @permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
 def vendor_bills_sync_list(request, org_id):
     """Get all synced bills with their products"""
-    organization = get_organization_from_request(request, org_id)
-
-    if not organization:
-        return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+    print("vendor_bills_sync_list called")
+    # 🔹 Log caller info & headers
+    try:
+        logger.info(
+            "vendor_bills_sync_list called",
+            extra={
+                "path": request.get_full_path(),
+                "method": request.method,
+                "ip": get_client_ip(request),
+                "headers": dict(request.headers),  # DRF >=3.12
+            }
         )
+    except Exception as e:
+        logger.warning(f"Failed to log request headers: {e}")
 
-    # Get all analyzed bills where the main bill status is "Synced"
-    analyzed_bills = TallyVendorAnalyzedBill.objects.filter(
-        organization=organization,
-        selected_bill__status=TallyVendorBill.BillStatus.SYNCED
-    ).select_related(
-        'selected_bill', 'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes'
-    ).prefetch_related(
-        'products__taxes'
-    ).order_by('-created_at')
+    organization = get_organization_from_request(request, org_id)
+    if not organization:
+        return Response({'error': 'Organization not found'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Convert each analyzed bill to the new sync format and extract just the data portion
+    analyzed_bills = (
+        TallyVendorAnalyzedBill.objects.filter(
+            organization=organization,
+            selected_bill__status=TallyVendorBill.BillStatus.SYNCED
+        )
+        .select_related('selected_bill', 'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes')
+        .prefetch_related('products__taxes')
+        .order_by('-created_at')
+    )
+
     bills_data = []
     for analyzed_bill in analyzed_bills:
         sync_data = prepare_sync_data(analyzed_bill, organization)
-        # Extract the data portion (remove the wrapper)
         bills_data.append(sync_data["data"])
 
-    # Return all bills under a single "data" key
-    return Response({
-        "data": bills_data
-    }, status=status.HTTP_200_OK)
+    return Response({"data": bills_data}, status=status.HTTP_200_OK)
+
+
+def get_client_ip(request):
+    """Extract client IP (supports reverse proxy headers)."""
+    x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+    if x_forwarded_for:
+        return x_forwarded_for.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR")
 
 
 def prepare_sync_data(analyzed_bill, organization):
