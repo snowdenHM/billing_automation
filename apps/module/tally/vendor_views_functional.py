@@ -432,7 +432,6 @@ def process_pdf_splitting(pdf_file, organization, file_type):
     return created_bills
 
 
-
 # ============================================================================
 # API Views
 # ✅
@@ -815,6 +814,7 @@ def vendor_bill_detail(request, org_id, bill_id):
                 },
                 "line_items": [
                     {
+                        "item_id" : item.id,
                         "item_name": item.item_name,
                         "item_details": item.item_details,
                         "tax_ledger": str(item.taxes) if item.taxes else "No Tax Ledger",
@@ -857,9 +857,27 @@ def vendor_bill_detail(request, org_id, bill_id):
         )
 
 
-
 # ===========================================================================
 # Bill Verify View
+from decimal import Decimal, InvalidOperation
+
+
+def _to_decimal(val, default="0"):
+    if val is None or val == "":
+        return Decimal(default)
+    try:
+        return Decimal(str(val))
+    except (InvalidOperation, ValueError):
+        return Decimal(default)
+
+
+def _to_int(val, default=0):
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
 # ✅
 @extend_schema(
     summary="Verify Vendor Bill",
@@ -871,49 +889,38 @@ def vendor_bill_detail(request, org_id, bill_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsOrgAdmin])
 def vendor_bill_verify(request, org_id):
-    """Verify analyzed vendor bill with user modifications"""
     bill_id = request.data.get('bill_id')
-    analyzed_data = request.data.get('analyzed_data')  # This will contain the modified structure
+    analyzed_bill_id = request.data.get('analyzed_bill')  # OPTIONAL in your payload
+    analyzed_data = request.data.get('analyzed_data')
 
     organization = get_organization_from_request(request, org_id)
     if not organization:
-        return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({'error': 'Organization not found'}, status=status.HTTP_400_BAD_REQUEST)
 
     if not bill_id:
-        return Response(
-            {'error': 'bill_id is required'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({'error': 'bill_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
-        analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill)
+        analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill, organization=organization)
     except (TallyVendorBill.DoesNotExist, TallyVendorAnalyzedBill.DoesNotExist):
-        return Response(
-            {'error': 'Bill or analyzed data not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
+        return Response({'error': 'Bill or analyzed data not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Optional: ensure client-sent analyzed_bill matches what we resolved from bill
+    if analyzed_bill_id and str(analyzed_bill.id) != str(analyzed_bill_id):
+        return Response({'error': 'analyzed_bill does not belong to the provided bill_id'},
+                        status=status.HTTP_400_BAD_REQUEST)
 
     if bill.status != TallyVendorBill.BillStatus.ANALYSED:
-        return Response(
-            {'error': 'Bill is not in analyzed status'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({'error': 'Bill is not in analyzed status'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        # Update the analyzed bill with user modifications
         verified_bill = update_analyzed_bill_data(analyzed_bill, analyzed_data, organization)
 
-        # Update bill status to verified
         bill.status = TallyVendorBill.BillStatus.VERIFIED
         bill.save(update_fields=['status'])
 
-        # Return the updated data in the same structured format
         response_data = get_structured_bill_data(verified_bill, organization)
-
         return Response({
             "message": "Bill verified successfully",
             "analyzed_data": response_data
@@ -921,10 +928,7 @@ def vendor_bill_verify(request, org_id):
 
     except Exception as e:
         logger.error(f"Bill verification failed: {str(e)}")
-        return Response(
-            {'error': f'Verification failed: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({'error': f'Verification failed: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
@@ -1134,8 +1138,8 @@ def find_or_create_tax_ledger(ledger_name, tax_type, organization):
             else:
                 # For Product Tax or other types, use any available tax parent
                 tax_parent_ledgers = (tally_config.igst_parents.all() |
-                                    tally_config.cgst_parents.all() |
-                                    tally_config.sgst_parents.all())
+                                      tally_config.cgst_parents.all() |
+                                      tally_config.sgst_parents.all())
 
             if tax_parent_ledgers.exists():
                 parent_ledger = tax_parent_ledgers.first()
@@ -1166,109 +1170,112 @@ def find_or_create_tax_ledger(ledger_name, tax_type, organization):
 
 
 def update_analyzed_products(analyzed_bill, line_items, organization):
-    """Update existing products and create new ones - only when necessary"""
+    """
+    Update existing products by item_id, or create new ones if item_id is missing/unknown.
+    Keeps vendor_bill_analyzed FK to analyzed_bill.
+    """
 
-    # Get existing products
-    existing_products = {str(p.id): p for p in analyzed_bill.products.all()}
-    updated_product_ids = set()
+    # Map existing products by UUID string
+    existing = {str(p.id): p for p in analyzed_bill.products.all()}
+    updated_ids = set()
 
-    for item_data in line_items:
-        product_id = item_data.get('id')  # This might be provided for existing products
+    for item in line_items or []:
+        item_id = item.get('item_id')  # NOTE: client sends item_id
 
-        if product_id and str(product_id) in existing_products:
-            # Update existing product only if data has changed
-            product = existing_products[str(product_id)]
-            updated_product_ids.add(str(product_id))
+        if item_id and item_id in existing:
+            product = existing[item_id]
+            updated_ids.add(item_id)
 
-            # Check if any field has actually changed before updating
             needs_update = False
 
-            if 'item_name' in item_data and product.item_name != item_data['item_name']:
-                product.item_name = item_data['item_name']
+            # Fields
+            if 'item_name' in item and product.item_name != item.get('item_name'):
+                product.item_name = item.get('item_name')
                 needs_update = True
-            if 'item_details' in item_data and product.item_details != item_data['item_details']:
-                product.item_details = item_data['item_details']
+            if 'item_details' in item and product.item_details != item.get('item_details'):
+                product.item_details = item.get('item_details')
                 needs_update = True
-            if 'price' in item_data and product.price != item_data['price']:
-                product.price = item_data['price']
+            if 'price' in item:
+                new_price = _to_decimal(item.get('price'), "0")
+                if product.price != new_price:
+                    product.price = new_price
+                    needs_update = True
+            if 'quantity' in item:
+                new_qty = _to_int(item.get('quantity'), 0)
+                if product.quantity != new_qty:
+                    product.quantity = new_qty
+                    needs_update = True
+            if 'amount' in item:
+                new_amount = _to_decimal(item.get('amount'), "0")
+                if product.amount != new_amount:
+                    product.amount = new_amount
+                    needs_update = True
+            if 'gst' in item and product.product_gst != item.get('gst'):
+                product.product_gst = item.get('gst')
                 needs_update = True
-            if 'quantity' in item_data and product.quantity != item_data['quantity']:
-                product.quantity = item_data['quantity']
-                needs_update = True
-            if 'amount' in item_data and product.amount != item_data['amount']:
-                product.amount = item_data['amount']
-                needs_update = True
-            if 'gst' in item_data and product.product_gst != item_data['gst']:
-                product.product_gst = item_data['gst']
-                needs_update = True
-            if 'igst' in item_data and product.igst != item_data['igst']:
-                product.igst = item_data['igst']
-                needs_update = True
-            if 'cgst' in item_data and product.cgst != item_data['cgst']:
-                product.cgst = item_data['cgst']
-                needs_update = True
-            if 'sgst' in item_data and product.sgst != item_data['sgst']:
-                product.sgst = item_data['sgst']
-                needs_update = True
+            if 'igst' in item:
+                new_igst = _to_decimal(item.get('igst'), "0")
+                if product.igst != new_igst:
+                    product.igst = new_igst
+                    needs_update = True
+            if 'cgst' in item:
+                new_cgst = _to_decimal(item.get('cgst'), "0")
+                if product.cgst != new_cgst:
+                    product.cgst = new_cgst
+                    needs_update = True
+            if 'sgst' in item:
+                new_sgst = _to_decimal(item.get('sgst'), "0")
+                if product.sgst != new_sgst:
+                    product.sgst = new_sgst
+                    needs_update = True
 
-            # Handle tax ledger - only update if different
-            if 'tax_ledger' in item_data and item_data['tax_ledger'] != "No Tax Ledger":
-                current_tax_ledger_name = str(product.taxes) if product.taxes else "No Tax Ledger"
-                if current_tax_ledger_name != item_data['tax_ledger']:
-                    tax_ledger = find_or_create_tax_ledger(item_data['tax_ledger'], 'Product Tax', organization)
+            # Tax ledger
+            if 'tax_ledger' in item and item['tax_ledger'] != "No Tax Ledger":
+                current_name = str(product.taxes) if product.taxes else "No Tax Ledger"
+                if current_name != item['tax_ledger']:
+                    tax_ledger = find_or_create_tax_ledger(item['tax_ledger'], 'Product Tax', organization)
                     if tax_ledger:
                         product.taxes = tax_ledger
                         needs_update = True
 
-            # Only save if something actually changed
             if needs_update:
                 product.save()
-                logger.info(f"Updated existing product {product_id}")
+                logger.info(f"Updated product {item_id}")
             else:
-                logger.info(f"No changes needed for product {product_id}")
+                logger.info(f"No changes for product {item_id}")
 
         else:
-            # Create new product only if it doesn't exist
+            # Create new product
             product = TallyVendorAnalyzedProduct(
                 vendor_bill_analyzed=analyzed_bill,
-                organization=organization
+                organization=organization,
+                item_name=item.get('item_name'),
+                item_details=item.get('item_details'),
+                price=_to_decimal(item.get('price'), "0"),
+                quantity=_to_int(item.get('quantity'), 0),
+                amount=_to_decimal(item.get('amount'), "0"),
+                product_gst=item.get('gst'),
+                igst=_to_decimal(item.get('igst'), "0"),
+                cgst=_to_decimal(item.get('cgst'), "0"),
+                sgst=_to_decimal(item.get('sgst'), "0"),
             )
 
-            # Set product fields
-            if 'item_name' in item_data:
-                product.item_name = item_data['item_name']
-            if 'item_details' in item_data:
-                product.item_details = item_data['item_details']
-            if 'price' in item_data:
-                product.price = item_data['price']
-            if 'quantity' in item_data:
-                product.quantity = item_data['quantity']
-            if 'amount' in item_data:
-                product.amount = item_data['amount']
-            if 'gst' in item_data:
-                product.product_gst = item_data['gst']
-            if 'igst' in item_data:
-                product.igst = item_data['igst']
-            if 'cgst' in item_data:
-                product.cgst = item_data['cgst']
-            if 'sgst' in item_data:
-                product.sgst = item_data['sgst']
-
-            # Handle tax ledger
-            if 'tax_ledger' in item_data and item_data['tax_ledger'] != "No Tax Ledger":
-                tax_ledger = find_or_create_tax_ledger(item_data['tax_ledger'], 'Product Tax', organization)
+            if item.get('tax_ledger') and item['tax_ledger'] != "No Tax Ledger":
+                tax_ledger = find_or_create_tax_ledger(item['tax_ledger'], 'Product Tax', organization)
                 if tax_ledger:
                     product.taxes = tax_ledger
 
             product.save()
-            logger.info(f"Created new product for item: {item_data.get('item_name', 'Unknown')}")
+            logger.info(
+                f"Created new product (client item_id: {item.get('item_id')}) name={item.get('item_name') or 'Unknown'}")
 
-    # Log summary
-    logger.info(f"Product update summary: {len(updated_product_ids)} existing products processed, {len(line_items) - len(updated_product_ids)} new products created")
+    logger.info(
+        f"Product update summary: {len(updated_ids)} updated, "
+        f"{len(line_items or []) - len(updated_ids)} created"
+    )
 
 
 def get_structured_bill_data(analyzed_bill, organization):
-    """Get structured bill data in the same format as detail view"""
     vendor_ledger = analyzed_bill.vendor
     analyzed_bill_products = analyzed_bill.products.all()
     bill_date_str = analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
@@ -1303,7 +1310,7 @@ def get_structured_bill_data(analyzed_bill, organization):
         },
         "line_items": [
             {
-                "id": str(item.id),  # Include ID for future updates
+                "item_id": str(item.id),  # <-- return item_id for future PATCHes
                 "item_name": item.item_name,
                 "item_details": item.item_details,
                 "tax_ledger": str(item.taxes) if item.taxes else "No Tax Ledger",
@@ -1463,7 +1470,7 @@ def vendor_bill_delete(request, org_id, bill_id):
     tags=['Tally TCP']
 )
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+# @permission_classes([IsAuthenticated, IsOrgAdmin])
 def vendor_bills_sync_list(request, org_id):
     """Get all synced bills with their products"""
     organization = get_organization_from_request(request, org_id)
