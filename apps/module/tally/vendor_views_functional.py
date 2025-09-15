@@ -835,7 +835,8 @@ def vendor_bill_detail(request, org_id, bill_id):
 
             response_data = {
                 "bill": bill_serializer.data,
-                "analyzed_data": bill_data
+                "analyzed_data": bill_data,
+                "analyzed_bill": analyzed_bill.id
             }
 
             return Response(response_data)
