@@ -1000,15 +1000,15 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                     current_vendor.save()
 
         # Update bill details
-        if 'bill_no' in bill_details:
-            analyzed_bill.bill_no = bill_details['bill_no']
-        if 'bill_date' in bill_details:
+        if 'bill_no' in analyzed_data:
+            analyzed_bill.bill_no = analyzed_data['bill_no']
+        if 'bill_date' in analyzed_data:
             # Parse date string (format: "08-03-2021")
-            bill_date = parse_bill_date(bill_details['bill_date'])
+            bill_date = parse_bill_date(analyzed_data['bill_date'])
             if bill_date:
                 analyzed_bill.bill_date = bill_date
-        if 'total_amount' in bill_details:
-            analyzed_bill.total = round(float(bill_details['total_amount']), 2)
+        if 'total_amount' in analyzed_data:
+            analyzed_bill.total = round(float(analyzed_data['total_amount']), 2)
 
         # Update tax information
         taxes_data = analyzed_data.get('taxes', {})
@@ -1024,7 +1024,6 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                     igst_ledger = find_or_create_tax_ledger(igst_data['ledger'], 'IGST', organization)
                     if igst_ledger:
                         analyzed_bill.igst_taxes = igst_ledger
-
             # Update CGST
             cgst_data = taxes_data.get('cgst', {})
             if 'amount' in cgst_data:
@@ -1036,7 +1035,6 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                     cgst_ledger = find_or_create_tax_ledger(cgst_data['ledger'], 'CGST', organization)
                     if cgst_ledger:
                         analyzed_bill.cgst_taxes = cgst_ledger
-
             # Update SGST
             sgst_data = taxes_data.get('sgst', {})
             if 'amount' in sgst_data:
