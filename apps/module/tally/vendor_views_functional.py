@@ -832,12 +832,7 @@ def vendor_bill_detail(request, org_id, bill_id):
 
             # Structure the analyzed data in the requested format
             bill_data = {
-                "vendor": {
-                    "master_id": vendor_ledger.master_id if vendor_ledger else "No Ledger",
-                    "vendor_name": vendor_ledger.name if vendor_ledger else "No Ledger",
-                    "gst_in": vendor_ledger.gst_in if vendor_ledger else "No Ledger",
-                    "company": vendor_ledger.company if vendor_ledger else "No Ledger",
-                },
+                "vendor_name": vendor_ledger.name if vendor_ledger else "No Ledger",
                 "bill_no": analyzed_bill.bill_no,
                 "bill_date": bill_date_str,
                 "total_amount": float(analyzed_bill.total or 0),
