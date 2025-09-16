@@ -1,6 +1,5 @@
 from django.contrib import admin
 from django.utils.html import format_html
-from django.urls import reverse
 
 from .models import (
     ParentLedger,
@@ -11,7 +10,7 @@ from .models import (
     TallyVendorAnalyzedProduct,
     TallyExpenseBill,
     TallyExpenseAnalyzedBill,
-    TallyExpenseAnalyzedProduct,
+    TallyExpenseAnalyzedProduct, StockItem
 )
 
 
@@ -53,6 +52,7 @@ class TallyConfigAdmin(admin.ModelAdmin):
             obj.chart_of_accounts_parents.count(),
             obj.chart_of_accounts_expense_parents.count(),
         )
+
     display_mappings.short_description = "Mappings"
 
 
@@ -92,6 +92,7 @@ class TallyVendorBillAdmin(admin.ModelAdmin):
         if obj.file:
             return format_html('<a href="{}" target="_blank">View File</a>', obj.file.url)
         return "-"
+
     display_file.short_description = "File"
 
 
@@ -105,6 +106,7 @@ class TallyExpenseBillAdmin(admin.ModelAdmin):
         if obj.file:
             return format_html('<a href="{}" target="_blank">View File</a>', obj.file.url)
         return "-"
+
     display_file.short_description = "File"
 
 
@@ -135,6 +137,7 @@ class TallyExpenseAnalyzedBillAdmin(admin.ModelAdmin):
 
 
 # Register models with the admin site
+admin.site.register(StockItem)
 admin.site.register(ParentLedger, ParentLedgerAdmin)
 admin.site.register(Ledger, LedgerAdmin)
 admin.site.register(TallyConfig, TallyConfigAdmin)

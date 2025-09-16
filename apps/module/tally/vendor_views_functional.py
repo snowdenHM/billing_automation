@@ -834,16 +834,14 @@ def vendor_bill_detail(request, org_id, bill_id):
             bill_data = {
                 "vendor": {
                     "master_id": vendor_ledger.master_id if vendor_ledger else "No Ledger",
-                    "name": vendor_ledger.name if vendor_ledger else "No Ledger",
+                    "vendor_name": vendor_ledger.name if vendor_ledger else "No Ledger",
                     "gst_in": vendor_ledger.gst_in if vendor_ledger else "No Ledger",
                     "company": vendor_ledger.company if vendor_ledger else "No Ledger",
                 },
-                "bill_details": {
-                    "bill_number": analyzed_bill.bill_no,
-                    "date": bill_date_str,
-                    "total_amount": float(analyzed_bill.total or 0),
-                    "company_id": team_slug,
-                },
+                "bill_no": analyzed_bill.bill_no,
+                "bill_date": bill_date_str,
+                "total_amount": float(analyzed_bill.total or 0),
+                "company_id": team_slug,
                 "taxes": {
                     "igst": {
                         "amount": float(analyzed_bill.igst or 0),
@@ -858,7 +856,7 @@ def vendor_bill_detail(request, org_id, bill_id):
                         "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
                     }
                 },
-                "line_items": [
+                "products": [
                     {
                         "item_id": item.id,
                         "item_name": item.item_name,
@@ -867,7 +865,7 @@ def vendor_bill_detail(request, org_id, bill_id):
                         "price": float(item.price or 0),
                         "quantity": int(item.quantity or 0),
                         "amount": float(item.amount or 0),
-                        "gst": item.product_gst,
+                        "product_gst": item.product_gst,
                         "igst": float(item.igst or 0),
                         "cgst": float(item.cgst or 0),
                         "sgst": float(item.sgst or 0),
@@ -986,8 +984,8 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
     with transaction.atomic():
         # Update vendor information
         vendor_data = analyzed_data.get('vendor', {})
-        if vendor_data and vendor_data.get('name') != "No Ledger":
-            vendor_name = vendor_data.get('name')
+        if vendor_data and vendor_data.get('vendor_name') != "No Ledger":
+            vendor_name = vendor_data.get('vendor_name')
             if vendor_name:
                 # Check if vendor is different from current one
                 current_vendor = analyzed_bill.vendor
@@ -1007,17 +1005,15 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                     current_vendor.save()
 
         # Update bill details
-        bill_details = analyzed_data.get('bill_details', {})
-        if bill_details:
-            if 'bill_number' in bill_details:
-                analyzed_bill.bill_no = bill_details['bill_number']
-            if 'date' in bill_details:
-                # Parse date string (format: "08-03-2021")
-                bill_date = parse_bill_date(bill_details['date'])
-                if bill_date:
-                    analyzed_bill.bill_date = bill_date
-            if 'total_amount' in bill_details:
-                analyzed_bill.total = round(float(bill_details['total_amount']), 2)
+        if 'bill_no' in bill_details:
+            analyzed_bill.bill_no = bill_details['bill_no']
+        if 'bill_date' in bill_details:
+            # Parse date string (format: "08-03-2021")
+            bill_date = parse_bill_date(bill_details['bill_date'])
+            if bill_date:
+                analyzed_bill.bill_date = bill_date
+        if 'total_amount' in bill_details:
+            analyzed_bill.total = round(float(bill_details['total_amount']), 2)
 
         # Update tax information
         taxes_data = analyzed_data.get('taxes', {})
@@ -1070,7 +1066,7 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
         analyzed_bill.save(skip_validation=True)
 
         # Update line items (products)
-        line_items = analyzed_data.get('line_items', [])
+        line_items = analyzed_data.get('products', [])
         if line_items:
             update_analyzed_products(analyzed_bill, line_items, organization)
 
@@ -1256,8 +1252,8 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 if product.amount != new_amount:
                     product.amount = new_amount
                     needs_update = True
-            if 'gst' in item and product.product_gst != item.get('gst'):
-                product.product_gst = item.get('gst')
+            if 'product_gst' in item and product.product_gst != item.get('product_gst'):
+                product.product_gst = item.get('product_gst')
                 needs_update = True
             if 'igst' in item:
                 new_igst = _to_decimal(item.get('igst'), "0")
@@ -1354,7 +1350,7 @@ def get_structured_bill_data(analyzed_bill, organization):
                 "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
             }
         },
-        "line_items": [
+        "products": [
             {
                 "item_id": str(item.id),  # <-- return item_id for future PATCHes
                 "item_name": item.item_name,
@@ -1363,7 +1359,7 @@ def get_structured_bill_data(analyzed_bill, organization):
                 "price": float(item.price or 0),
                 "quantity": int(item.quantity or 0),
                 "amount": float(item.amount or 0),
-                "gst": item.product_gst,
+                "product_gst": item.product_gst,
                 "igst": float(item.igst or 0),
                 "cgst": float(item.cgst or 0),
                 "sgst": float(item.sgst or 0),
@@ -1594,18 +1590,11 @@ def prepare_sync_data(analyzed_bill, organization):
 
     # Use the same structured format as get_structured_bill_data
     bill_data = {
-        "vendor": {
-            "master_id": vendor_ledger.master_id if vendor_ledger and vendor_ledger.master_id else "No Ledger",
-            "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
-            "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
-            "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "No Ledger",
-        },
-        "bill_details": {
-            "bill_number": analyzed_bill.bill_no,
-            "date": bill_date_str,
-            "total_amount": float(analyzed_bill.total or 0),
-            "company_id": team_slug,
-        },
+        "vendor_name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
+        "bill_no": analyzed_bill.bill_no,
+        "bill_date": bill_date_str,
+        "total_amount": float(analyzed_bill.total or 0),
+        "company_id": team_slug,
         "taxes": {
             "igst": {
                 "amount": float(analyzed_bill.igst or 0),
@@ -1620,7 +1609,7 @@ def prepare_sync_data(analyzed_bill, organization):
                 "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
             }
         },
-        "line_items": [
+        "products": [
             {
                 "id": str(item.id),
                 "item_name": item.item_name,
@@ -1629,7 +1618,7 @@ def prepare_sync_data(analyzed_bill, organization):
                 "price": float(item.price or 0),
                 "quantity": int(item.quantity or 0),
                 "amount": float(item.amount or 0),
-                "gst": item.product_gst,
+                "product_gst": item.product_gst,
                 "igst": float(item.igst or 0),
                 "cgst": float(item.cgst or 0),
                 "sgst": float(item.sgst or 0),

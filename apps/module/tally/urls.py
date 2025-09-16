@@ -25,7 +25,7 @@ from .vendor_views_functional import (
     vendor_bills_sync_list,
     vendor_bill_sync_external
 )
-from .views import LedgerViewSet, TallyConfigViewSet
+from .views import LedgerViewSet, TallyConfigViewSet, MasterAPIView
 
 # Create router for the remaining viewsets
 router = DefaultRouter()
@@ -39,6 +39,9 @@ urlpatterns = [
         path('', include(router.urls)),
         # Custom ledger endpoints (only GET and POST)
         path('ledgers/', LedgerViewSet.as_view({'get': 'list', 'post': 'create'}), name='ledger-list'),
+
+        # Master API for capturing incoming Tally data
+        path('masters/', MasterAPIView.as_view(), name='master-api'),
 
         # Function-based vendor bill endpoints
         path('vendor-bills/', vendor_bills_list, name='vendor-bills-list'),

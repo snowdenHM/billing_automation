@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from ..models import Ledger, ParentLedger
+from ..models import Ledger, ParentLedger, StockItem
 
 
 class ParentLedgerSerializer(serializers.ModelSerializer):
@@ -54,3 +54,22 @@ class LedgerBulkCreateSerializer(serializers.Serializer):
                     )
 
         return value
+
+
+class StockItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StockItem
+        fields = [
+            'id', 'master_id', 'alter_id', 'name', 'parent', 'unit',
+            'category', 'gst_applicable', 'item_code', 'alias', 'company',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class StockItemBulkCreateSerializer(serializers.Serializer):
+    """
+    Serializer for bulk creation of stock items from Tally data format.
+    Expects: {"STOCKITEM": [{"Name": "...", "Master_Id": "...", ...}, ...]}
+    """
+    STOCKITEM = StockItemSerializer(many=True)

@@ -1,8 +1,11 @@
 import re
+import os
+from datetime import datetime
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, BasePermission
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated, BasePermission, AllowAny
 from rest_framework_api_key.permissions import HasAPIKey
 from django.db import transaction
 from django.shortcuts import get_object_or_404
@@ -12,11 +15,13 @@ from drf_spectacular.openapi import OpenApiTypes
 from apps.organizations.models import Organization
 from apps.common.permissions import IsOrgAdmin
 
-from apps.module.tally.models import Ledger, ParentLedger, TallyConfig
+from apps.module.tally.models import Ledger, ParentLedger, TallyConfig, StockItem
 from apps.module.tally.serializers import (
     LedgerSerializer,
     TallyConfigSerializer,
-    LedgerBulkCreateSerializer
+    LedgerBulkCreateSerializer,
+    StockItemSerializer,
+    StockItemBulkCreateSerializer
 )
 
 
@@ -642,6 +647,339 @@ class LedgerViewSet(viewsets.GenericViewSet):
                 'created_count': len(created_ledgers),
                 'failed_count': len(failed_ledgers)
             }, status=status.HTTP_400_BAD_REQUEST)
+
+
+@extend_schema(tags=['Tally TCP'])
+class MasterAPIView(APIView):
+    """
+    Master API View for processing incoming data from Tally
+    Processes STOCKITEM data and saves directly to database
+    OPEN FOR TESTING - NO AUTHENTICATION REQUIRED
+    """
+    permission_classes = [AllowAny]
+
+    def get_organization(self):
+        """Get organization from URL UUID parameter or API key (similar to LedgerViewSet)"""
+        # Extract organization UUID from URL
+        org_id = self.kwargs.get('org_id')
+        if org_id:
+            try:
+                return Organization.objects.get(id=org_id)
+            except Organization.DoesNotExist:
+                print(f"Organization with ID {org_id} not found")
+                return None
+
+        # If using API key, get organization from API key (optional for testing)
+        if hasattr(self.request, 'auth') and self.request.auth:
+            from apps.organizations.models import OrganizationAPIKey
+            try:
+                org_api_key = OrganizationAPIKey.objects.get(api_key=self.request.auth)
+                return org_api_key.organization
+            except OrganizationAPIKey.DoesNotExist:
+                pass
+
+        # If using request.organization from permission class (optional for testing)
+        if hasattr(self.request, 'organization'):
+            return self.request.organization
+
+        # Fallback to user's first organization (optional for testing)
+        if hasattr(self.request.user, 'memberships') and self.request.user.is_authenticated:
+            membership = self.request.user.memberships.first()
+            if membership:
+                return membership.organization
+
+        print("No organization found, operating in test mode")
+        return None
+
+    def dispatch(self, request, *args, **kwargs):
+        """Intercept all incoming calls for logging and debugging"""
+        # Log the incoming request
+        print(f"MasterAPIView - {request.method} {request.get_full_path()}")
+        print(f"Request Headers: {dict(request.headers)}")
+        print(f"Request Data: {request.data if hasattr(request, 'data') else 'No data'}")
+
+        # Get organization info for debugging
+        try:
+            org = self.get_organization()
+            print(f"Organization: {org.name if org else 'TEST MODE - No Org'} (ID: {org.id if org else 'None'})")
+        except Exception as e:
+            print(f"Error getting organization: {str(e)}")
+
+        return super().dispatch(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Fetch Master Data / Organization Info",
+        description="Returns basic organization details and optionally stock items for testing.",
+        responses={200: {'description': 'Data retrieved successfully'}}
+    )
+    def get(self, request, *args, **kwargs):
+        """
+        GET endpoint for testing / retrieving data.
+        Returns organization info and (optionally) stock items.
+        """
+        try:
+            organization = self.get_organization()
+            if not organization:
+                organization = Organization.objects.first()
+
+            if not organization:
+                return Response({
+                    'success': False,
+                    'error': 'No organization found in system'
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # Query stock items for this org (limit for safety)
+            stock_items_qs = StockItem.objects.filter(organization=organization).all()
+            stock_items_data = [
+                {
+                    'id': str(item.id),
+                    'master_id': item.master_id,
+                    'alter_id': item.alter_id,
+                    'name': item.name,
+                    'parent': item.parent,
+                    'unit': item.unit,
+                    'category': item.category,
+                    'gst_applicable': item.gst_applicable,
+                    'item_code': item.item_code,
+                    'alias': item.alias,
+                    'company': item.company
+                }
+                for item in stock_items_qs
+            ]
+
+            return Response({
+                'success': True,
+                'message': 'Data retrieved successfully',
+                'organization': {
+                    'id': str(organization.id),
+                    'name': organization.name
+                },
+                'stock_items': stock_items_data,
+                'stock_items_count': stock_items_qs.count()
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            print(f"Error in MasterAPIView GET: {str(e)}")
+            return Response({
+                'success': False,
+                'error': f'Failed to retrieve data: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @extend_schema(
+        summary="Process Master Data from Tally",
+        description="Receives raw data from Tally and processes it directly to database. Currently supports STOCKITEM data processing.",
+        responses={200: {'description': 'Data processed successfully'}},
+    )
+    def post(self, request, *args, **kwargs):
+        """
+        Process incoming raw data from Tally and save to database
+        Organization-scoped data processing
+        """
+        try:
+            # Get organization
+            organization = self.get_organization()
+            if not organization:
+                print("No organization found, using first available organization")
+                try:
+                    organization = Organization.objects.first()
+                    if not organization:
+                        print("No organizations exist, this might cause issues")
+                        # Continue without organization for testing
+                        organization = None
+                    else:
+                        print(f"Using organization: {organization.name} (ID: {organization.id})")
+                except Exception as e:
+                    print(f"Error getting organization: {str(e)}")
+                    organization = None
+
+            # Get raw request body
+            raw_data = request.body.decode('utf-8')
+
+            # Log incoming request details
+            print(f"MasterAPIView - POST request received")
+            print(f"Organization: {organization.name if organization else 'TEST MODE'}")
+            print(f"Raw Data Length: {len(raw_data)} characters")
+
+            # Parse JSON data for processing
+            try:
+                import json
+                parsed_data = json.loads(raw_data) if raw_data else {}
+                data_keys = list(parsed_data.keys()) if isinstance(parsed_data, dict) else []
+                print(f"JSON Data Keys: {data_keys}")
+
+                # Log data structure info
+                if isinstance(parsed_data, dict):
+                    print(f"Data structure: Dictionary with {len(parsed_data)} keys")
+                elif isinstance(parsed_data, list):
+                    print(f"Data structure: Array with {len(parsed_data)} items")
+                else:
+                    print(f"Data structure: {type(parsed_data)}")
+
+                # Process STOCKITEM data if present
+                stockitem_processing_result = None
+                if isinstance(parsed_data, dict) and 'STOCKITEM' in parsed_data:
+                    stockitem_processing_result = self.process_stockitem_data(parsed_data['STOCKITEM'], organization)
+
+            except json.JSONDecodeError:
+                print("Raw data is not valid JSON")
+                return Response({
+                    'error': 'Invalid JSON data provided',
+                    'success': False
+                }, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as e:
+                print(f"Error parsing data: {str(e)}")
+                return Response({
+                    'error': f'Error processing data: {str(e)}',
+                    'success': False
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # Prepare response data
+            response_data = {
+                'success': True,
+                'message': 'Data processed successfully',
+                'organization': {
+                    'id': str(organization.id) if organization else None,
+                    'name': organization.name if organization else 'TEST MODE'
+                },
+                'data_length': len(raw_data),
+                'processed_data_types': data_keys
+            }
+
+            # Add STOCKITEM processing results if any
+            if stockitem_processing_result:
+                response_data['stockitem_processing'] = stockitem_processing_result
+
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            print(f"Error in MasterAPIView: {str(e)}")
+            return Response({
+                'error': f'Failed to process incoming data: {str(e)}',
+                'success': False
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def process_stockitem_data(self, stockitem_data, organization):
+        """
+        Process STOCKITEM data and save to database
+        Args:
+            stockitem_data: List of stock item dictionaries from Tally
+            organization: Organization instance
+        Returns:
+            Dictionary with processing results
+        """
+        if not stockitem_data or not isinstance(stockitem_data, list):
+            return {
+                'success': False,
+                'error': 'No valid STOCKITEM data provided'
+            }
+
+        if not organization:
+            print("No organization available for STOCKITEM processing")
+            return {
+                'success': False,
+                'error': 'No organization available for processing'
+            }
+
+        print(f"Processing {len(stockitem_data)} STOCKITEM entries")
+        created_items = []
+        failed_items = []
+        updated_items = []
+
+        try:
+            with transaction.atomic():
+                for i, item_entry in enumerate(stockitem_data):
+                    try:
+                        print(f"Processing stock item {i+1}: {item_entry.get('Name', 'Unknown')}")
+
+                        # Clean the company field (remove extra whitespace and newlines)
+                        company = item_entry.get('Company', '').strip().replace('\r\n', '').replace('\n', '')
+
+                        # Create or update StockItem instance
+                        stock_item_data = {
+                            'master_id': item_entry.get('Master_Id', ''),
+                            'alter_id': item_entry.get('Alter_id', ''),
+                            'name': item_entry.get('Name', ''),
+                            'parent': item_entry.get('Parent', ''),
+                            'unit': item_entry.get('Unit', ''),
+                            'category': item_entry.get('Category', ''),
+                            'gst_applicable': item_entry.get('GstApplicable', ''),
+                            'item_code': item_entry.get('Item_Code', ''),
+                            'alias': item_entry.get('ALIAS', ''),
+                            'company': company,
+                            'organization': organization
+                        }
+
+                        # Try to find existing stock item to update or create new one
+                        master_id = item_entry.get('Master_Id', '')
+                        if master_id and organization:
+                            stock_item, created = StockItem.objects.update_or_create(
+                                master_id=master_id,
+                                organization=organization,
+                                defaults=stock_item_data
+                            )
+                        else:
+                            # If no master_id, create new item
+                            stock_item = StockItem.objects.create(**stock_item_data)
+                            created = True
+
+                        # Prepare response data
+                        item_response = {
+                            'id': str(stock_item.id),
+                            'master_id': stock_item.master_id,
+                            'alter_id': stock_item.alter_id,
+                            'name': stock_item.name,
+                            'parent': stock_item.parent,
+                            'unit': stock_item.unit,
+                            'category': stock_item.category,
+                            'gst_applicable': stock_item.gst_applicable,
+                            'item_code': stock_item.item_code,
+                            'alias': stock_item.alias,
+                            'company': stock_item.company
+                        }
+
+                        if created:
+                            created_items.append(item_response)
+                            print(f"Successfully created stock item: {stock_item.name}")
+                        else:
+                            updated_items.append(item_response)
+                            print(f"Successfully updated stock item: {stock_item.name}")
+
+                    except Exception as item_error:
+                        print(f"Error processing stock item {i+1}: {str(item_error)}")
+                        failed_items.append({
+                            'index': i+1,
+                            'name': item_entry.get('Name', 'Unknown'),
+                            'error': str(item_error),
+                            'data': item_entry
+                        })
+                        # Continue processing other items instead of failing the entire transaction
+                        continue
+
+            print(f"Successfully created {len(created_items)} stock items")
+            print(f"Successfully updated {len(updated_items)} stock items")
+            print(f"Failed to process {len(failed_items)} stock items")
+
+            # Return detailed response
+            return {
+                'success': True,
+                'created_count': len(created_items),
+                'updated_count': len(updated_items),
+                'failed_count': len(failed_items),
+                'total_processed': len(stockitem_data),
+                'created_items': created_items[:5],  # Limit to first 5 for response size
+                'updated_items': updated_items[:5],  # Limit to first 5 for response size
+                'failed_items': failed_items[:3] if failed_items else []  # Limit failed entries in response
+            }
+
+        except Exception as e:
+            print(f"Error in STOCKITEM bulk processing transaction: {str(e)}")
+            return {
+                'success': False,
+                'error': f'STOCKITEM bulk processing failed: {str(e)}',
+                'created_count': len(created_items),
+                'updated_count': len(updated_items),
+                'failed_count': len(failed_items)
+            }
 
 
 def clean_decimal_value(value_str):

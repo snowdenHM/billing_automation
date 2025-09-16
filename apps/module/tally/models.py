@@ -82,6 +82,35 @@ class Ledger(BaseOrgModel):
         return self.name or "Ledger"
 
 
+class StockItem(BaseOrgModel):
+    """
+    StockItem model to store stock item data from Tally
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    master_id = models.CharField(max_length=255, blank=True, null=True)
+    alter_id = models.CharField(max_length=255, blank=True, null=True)
+    name = models.CharField(max_length=255, blank=True, null=True)
+    parent = models.CharField(max_length=255, blank=True, null=True)
+    unit = models.CharField(max_length=100, blank=True, null=True)
+    category = models.CharField(max_length=255, blank=True, null=True)
+    gst_applicable = models.CharField(max_length=100, blank=True, null=True)
+    item_code = models.CharField(max_length=255, blank=True, null=True)
+    alias = models.CharField(max_length=255, blank=True, null=True)
+    company = models.CharField(max_length=500, blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Stock Item"
+        verbose_name_plural = "Stock Items"
+        # Add unique constraint to prevent duplicates
+        unique_together = ['organization', 'master_id', 'company']
+
+    def __str__(self) -> str:
+        return self.name or "StockItem"
+
+
 class TallyConfig(BaseOrgModel):
     """
     User-defined mapping: which ParentLedger(s) represent IGST/CGST/SGST/Vendors/COA for an org.

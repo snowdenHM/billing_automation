@@ -1,4 +1,4 @@
-from .ledger_serializers import LedgerSerializer, ParentLedgerSerializer, LedgerBulkCreateSerializer
+from .ledger_serializers import LedgerSerializer, ParentLedgerSerializer, LedgerBulkCreateSerializer, StockItemSerializer, StockItemBulkCreateSerializer
 from .config_serializers import TallyConfigSerializer
 from .vendor_serializers import (
     TallyVendorBillSerializer,
@@ -25,6 +25,8 @@ __all__ = [
     'LedgerSerializer',
     'ParentLedgerSerializer',
     'LedgerBulkCreateSerializer',
+    'StockItemSerializer',
+    'StockItemBulkCreateSerializer',
     'TallyConfigSerializer',
     'TallyVendorBillSerializer',
     'TallyVendorAnalyzedBillSerializer',
