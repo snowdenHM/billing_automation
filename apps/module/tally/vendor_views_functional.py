@@ -1263,7 +1263,6 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 if product.sgst != new_sgst:
                     product.sgst = new_sgst
                     needs_update = True
-
             # Tax ledger
             if 'tax_ledger' in item and item['tax_ledger'] != "No Tax Ledger":
                 current_name = str(product.taxes) if product.taxes else "No Tax Ledger"
@@ -1272,13 +1271,11 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                     if tax_ledger:
                         product.taxes = tax_ledger
                         needs_update = True
-
             if needs_update:
                 product.save()
                 logger.info(f"Updated product {item_id}")
             else:
                 logger.info(f"No changes for product {item_id}")
-
         else:
             # Create new product
             product = TallyVendorAnalyzedProduct(
@@ -1294,12 +1291,10 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 cgst=_to_decimal(item.get('cgst'), "0"),
                 sgst=_to_decimal(item.get('sgst'), "0"),
             )
-
             if item.get('tax_ledger') and item['tax_ledger'] != "No Tax Ledger":
                 tax_ledger = find_or_create_tax_ledger(item['tax_ledger'], 'Product Tax', organization)
                 if tax_ledger:
                     product.taxes = tax_ledger
-
             product.save()
             logger.info(
                 f"Created new product (client item_id: {item.get('item_id')}) name={item.get('item_name') or 'Unknown'}")
