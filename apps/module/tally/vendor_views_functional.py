@@ -1215,7 +1215,7 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
     updated_ids = set()
 
     for item in line_items or []:
-        item_id = item.get('item_id')  # NOTE: client sends item_id
+        item_id = str(item.get('item_id')) if item.get('item_id') is not None else None
 
         if item_id and item_id in existing:
             product = existing[item_id]
