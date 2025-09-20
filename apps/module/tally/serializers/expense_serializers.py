@@ -5,7 +5,7 @@ from ..models import TallyExpenseBill, TallyExpenseAnalyzedBill, TallyExpenseAna
 
 
 class TallyExpenseBillSerializer(serializers.ModelSerializer):
-    file_url = serializers.SerializerMethodField()
+    file = serializers.SerializerMethodField()
 
     class Meta:
         model = TallyExpenseBill
@@ -13,9 +13,9 @@ class TallyExpenseBillSerializer(serializers.ModelSerializer):
             'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
             'status', 'process', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'bill_munshi_name', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'bill_munshi_name', 'file', 'created_at', 'updated_at']
 
-    def get_file_url(self, obj):
+    def get_file(self, obj):
         """Return complete file URL"""
         if obj.file:
             request = self.context.get('request')
