@@ -10,10 +10,10 @@ class TallyExpenseBillSerializer(serializers.ModelSerializer):
     class Meta:
         model = TallyExpenseBill
         fields = [
-            'id', 'bill_munshi_name', 'file', 'file_url', 'file_type', 'analysed_data',
+            'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
             'status', 'process', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'bill_munshi_name', 'file_url', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'bill_munshi_name', 'created_at', 'updated_at']
 
     def get_file_url(self, obj):
         """Return complete file URL"""
