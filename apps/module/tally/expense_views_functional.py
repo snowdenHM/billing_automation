@@ -1076,6 +1076,27 @@ def find_or_create_expense_tax_ledger(ledger_name, tax_type, organization):
 def update_analyzed_expense_products(analyzed_bill, expense_items, organization):
     """Update existing expense products and create new ones based on item_id"""
 
+    # Validate debit/credit balance before processing
+    total_debit = 0
+    total_credit = 0
+
+    for item_data in expense_items:
+        amount = round(float(item_data.get('amount', 0)), 2)
+        debit_or_credit = item_data.get('debit_or_credit', '').lower()
+
+        if debit_or_credit == 'debit':
+            total_debit += amount
+        elif debit_or_credit == 'credit':
+            total_credit += amount
+
+    # Check if debit and credit amounts are equal
+    if abs(total_debit - total_credit) > 0.01:  # Allow for small rounding differences
+        raise Exception(
+            f"Debit and Credit amounts must be equal. "
+            f"Total Debit: {total_debit}, Total Credit: {total_credit}, "
+            f"Difference: {abs(total_debit - total_credit)}"
+        )
+
     # Get existing products mapped by their ID
     existing_products = {str(p.id): p for p in analyzed_bill.products.all()}
     updated_product_ids = set()
