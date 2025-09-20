@@ -458,10 +458,10 @@ def expense_bills_list(request, org_id):
     paginator = DefaultPagination()
     page = paginator.paginate_queryset(bills, request)
     if page is not None:
-        serializer = TallyExpenseBillSerializer(page, many=True)
+        serializer = TallyExpenseBillSerializer(page, many=True, context={'request': request})
         return paginator.get_paginated_response(serializer.data)
 
-    serializer = TallyExpenseBillSerializer(bills, many=True)
+    serializer = TallyExpenseBillSerializer(bills, many=True, context={'request': request})
     return Response(serializer.data)
 
 

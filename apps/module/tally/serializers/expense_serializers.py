@@ -5,13 +5,26 @@ from ..models import TallyExpenseBill, TallyExpenseAnalyzedBill, TallyExpenseAna
 
 
 class TallyExpenseBillSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+
     class Meta:
         model = TallyExpenseBill
         fields = [
-            'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
+            'id', 'bill_munshi_name', 'file', 'file_url', 'file_type', 'analysed_data',
             'status', 'process', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'bill_munshi_name', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'bill_munshi_name', 'file_url', 'created_at', 'updated_at']
+
+    def get_file_url(self, obj):
+        """Return complete file URL"""
+        if obj.file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.file.url)
+            else:
+                # Fallback if no request context
+                return obj.file.url
+        return None
 
     def validate_file(self, value):
         """Validate file extension and size"""
