@@ -437,6 +437,11 @@ class TallyExpenseBill(BaseOrgModel):
 
 
 class TallyExpenseAnalyzedBill(BaseOrgModel):
+    class GSTType(models.TextChoices):
+        IGST = "IGST", "IGST"
+        CGST_SGST = "CGST_SGST", "CGST+SGST"
+        UNKNOWN = "Unknown", "Unknown"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
     selected_bill = models.ForeignKey(  # Fixed: was selectBill
         TallyExpenseBill, on_delete=models.CASCADE, blank=True, null=True, related_name="analysed_headers"
@@ -448,6 +453,7 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
     voucher = models.CharField(max_length=255, blank=True, null=True)
     bill_no = models.CharField(max_length=50, blank=True, null=True)
     bill_date = models.DateField(blank=True, null=True)
+    gst_type = models.CharField(max_length=20, choices=GSTType.choices, default=GSTType.UNKNOWN)
 
     total = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     igst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
@@ -472,6 +478,13 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
 
     def __str__(self) -> str:
         return (self.selected_bill.bill_munshi_name if self.selected_bill else None) or f"ExpenseAnalysed:{self.id}"
+
+    def save(self, *args, **kwargs):
+        # Handle skip_validation parameter for compatibility
+        skip_validation = kwargs.pop('skip_validation', False)
+        if not skip_validation:
+            self.full_clean()
+        super().save(*args, **kwargs)
 
 
 class TallyExpenseAnalyzedProduct(BaseOrgModel):

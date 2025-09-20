@@ -247,7 +247,8 @@ def process_expense_analysis_data(bill, json_data, organization):
                             expense_bill=analyzed_bill,
                             item_details=str(expense.get('description', '')),
                             amount=safe_float_convert(expense.get('amount', 0)),
-                            debit_or_credit=TallyExpenseAnalyzedProduct.DebitCredit.DEBIT,  # Expenses are typically debits
+                            debit_or_credit=TallyExpenseAnalyzedProduct.DebitCredit.DEBIT,
+                            # Expenses are typically debits
                             organization=organization
                         )
                         product_instances.append(product)
@@ -730,19 +731,12 @@ def expense_bill_detail(request, org_id, bill_id):
 
             # Structure the analyzed data in expense format
             bill_data = {
-                "vendor": {
-                    "master_id": vendor_ledger.master_id if vendor_ledger else "No Ledger",
-                    "name": vendor_ledger.name if vendor_ledger else "No Ledger",
-                    "gst_in": vendor_ledger.gst_in if vendor_ledger else "No Ledger",
-                    "company": vendor_ledger.company if vendor_ledger else "No Ledger",
-                },
-                "bill_details": {
-                    "voucher": analyzed_bill.voucher or "",
-                    "bill_number": analyzed_bill.bill_no,
-                    "date": bill_date_str,
-                    "total_amount": float(analyzed_bill.total or 0),
-                    "company_id": team_slug,
-                },
+                "name": vendor_ledger.name if vendor_ledger else "No Ledger",
+                "voucher": analyzed_bill.voucher or "",
+                "bill_no": analyzed_bill.bill_no,
+                "bill_date": bill_date_str,
+                "total": float(analyzed_bill.total or 0),
+                "company_id": team_slug,
                 "taxes": {
                     "igst": {
                         "amount": float(analyzed_bill.igst or 0),
@@ -759,7 +753,7 @@ def expense_bill_detail(request, org_id, bill_id):
                 },
                 "expense_items": [
                     {
-                        "id": str(item.id),
+                        "item_id": str(item.id),
                         "item_details": item.item_details,
                         "chart_of_accounts": str(item.chart_of_accounts) if item.chart_of_accounts else "No COA Ledger",
                         "amount": float(item.amount or 0),
@@ -774,7 +768,8 @@ def expense_bill_detail(request, org_id, bill_id):
 
             response_data = {
                 "bill": bill_serializer.data,
-                "analyzed_data": bill_data
+                "analyzed_data": bill_data,
+                "analyzed_bill": analyzed_bill.id
             }
 
             return Response(response_data)
@@ -806,11 +801,12 @@ def expense_bill_detail(request, org_id, bill_id):
     tags=['Tally Expense Bills']
 )
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated])
 def expense_bill_verify(request, org_id):
     """Verify analyzed expense bill with user modifications"""
     bill_id = request.data.get('bill_id')
-    analyzed_data = request.data.get('analyzed_data')  # This will contain the modified structure
+    analyzed_bill_id = request.data.get('analyzed_bill')
+    analyzed_data = request.data.get('analyzed_data')
 
     organization = get_organization_from_request(request, org_id)
     if not organization:
@@ -819,15 +815,15 @@ def expense_bill_verify(request, org_id):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    if not bill_id:
+    if not bill_id or not analyzed_bill_id:
         return Response(
-            {'error': 'bill_id is required'},
+            {'error': 'bill_id and analyzed_bill are required'},
             status=status.HTTP_400_BAD_REQUEST
         )
 
     try:
         bill = TallyExpenseBill.objects.get(id=bill_id, organization=organization)
-        analyzed_bill = TallyExpenseAnalyzedBill.objects.get(selected_bill=bill)
+        analyzed_bill = TallyExpenseAnalyzedBill.objects.get(id=analyzed_bill_id, organization=organization)
     except (TallyExpenseBill.DoesNotExist, TallyExpenseAnalyzedBill.DoesNotExist):
         return Response(
             {'error': 'Bill or analyzed data not found'},
@@ -871,30 +867,26 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
         return analyzed_bill
 
     with transaction.atomic():
-        # Update vendor information
-        vendor_data = analyzed_data.get('vendor', {})
-        if vendor_data and vendor_data.get('name') != "No Ledger":
-            vendor_name = vendor_data.get('name')
-            if vendor_name:
-                # Try to find existing vendor or create if needed
-                vendor = find_or_create_expense_vendor_ledger(vendor_name, vendor_data, organization)
-                if vendor:
-                    analyzed_bill.vendor = vendor
+        # Update vendor information - handle flattened structure
+        vendor_name = analyzed_data.get('name')
+        if vendor_name and vendor_name != "No Ledger":
+            # Try to find existing vendor or create if needed
+            vendor = find_or_create_expense_vendor_ledger(vendor_name, {}, organization)
+            if vendor:
+                analyzed_bill.vendor = vendor
 
-        # Update bill details
-        bill_details = analyzed_data.get('bill_details', {})
-        if bill_details:
-            if 'voucher' in bill_details:
-                analyzed_bill.voucher = bill_details['voucher']
-            if 'bill_number' in bill_details:
-                analyzed_bill.bill_no = bill_details['bill_number']
-            if 'date' in bill_details:
-                # Parse date string (format: "08-03-2021")
-                bill_date = parse_expense_bill_date(bill_details['date'])
-                if bill_date:
-                    analyzed_bill.bill_date = bill_date
-            if 'total_amount' in bill_details:
-                analyzed_bill.total = round(float(bill_details['total_amount']), 2)
+        # Update bill details - handle flattened structure
+        if 'voucher' in analyzed_data:
+            analyzed_bill.voucher = analyzed_data['voucher']
+        if 'bill_no' in analyzed_data:
+            analyzed_bill.bill_no = analyzed_data['bill_no']
+        if 'bill_date' in analyzed_data:
+            # Parse date string (format: "31-12-2023")
+            bill_date = parse_expense_bill_date(analyzed_data['bill_date'])
+            if bill_date:
+                analyzed_bill.bill_date = bill_date
+        if 'total' in analyzed_data:
+            analyzed_bill.total = round(float(analyzed_data['total']), 2)
 
         # Update tax information
         taxes_data = analyzed_data.get('taxes', {})
@@ -935,7 +927,7 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
         # Save the analyzed bill
         analyzed_bill.save(skip_validation=True)
 
-        # Update expense items
+        # Update expense items with item_id handling
         expense_items = analyzed_data.get('expense_items', [])
         if expense_items:
             update_analyzed_expense_products(analyzed_bill, expense_items, organization)
@@ -1050,8 +1042,8 @@ def find_or_create_expense_tax_ledger(ledger_name, tax_type, organization):
             else:
                 # For COA or other types, use any available tax parent
                 tax_parent_ledgers = (tally_config.igst_parents.all() |
-                                    tally_config.cgst_parents.all() |
-                                    tally_config.sgst_parents.all())
+                                      tally_config.cgst_parents.all() |
+                                      tally_config.sgst_parents.all())
 
             if tax_parent_ledgers.exists():
                 parent_ledger = tax_parent_ledgers.first()
@@ -1082,21 +1074,21 @@ def find_or_create_expense_tax_ledger(ledger_name, tax_type, organization):
 
 
 def update_analyzed_expense_products(analyzed_bill, expense_items, organization):
-    """Update existing expense products and create new ones"""
+    """Update existing expense products and create new ones based on item_id"""
 
-    # Get existing products
+    # Get existing products mapped by their ID
     existing_products = {str(p.id): p for p in analyzed_bill.products.all()}
     updated_product_ids = set()
 
     for item_data in expense_items:
-        product_id = item_data.get('id')  # This might be provided for existing products
+        item_id = item_data.get('item_id')  # Check for item_id in payload
 
-        if product_id and str(product_id) in existing_products:
+        if item_id and str(item_id) in existing_products:
             # Update existing product
-            product = existing_products[str(product_id)]
-            updated_product_ids.add(str(product_id))
+            product = existing_products[str(item_id)]
+            updated_product_ids.add(str(item_id))
         else:
-            # Create new product
+            # Create new product if item_id is missing or doesn't match existing
             product = TallyExpenseAnalyzedProduct(
                 expense_bill=analyzed_bill,
                 organization=organization
@@ -1106,7 +1098,7 @@ def update_analyzed_expense_products(analyzed_bill, expense_items, organization)
         if 'item_details' in item_data:
             product.item_details = item_data['item_details']
         if 'amount' in item_data:
-            product.amount = item_data['amount']
+            product.amount = round(float(item_data['amount']), 2)
         if 'debit_or_credit' in item_data:
             product.debit_or_credit = item_data['debit_or_credit']
 
@@ -1117,6 +1109,15 @@ def update_analyzed_expense_products(analyzed_bill, expense_items, organization)
                 product.chart_of_accounts = coa_ledger
 
         product.save()
+
+    # Optionally delete products that weren't included in the update
+    # (commented out to preserve existing behavior)
+    # products_to_delete = set(existing_products.keys()) - updated_product_ids
+    # if products_to_delete:
+    #     TallyExpenseAnalyzedProduct.objects.filter(
+    #         id__in=products_to_delete,
+    #         expense_bill=analyzed_bill
+    #     ).delete()
 
 
 def get_structured_expense_bill_data(analyzed_bill, organization):
@@ -1431,22 +1432,18 @@ def prepare_expense_sync_data(analyzed_bill, organization):
 
     # Build expense sync payload with structured format similar to vendor bills
     bill_data = {
-        "vendor": {
-            "master_id": vendor_ledger.master_id if vendor_ledger and vendor_ledger.master_id else "No Ledger",
-            "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
-            "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
-            "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "No Ledger",
-        },
-        "bill_details": {
-            "voucher": analyzed_bill.voucher or "",
-            "bill_number": analyzed_bill.bill_no,
-            "date": bill_date_str,
-            "total_amount": float(analyzed_bill.total or 0),
-            "company_id": organization.name if hasattr(organization, 'name') else str(organization.id),
-        },
-        "dr_ledger": dr_ledger,
-        "cr_ledger": cr_ledger,
+        "id": analyzed_bill.id,
+        "voucher": analyzed_bill.voucher or "",
+        "bill_no": analyzed_bill.bill_no,
+        "bill_date": bill_date_str,
+        "total": float(analyzed_bill.total or 0),
+        "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
+        "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "No Ledger",
+        "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
+        "DR_LEDGER": dr_ledger,
+        "CR_LEDGER": cr_ledger,
         "note": analyzed_bill.note or "AI Analyzed Expense Bill",
+        "created_at": analyzed_bill.created_at
     }
 
     return {"data": bill_data}
