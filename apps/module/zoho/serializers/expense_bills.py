@@ -87,10 +87,23 @@ class ZohoExpenseBillSerializer(serializers.ModelSerializer):
 
 
 class ZohoExpenseBillDetailSerializer(serializers.Serializer):
-    """Serializer for detailed Zoho Expense Bill view including analysis data"""
+    """Serializer for detailed Zoho Expense Bill view including analysis data and Zoho objects"""
 
-    bill = ZohoExpenseBillSerializer(read_only=True)
+    # Basic bill information
+    id = serializers.UUIDField(read_only=True)
+    billmunshiName = serializers.CharField(read_only=True)
+    file = serializers.FileField(read_only=True)
+    fileType = serializers.CharField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    process = serializers.BooleanField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    update_at = serializers.DateTimeField(read_only=True)
+
+    # Analysis data
     analysed_data = serializers.JSONField(read_only=True)
+
+    # ExpenseZohoBill information
+    zoho_bill = ExpenseZohoBillSerializer(read_only=True)
 
     class Meta:
         ref_name = "ZohoExpenseBillDetail"

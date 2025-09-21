@@ -493,8 +493,8 @@ def expense_bill_detail_view(request, org_id, bill_id):
             # If no ExpenseZohoBill exists, set it to None
             bill.zoho_bill = None
 
-        # Serialize the data
-        serializer = ZohoExpenseBillDetailSerializer(bill)
+        # Serialize the data with request context for full URLs
+        serializer = ZohoExpenseBillDetailSerializer(bill, context={'request': request})
         return Response(serializer.data)
 
     except ExpenseBill.DoesNotExist:
