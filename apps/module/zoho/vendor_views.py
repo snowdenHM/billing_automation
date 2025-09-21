@@ -540,9 +540,9 @@ def vendor_bill_analyze_view(request, org_id, bill_id):
     request=VendorZohoBillSerializer,
     responses=VendorZohoBillSerializer,
     tags=["Zoho Vendor Bills"],
-    methods=["PUT", "PATCH"]
+    methods=["POST"]
 )
-@api_view(['PUT', 'PATCH'])
+@api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def vendor_bill_verify_view(request, org_id, bill_id):
     """Verify and update Zoho vendor data. Changes status from 'Analyzed' to 'Verified'."""
@@ -574,8 +574,8 @@ def vendor_bill_verify_view(request, org_id, bill_id):
             )
 
         with transaction.atomic():
-            partial = request.method == 'PATCH'
-            serializer = VendorZohoBillSerializer(zoho_bill, data=zoho_bill_data, partial=partial)
+            # Use partial=True for POST as we're updating existing data
+            serializer = VendorZohoBillSerializer(zoho_bill, data=zoho_bill_data, partial=True)
 
             if serializer.is_valid():
                 updated_bill = serializer.save()
