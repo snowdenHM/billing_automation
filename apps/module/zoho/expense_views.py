@@ -660,7 +660,33 @@ def expense_bill_verify_view(request, org_id, bill_id):
                         ).delete()
                         logger.info(f"Deleted {len(products_to_delete)} expense products not in update")
 
-                # Update bill status
+                # Validate debit/credit balance before verification
+                all_products = updated_bill.products.all()
+                total_debit = 0
+                total_credit = 0
+
+                for product in all_products:
+                    try:
+                        amount = float(product.amount) if product.amount else 0
+                        if product.debit_or_credit == 'debit':
+                            total_debit += amount
+                        elif product.debit_or_credit == 'credit':
+                            total_credit += amount
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid amount for product {product.id}: {product.amount}")
+                        continue
+
+                # Check if debits equal credits (with small tolerance for floating point)
+                tolerance = 0.01
+                if abs(total_debit - total_credit) > tolerance:
+                    return Response({
+                        "detail": f"Debit and credit amounts must be equal. Current totals: Debit: {total_debit:.2f}, Credit: {total_credit:.2f}",
+                        "debit_total": total_debit,
+                        "credit_total": total_credit,
+                        "difference": abs(total_debit - total_credit)
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                # Update bill status only if debit/credit validation passes
                 bill.status = 'Verified'
                 bill.save()
 
