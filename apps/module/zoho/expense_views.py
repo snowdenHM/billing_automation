@@ -1,51 +1,46 @@
 # apps/module/zoho/expense_views.py
 
-import os
-import json
 import base64
+import json
 import logging
-from io import BytesIO
+import os
 from datetime import datetime
+from io import BytesIO
 
 import requests
-from pdf2image import convert_from_bytes
 from PyPDF2 import PdfReader
-from openai import OpenAI
-
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models.functions import Lower
 from django.db.models import Q
+from django.db.models.functions import Lower
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
-
+from drf_spectacular.utils import extend_schema
+from openai import OpenAI
+from pdf2image import convert_from_bytes
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema
 
-from apps.organizations.models import Organization
 from apps.common.pagination import DefaultPagination
+from apps.organizations.models import Organization
 from .models import (
     ZohoCredentials,
     ZohoVendor,
-    ZohoChartOfAccount,
-    ZohoTaxes,
     ExpenseBill,
     ExpenseZohoBill,
     ExpenseZohoProduct,
+)
+from .serializers.common import (
+    AnalysisResponseSerializer,
 )
 from .serializers.expense_bills import (
     ZohoExpenseBillSerializer,
     ZohoExpenseBillDetailSerializer,
     ExpenseZohoBillSerializer,
     ZohoExpenseBillUploadSerializer,
-)
-from .serializers.common import (
-    AnalysisResponseSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -361,7 +356,7 @@ def refresh_zoho_access_token(current_token):
 # ============================================================================
 # Expense Bills API Views
 # ============================================================================
-
+# ✅
 @extend_schema(
     responses=ZohoExpenseBillSerializer(many=True),
     tags=["Zoho Expense Bills"],
@@ -390,6 +385,7 @@ def expense_bills_list_view(request, org_id):
     return Response({"results": serializer.data})
 
 
+# ✅
 @extend_schema(
     request=ZohoExpenseBillUploadSerializer,
     responses=ZohoExpenseBillSerializer,
@@ -506,32 +502,7 @@ def expense_bill_detail_view(request, org_id, bill_id):
     except ExpenseBill.DoesNotExist:
         return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
 
-
-@extend_schema(
-    responses={"200": {"image_url": "string"}},
-    tags=["Zoho Expense Bills"],
-    methods=["GET"]
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def expense_bill_image_view(request, org_id, bill_id):
-    """Get expense bill image URL."""
-    organization = get_organization_from_request(request, org_id=org_id)
-    if not organization:
-        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    try:
-        bill = ExpenseBill.objects.get(id=bill_id, organization=organization)
-
-        if bill.file:
-            return Response({"image_url": bill.file.url})
-        else:
-            return Response({"detail": "No bill image found"}, status=status.HTTP_404_NOT_FOUND)
-
-    except ExpenseBill.DoesNotExist:
-        return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
-
-
+# ✅
 @extend_schema(
     responses=AnalysisResponseSerializer,
     tags=["Zoho Expense Bills"],
@@ -597,9 +568,9 @@ def expense_bill_analyze_view(request, org_id, bill_id):
     request=ExpenseZohoBillSerializer,
     responses=ExpenseZohoBillSerializer,
     tags=["Zoho Expense Bills"],
-    methods=["PUT", "PATCH"]
+    methods=["POST"]
 )
-@api_view(['PUT', 'PATCH'])
+@api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def expense_bill_verify_view(request, org_id, bill_id):
     """Verify and update Zoho expense data. Changes status from 'Analyzed' to 'Verified'."""
@@ -608,7 +579,12 @@ def expense_bill_verify_view(request, org_id, bill_id):
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        bill = ExpenseBill.objects.get(id=bill_id, organization=organization)
+        # Handle the new payload format - extract bill_id and zoho_bill data
+        payload_bill_id = request.data.get('bill_id', bill_id)
+        zoho_bill_data = request.data.get('zoho_bill', request.data)
+
+        # Use the bill_id from payload if provided, otherwise use URL parameter
+        bill = ExpenseBill.objects.get(id=payload_bill_id, organization=organization)
 
         if bill.status != 'Analysed':
             return Response(
@@ -626,25 +602,65 @@ def expense_bill_verify_view(request, org_id, bill_id):
             )
 
         with transaction.atomic():
-            partial = request.method == 'PATCH'
-            serializer = ExpenseZohoBillSerializer(zoho_bill, data=request.data, partial=partial)
+            # Use partial=True for POST as we're updating existing data
+            serializer = ExpenseZohoBillSerializer(zoho_bill, data=zoho_bill_data, partial=True)
 
             if serializer.is_valid():
                 updated_bill = serializer.save()
 
                 # Handle products update if provided
-                products_data = request.data.get('products')
+                products_data = zoho_bill_data.get('products')
                 if products_data is not None:
-                    # Delete existing products and recreate with new data
-                    updated_bill.products.all().delete()
+                    # Get existing product IDs
+                    existing_products = {str(product.id): product for product in updated_bill.products.all()}
+
+                    # Track which products to keep
+                    processed_product_ids = set()
 
                     for product_data in products_data:
-                        if product_data.get('item_details'):  # Only create if item_details exists
-                            ExpenseZohoProduct.objects.create(
+                        if not product_data.get('item_details'):  # Skip if no item_details
+                            continue
+
+                        product_id = product_data.get('id')
+
+                        # Prepare product data for creation/update
+                        product_fields = {
+                            'item_details': product_data.get('item_details'),
+                            'chart_of_accounts_id': product_data.get('chart_of_accounts'),
+                            'vendor_id': product_data.get('vendor'),
+                            'amount': product_data.get('amount'),
+                            'debit_or_credit': product_data.get('debit_or_credit', 'credit'),
+                        }
+
+                        # Remove None values
+                        product_fields = {k: v for k, v in product_fields.items() if v is not None}
+
+                        if product_id and str(product_id) in existing_products:
+                            # Update existing product
+                            existing_product = existing_products[str(product_id)]
+                            for field, value in product_fields.items():
+                                setattr(existing_product, field, value)
+                            existing_product.save()
+                            processed_product_ids.add(str(product_id))
+                            logger.info(f"Updated existing expense product {product_id}")
+                        else:
+                            # Create new product
+                            new_product = ExpenseZohoProduct.objects.create(
                                 expenseZohoBill=updated_bill,
                                 organization=organization,
-                                **{k: v for k, v in product_data.items() if k not in ['id', 'expenseZohoBill']}
+                                **product_fields
                             )
+                            processed_product_ids.add(str(new_product.id))
+                            logger.info(f"Created new expense product {new_product.id}")
+
+                    # Delete products that were not in the update data
+                    products_to_delete = set(existing_products.keys()) - processed_product_ids
+                    if products_to_delete:
+                        ExpenseZohoProduct.objects.filter(
+                            id__in=products_to_delete,
+                            expenseZohoBill=updated_bill
+                        ).delete()
+                        logger.info(f"Deleted {len(products_to_delete)} expense products not in update")
 
                 # Update bill status
                 bill.status = 'Verified'
@@ -838,100 +854,3 @@ def expense_bill_delete_view(request, org_id, bill_id):
 
     except ExpenseBill.DoesNotExist:
         return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
-
-
-# ============================================================================
-# Filtered Views for Different Bill Status
-# ============================================================================
-
-@extend_schema(
-    responses=ZohoExpenseBillSerializer(many=True),
-    tags=["Zoho Expense Bills"],
-    methods=["GET"]
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def expense_bills_draft_view(request, org_id):
-    """Get all draft expense bills for the organization."""
-    organization = get_organization_from_request(request, org_id=org_id)
-    if not organization:
-        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    draft_bills = ExpenseBill.objects.filter(
-        organization=organization,
-        status="Draft"
-    ).order_by('-created_at')
-
-    # Apply pagination
-    paginator = DefaultPagination()
-    paginated_bills = paginator.paginate_queryset(draft_bills, request)
-
-    if paginated_bills is not None:
-        serializer = ZohoExpenseBillSerializer(paginated_bills, many=True)
-        return paginator.get_paginated_response(serializer.data)
-
-    # Fallback if pagination fails
-    serializer = ZohoExpenseBillSerializer(draft_bills, many=True)
-    return Response({"results": serializer.data})
-
-
-@extend_schema(
-    responses=ZohoExpenseBillSerializer(many=True),
-    tags=["Zoho Expense Bills"],
-    methods=["GET"]
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def expense_bills_analyzed_view(request, org_id):
-    """Get all analyzed expense bills for the organization."""
-    organization = get_organization_from_request(request, org_id=org_id)
-    if not organization:
-        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    analyzed_bills = ExpenseBill.objects.filter(
-        Q(organization=organization) &
-        (Q(status="Analysed") | Q(status="Verified"))
-    ).order_by('-created_at')
-
-    # Apply pagination
-    paginator = DefaultPagination()
-    paginated_bills = paginator.paginate_queryset(analyzed_bills, request)
-
-    if paginated_bills is not None:
-        serializer = ZohoExpenseBillSerializer(paginated_bills, many=True)
-        return paginator.get_paginated_response(serializer.data)
-
-    # Fallback if pagination fails
-    serializer = ZohoExpenseBillSerializer(analyzed_bills, many=True)
-    return Response({"results": serializer.data})
-
-
-@extend_schema(
-    responses=ZohoExpenseBillSerializer(many=True),
-    tags=["Zoho Expense Bills"],
-    methods=["GET"]
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def expense_bills_synced_view(request, org_id):
-    """Get all synced expense bills for the organization."""
-    organization = get_organization_from_request(request, org_id=org_id)
-    if not organization:
-        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    synced_bills = ExpenseBill.objects.filter(
-        organization=organization,
-        status="Synced"
-    ).order_by('-created_at')
-
-    # Apply pagination
-    paginator = DefaultPagination()
-    paginated_bills = paginator.paginate_queryset(synced_bills, request)
-
-    if paginated_bills is not None:
-        serializer = ZohoExpenseBillSerializer(paginated_bills, many=True)
-        return paginator.get_paginated_response(serializer.data)
-
-    # Fallback if pagination fails
-    serializer = ZohoExpenseBillSerializer(synced_bills, many=True)
-    return Response({"results": serializer.data})

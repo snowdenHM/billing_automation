@@ -35,16 +35,10 @@ from .expense_views import (
     expense_bills_list_view,
     expense_bill_upload_view,
     expense_bill_detail_view,
-    expense_bill_image_view,
     expense_bill_analyze_view,
     expense_bill_verify_view,
     expense_bill_sync_view,
     expense_bill_delete_view,
-
-    # Filtered Expense Views
-    expense_bills_draft_view,
-    expense_bills_analyzed_view,
-    expense_bills_synced_view,
 )
 
 app_name = "zoho"
@@ -87,11 +81,7 @@ urlpatterns = [
         # ============================================================================
         path('expense-bills/', expense_bills_list_view, name='expense_bills_list'),
         path('expense-bills/upload/', expense_bill_upload_view, name='expense_bills_upload'),
-        path('expense-bills/draft/', expense_bills_draft_view, name='expense_bills_draft'),
-        path('expense-bills/analyzed/', expense_bills_analyzed_view, name='expense_bills_analyzed'),
-        path('expense-bills/synced/', expense_bills_synced_view, name='expense_bills_synced'),
-        path('expense-bills/<str:bill_id>/', expense_bill_detail_view, name='expense_bill_detail'),
-        path('expense-bills/<str:bill_id>/image/', expense_bill_image_view, name='expense_bill_image'),
+        path('expense-bills/<str:bill_id>/details/', expense_bill_detail_view, name='expense_bill_detail'),
         path('expense-bills/<str:bill_id>/analyze/', expense_bill_analyze_view, name='expense_bill_analyze'),
         path('expense-bills/<str:bill_id>/verify/', expense_bill_verify_view, name='expense_bill_verify'),
         path('expense-bills/<str:bill_id>/sync/', expense_bill_sync_view, name='expense_bill_sync'),
