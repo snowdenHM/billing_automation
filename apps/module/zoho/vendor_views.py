@@ -13,7 +13,6 @@ from PyPDF2 import PdfReader
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Q
 from django.db.models.functions import Lower
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
@@ -435,6 +434,7 @@ def vendor_bill_upload_view(request, org_id):
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
 # ✅
 @extend_schema(
     responses=ZohoVendorBillDetailSerializer,
@@ -469,31 +469,6 @@ def vendor_bill_detail_view(request, org_id, bill_id):
         # Serialize the data with request context for full URLs
         serializer = ZohoVendorBillDetailSerializer(bill, context={'request': request})
         return Response(serializer.data)
-
-    except VendorBill.DoesNotExist:
-        return Response({"detail": "Vendor bill not found"}, status=status.HTTP_404_NOT_FOUND)
-
-
-@extend_schema(
-    responses={"200": {"image_url": "string"}},
-    tags=["Zoho Vendor Bills"],
-    methods=["GET"]
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def vendor_bill_image_view(request, org_id, bill_id):
-    """Get vendor bill image URL."""
-    organization = get_organization_from_request(request, org_id=org_id)
-    if not organization:
-        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    try:
-        bill = VendorBill.objects.get(id=bill_id, organization=organization)
-
-        if bill.file:
-            return Response({"image_url": bill.file.url})
-        else:
-            return Response({"detail": "No bill image found"}, status=status.HTTP_404_NOT_FOUND)
 
     except VendorBill.DoesNotExist:
         return Response({"detail": "Vendor bill not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -576,7 +551,12 @@ def vendor_bill_verify_view(request, org_id, bill_id):
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        bill = VendorBill.objects.get(id=bill_id, organization=organization)
+        # Handle the new payload format - extract bill_id and zoho_bill data
+        payload_bill_id = request.data.get('bill_id', bill_id)
+        zoho_bill_data = request.data.get('zoho_bill', request.data)
+
+        # Use the bill_id from payload if provided, otherwise use URL parameter
+        bill = VendorBill.objects.get(id=payload_bill_id, organization=organization)
 
         if bill.status != 'Analysed':
             return Response(
@@ -595,24 +575,68 @@ def vendor_bill_verify_view(request, org_id, bill_id):
 
         with transaction.atomic():
             partial = request.method == 'PATCH'
-            serializer = VendorZohoBillSerializer(zoho_bill, data=request.data, partial=partial)
+            serializer = VendorZohoBillSerializer(zoho_bill, data=zoho_bill_data, partial=partial)
 
             if serializer.is_valid():
                 updated_bill = serializer.save()
 
                 # Handle products update if provided
-                products_data = request.data.get('products')
+                products_data = zoho_bill_data.get('products')
                 if products_data is not None:
-                    # Delete existing products and recreate with new data
-                    updated_bill.products.all().delete()
+                    # Get existing product IDs
+                    existing_products = {str(product.id): product for product in updated_bill.products.all()}
+
+                    # Track which products to keep
+                    processed_product_ids = set()
 
                     for product_data in products_data:
-                        if product_data.get('item_details'):  # Only create if item_details exists
-                            VendorZohoProduct.objects.create(
+                        if not product_data.get('item_details'):  # Skip if no item_details
+                            continue
+
+                        product_id = product_data.get('id')
+
+                        # Prepare product data for creation/update
+                        product_fields = {
+                            'item_name': product_data.get('item_name'),
+                            'item_details': product_data.get('item_details'),
+                            'chart_of_accounts_id': product_data.get('chart_of_accounts'),
+                            'taxes_id': product_data.get('taxes'),
+                            'reverse_charge_tax_id': product_data.get('reverse_charge_tax_id', False),
+                            'itc_eligibility': product_data.get('itc_eligibility', 'eligible'),
+                            'rate': product_data.get('rate'),
+                            'quantity': product_data.get('quantity'),
+                            'amount': product_data.get('amount'),
+                        }
+
+                        # Remove None values
+                        product_fields = {k: v for k, v in product_fields.items() if v is not None}
+
+                        if product_id and str(product_id) in existing_products:
+                            # Update existing product
+                            existing_product = existing_products[str(product_id)]
+                            for field, value in product_fields.items():
+                                setattr(existing_product, field, value)
+                            existing_product.save()
+                            processed_product_ids.add(str(product_id))
+                            logger.info(f"Updated existing product {product_id}")
+                        else:
+                            # Create new product
+                            new_product = VendorZohoProduct.objects.create(
                                 zohoBill=updated_bill,
                                 organization=organization,
-                                **{k: v for k, v in product_data.items() if k not in ['id', 'zohoBill']}
+                                **product_fields
                             )
+                            processed_product_ids.add(str(new_product.id))
+                            logger.info(f"Created new product {new_product.id}")
+
+                    # Delete products that were not in the update data
+                    products_to_delete = set(existing_products.keys()) - processed_product_ids
+                    if products_to_delete:
+                        VendorZohoProduct.objects.filter(
+                            id__in=products_to_delete,
+                            zohoBill=updated_bill
+                        ).delete()
+                        logger.info(f"Deleted {len(products_to_delete)} products not in update")
 
                 # Update bill status
                 bill.status = 'Verified'
@@ -823,139 +847,3 @@ def vendor_bill_delete_view(request, org_id, bill_id):
 
     except VendorBill.DoesNotExist:
         return Response({"detail": "Vendor bill not found"}, status=status.HTTP_404_NOT_FOUND)
-
-
-# ============================================================================
-# Filtered Views for Different Bill Status
-# ============================================================================
-# ✅
-@extend_schema(
-    responses=ZohoVendorBillSerializer(many=True),
-    tags=["Zoho Vendor Bills"],
-    methods=["GET"]
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def vendor_bills_draft_view(request, org_id):
-    """Get all draft vendor bills for the organization."""
-    organization = get_organization_from_request(request, org_id=org_id)
-    if not organization:
-        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    draft_bills = VendorBill.objects.filter(
-        organization=organization,
-        status="Draft"
-    ).order_by('-created_at')
-
-    # Apply pagination
-    paginator = DefaultPagination()
-    paginated_bills = paginator.paginate_queryset(draft_bills, request)
-
-    if paginated_bills is not None:
-        serializer = ZohoVendorBillSerializer(paginated_bills, many=True)
-        return paginator.get_paginated_response(serializer.data)
-
-    # Fallback if pagination fails
-    serializer = ZohoVendorBillSerializer(draft_bills, many=True)
-    return Response({"results": serializer.data})
-
-# ✅
-@extend_schema(
-    responses=ZohoVendorBillSerializer(many=True),
-    tags=["Zoho Vendor Bills"],
-    methods=["GET"]
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def vendor_bills_analyzed_view(request, org_id):
-    """Get all analyzed vendor bills for the organization."""
-    organization = get_organization_from_request(request, org_id=org_id)
-    if not organization:
-        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    analyzed_bills = VendorBill.objects.filter(
-        Q(organization=organization) &
-        (Q(status="Analysed") | Q(status="Verified"))
-    ).order_by('-created_at')
-
-    # Apply pagination
-    paginator = DefaultPagination()
-    paginated_bills = paginator.paginate_queryset(analyzed_bills, request)
-
-    if paginated_bills is not None:
-        serializer = ZohoVendorBillSerializer(paginated_bills, many=True)
-        return paginator.get_paginated_response(serializer.data)
-
-    # Fallback if pagination fails
-    serializer = ZohoVendorBillSerializer(analyzed_bills, many=True)
-    return Response({"results": serializer.data})
-
-# ✅
-@extend_schema(
-    responses=ZohoVendorBillSerializer(many=True),
-    tags=["Zoho Vendor Bills"],
-    methods=["GET"]
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def vendor_bills_synced_view(request, org_id):
-    """Get all synced vendor bills for the organization."""
-    organization = get_organization_from_request(request, org_id=org_id)
-    if not organization:
-        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    synced_bills = VendorBill.objects.filter(
-        organization=organization,
-        status="Synced"
-    ).order_by('-created_at')
-
-    # Apply pagination
-    paginator = DefaultPagination()
-    paginated_bills = paginator.paginate_queryset(synced_bills, request)
-
-    if paginated_bills is not None:
-        serializer = ZohoVendorBillSerializer(paginated_bills, many=True)
-        return paginator.get_paginated_response(serializer.data)
-
-    # Fallback if pagination fails
-    serializer = ZohoVendorBillSerializer(synced_bills, many=True)
-    return Response({"results": serializer.data})
-
-
-@extend_schema(
-    request={'application/json': {'type': 'object'}},
-    responses={'200': {'type': 'object'}},
-    tags=["Zoho Vendor Bills"],
-    methods=["PUT", "PATCH"]
-)
-@api_view(['PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
-def vendor_product_update_view(request, org_id, product_id):
-    """Update individual VendorZohoProduct."""
-    organization = get_organization_from_request(request, org_id=org_id)
-    if not organization:
-        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    try:
-        product = VendorZohoProduct.objects.get(id=product_id, organization=organization)
-
-        # Check if the related bill allows updates
-        if product.zohoBill.selectBill.status not in ['Analysed', 'Verified']:
-            return Response(
-                {"detail": "Cannot update product. Bill must be in 'Analysed' or 'Verified' status"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Update the product
-        for field, value in request.data.items():
-            if hasattr(product, field) and field not in ['id', 'zohoBill', 'organization', 'created_at']:
-                setattr(product, field, value)
-
-        product.save()
-
-        from .serializers.vendor_bills import VendorZohoProductSerializer
-        return Response(VendorZohoProductSerializer(product).data)
-
-    except VendorZohoProduct.DoesNotExist:
-        return Response({"detail": "Product not found"}, status=status.HTTP_404_NOT_FOUND)
-

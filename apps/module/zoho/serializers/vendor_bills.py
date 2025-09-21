@@ -1,7 +1,7 @@
 from __future__ import annotations
+
 from rest_framework import serializers
 
-from apps.organizations.models import Organization
 from apps.module.zoho.models import (
     VendorBill,
     VendorZohoBill,
@@ -11,6 +11,7 @@ from apps.module.zoho.models import (
     ZohoChartOfAccount,
     ZohoTaxes,
 )
+from apps.organizations.models import Organization
 
 
 class FileUploadField(serializers.FileField):
@@ -36,7 +37,7 @@ class FileUploadField(serializers.FileField):
         max_size = 10 * 1024 * 1024  # 10MB
         if hasattr(file, "size") and file.size > max_size:
             raise serializers.ValidationError(
-                f"File too large. Maximum file size is 10MB. Got: {file.size / (1024*1024):.2f}MB"
+                f"File too large. Maximum file size is 10MB. Got: {file.size / (1024 * 1024):.2f}MB"
             )
 
         return file
@@ -105,31 +106,8 @@ class ZohoVendorBillDetailSerializer(serializers.Serializer):
     # VendorZohoBill information
     zoho_bill = VendorZohoBillSerializer(read_only=True)
 
-    # Vendor information (from VendorZohoBill)
-    vendor_info = serializers.SerializerMethodField()
-
-    # Products count
-    products_count = serializers.SerializerMethodField()
-
     class Meta:
         ref_name = "ZohoVendorBillDetail"
-
-    def get_vendor_info(self, obj):
-        """Get vendor information from VendorZohoBill if available"""
-        if hasattr(obj, 'zoho_bill') and obj.zoho_bill and obj.zoho_bill.vendor:
-            return {
-                'id': str(obj.zoho_bill.vendor.id),
-                'companyName': obj.zoho_bill.vendor.companyName,
-                'gstNo': obj.zoho_bill.vendor.gstNo,
-                'contactId': obj.zoho_bill.vendor.contactId
-            }
-        return None
-
-    def get_products_count(self, obj):
-        """Get count of products from VendorZohoProduct"""
-        if hasattr(obj, 'zoho_bill') and obj.zoho_bill:
-            return obj.zoho_bill.products.count()
-        return 0
 
 
 class VendorBillUploadSerializer(serializers.ModelSerializer):

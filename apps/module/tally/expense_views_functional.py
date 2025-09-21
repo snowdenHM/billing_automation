@@ -1467,7 +1467,7 @@ def prepare_expense_sync_data(analyzed_bill, organization):
         "created_at": analyzed_bill.created_at
     }
 
-    return {"data": bill_data}
+    return {"data": bill_data }
 
 
 @extend_schema(

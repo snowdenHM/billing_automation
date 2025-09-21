@@ -23,17 +23,10 @@ from .vendor_views import (
     vendor_bills_list_view as vendor_bills_list_main,
     vendor_bill_upload_view,
     vendor_bill_detail_view as vendor_bill_detail_main,
-    vendor_bill_image_view,
     vendor_bill_analyze_view as vendor_bill_analyze_main,
     vendor_bill_verify_view as vendor_bill_verify_main,
     vendor_bill_sync_view as vendor_bill_sync_main,
     vendor_bill_delete_view,
-
-    # Filtered Vendor Views
-    vendor_bills_draft_view,
-    vendor_bills_analyzed_view,
-    vendor_bills_synced_view,
-    vendor_product_update_view as vendor_product_update_main,
 )
 
 # Import expense bill views from expense_views.py
@@ -83,16 +76,11 @@ urlpatterns = [
         # ============================================================================
         path('vendor-bills/', vendor_bills_list_main, name='vendor_bills_list'),
         path('vendor-bills/upload/', vendor_bill_upload_view, name='vendor_bills_upload'),
-        path('vendor-bills/draft/', vendor_bills_draft_view, name='vendor_bills_draft'),
-        path('vendor-bills/analyzed/', vendor_bills_analyzed_view, name='vendor_bills_analyzed'),
-        path('vendor-bills/synced/', vendor_bills_synced_view, name='vendor_bills_synced'),
-        path('vendor-bills/<str:bill_id>/', vendor_bill_detail_main, name='vendor_bill_detail'),
-        # path('vendor-bills/<str:bill_id>/image/', vendor_bill_image_view, name='vendor_bill_image'),
+        path('vendor-bills/<str:bill_id>/details/', vendor_bill_detail_main, name='vendor_bill_detail'),
         path('vendor-bills/<str:bill_id>/analyze/', vendor_bill_analyze_main, name='vendor_bill_analyze'),
         path('vendor-bills/<str:bill_id>/verify/', vendor_bill_verify_main, name='vendor_bill_verify'),
         path('vendor-bills/<str:bill_id>/sync/', vendor_bill_sync_main, name='vendor_bill_sync'),
         path('vendor-bills/<str:bill_id>/delete/', vendor_bill_delete_view, name='vendor_bill_delete'),
-        path('vendor-products/<str:product_id>/update/', vendor_product_update_main, name='vendor_product_update'),
 
         # ============================================================================
         # Expense Bills API Endpoints
