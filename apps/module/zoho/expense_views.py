@@ -311,7 +311,7 @@ def create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
             try:
                 amount = item.get('price', 0) * item.get('quantity', 1)
                 product = ExpenseZohoProduct.objects.create(
-                    expenseZohoBill=zoho_bill,
+                    zohoBill=zoho_bill,
                     organization=organization,
                     item_details=item.get('description', f'Item {idx + 1}')[:200],
                     amount=safe_numeric_string(amount)
@@ -477,16 +477,14 @@ def expense_bill_detail_view(request, org_id, bill_id):
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        # Fetch the ExpenseBill with related ExpenseZohoBill and ExpenseZohoProduct data
-        bill = ExpenseBill.objects.select_related().prefetch_related(
-            'expensezoho_bill__vendor',
-            'expensezoho_bill__products__chart_of_accounts'
-        ).get(id=bill_id, organization=organization)
+        # Fetch the ExpenseBill
+        bill = ExpenseBill.objects.get(id=bill_id, organization=organization)
 
         # Get the related ExpenseZohoBill if it exists
         try:
             zoho_bill = ExpenseZohoBill.objects.select_related('vendor').prefetch_related(
-                'products__chart_of_accounts'
+                'products__chart_of_accounts',
+                'products__vendor'
             ).get(selectBill=bill, organization=organization)
 
             # Attach zoho_bill to the bill object for the serializer
@@ -646,7 +644,7 @@ def expense_bill_verify_view(request, org_id, bill_id):
                         else:
                             # Create new product
                             new_product = ExpenseZohoProduct.objects.create(
-                                expenseZohoBill=updated_bill,
+                                zohoBill=updated_bill,
                                 organization=organization,
                                 **product_fields
                             )
@@ -658,7 +656,7 @@ def expense_bill_verify_view(request, org_id, bill_id):
                     if products_to_delete:
                         ExpenseZohoProduct.objects.filter(
                             id__in=products_to_delete,
-                            expenseZohoBill=updated_bill
+                            zohoBill=updated_bill
                         ).delete()
                         logger.info(f"Deleted {len(products_to_delete)} expense products not in update")
 
