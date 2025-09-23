@@ -664,7 +664,7 @@ def expense_bill_verify_view(request, org_id, bill_id):
                 all_products = updated_bill.products.all()
                 total_debit = 0
                 total_credit = 0
-
+                
                 for product in all_products:
                     try:
                         amount = float(product.amount) if product.amount else 0

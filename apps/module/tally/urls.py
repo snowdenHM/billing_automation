@@ -10,7 +10,6 @@ from .expense_views_functional import (
     expense_bill_analyze,
     expense_bill_verify,
     expense_bill_sync,
-    expense_bills_by_status,
     expense_bills_sync_list,
     expense_bill_sync_external
 )
@@ -62,7 +61,6 @@ urlpatterns = [
         path('expense-bills/<uuid:bill_id>/details/', expense_bill_detail, name='expense-bill-detail'),
         path('expense-bills/verify/', expense_bill_verify, name='expense-bill-verify'),
         path('expense-bills/sync/', expense_bill_sync, name='expense-bill-sync'),
-        path('expense-bills/by_status/', expense_bills_by_status, name='expense-bills-by-status'),
         path('expense-bills/sync_bills/', expense_bills_sync_list, name='expense-bills-sync-list'),
         path('expense-bills/sync_external/', expense_bill_sync_external, name='expense-bill-sync-external'),
     ])),

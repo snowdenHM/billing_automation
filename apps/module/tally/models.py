@@ -442,6 +442,10 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
         CGST_SGST = "CGST_SGST", "CGST+SGST"
         UNKNOWN = "Unknown", "Unknown"
 
+    class DebitCredit(models.TextChoices):
+        CREDIT = "credit", "Credit"
+        DEBIT = "debit", "Debit"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
     selected_bill = models.ForeignKey(  # Fixed: was selectBill
         TallyExpenseBill, on_delete=models.CASCADE, blank=True, null=True, related_name="analysed_headers"
@@ -449,7 +453,9 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
     vendor = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="vendor_tally_expense_analysed_bills"
     )
-
+    vendor_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.CREDIT
+    )
     voucher = models.CharField(max_length=255, blank=True, null=True)
     bill_no = models.CharField(max_length=50, blank=True, null=True)
     bill_date = models.DateField(blank=True, null=True)
@@ -460,13 +466,22 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
     igst_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="igst_tally_expense_analysed_bills"
     )
+    igst_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT
+    )
     cgst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     cgst_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="cgst_tally_expense_analysed_bills"
     )
+    cgst_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT
+    )
     sgst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     sgst_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="sgst_tally_expense_analysed_bills"
+    )
+    sgst_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT
     )
 
     note = models.CharField(max_length=100, blank=True, null=True, default="Enter Your Description")
@@ -501,7 +516,7 @@ class TallyExpenseAnalyzedProduct(BaseOrgModel):
     chart_of_accounts = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
     amount = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     debit_or_credit = models.CharField(
-        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.CREDIT
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

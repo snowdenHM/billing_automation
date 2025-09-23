@@ -17,7 +17,7 @@ from pdf2image import convert_from_bytes
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework.response import Response
 
 from apps.common.pagination import DefaultPagination
@@ -54,6 +54,52 @@ logger = logging.getLogger(__name__)
 
 # ============================================================================
 # Helper Functions
+
+class OrganizationAPIKeyOrBearerToken(BasePermission):
+    """
+    Custom permission class that allows access via API key OR Bearer token authentication.
+    This is an OR condition between authentication methods.
+    """
+
+    def has_permission(self, request, view):
+        # Check for API key in the Authorization header
+        auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+
+        if auth_header.startswith('Api-Key '):
+            api_key_value = auth_header.replace('Api-Key ', '', 1)
+
+            # Check if the API key exists and is valid
+            from rest_framework_api_key.models import APIKey
+            from apps.organizations.models import OrganizationAPIKey
+
+            try:
+                # Check if the API key is valid
+                api_key_obj = APIKey.objects.get_from_key(api_key_value)
+
+                if api_key_obj:
+                    # Check if it's linked to an organization
+                    org_api_key = OrganizationAPIKey.objects.get(api_key=api_key_obj)
+
+                    # Store the organization in the request for later use
+                    request.organization = org_api_key.organization
+                    return True
+
+            except (APIKey.DoesNotExist, OrganizationAPIKey.DoesNotExist):
+                # API key doesn't exist or not linked to organization
+                pass
+            except Exception as e:
+                # Log other exceptions for debugging
+                print(f"API Key validation error: {str(e)}")
+                pass
+
+        # If not authenticated via API key, check for Bearer token
+        bearer_auth = IsAuthenticated().has_permission(request, view)
+        if bearer_auth:
+            # If authenticated via bearer token, also check admin permission
+            return IsOrgAdmin().has_permission(request, view)
+
+        return False
+
 
 def get_organization_from_request(request, org_id=None):
     """Get organization from URL parameter or user membership"""
@@ -736,19 +782,23 @@ def expense_bill_detail(request, org_id, bill_id):
                 "bill_no": analyzed_bill.bill_no,
                 "bill_date": bill_date_str,
                 "total": float(analyzed_bill.total or 0),
+                "vendor_debit_or_credit": analyzed_bill.vendor_debit_or_credit,
                 "company_id": team_slug,
                 "taxes": {
                     "igst": {
                         "amount": float(analyzed_bill.igst or 0),
                         "ledger": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "No Tax Ledger",
+                        "debit_or_credit": analyzed_bill.igst_debit_or_credit,
                     },
                     "cgst": {
                         "amount": float(analyzed_bill.cgst or 0),
                         "ledger": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "No Tax Ledger",
+                        "debit_or_credit": analyzed_bill.cgst_debit_or_credit,
                     },
                     "sgst": {
                         "amount": float(analyzed_bill.sgst or 0),
                         "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
+                        "debit_or_credit": analyzed_bill.sgst_debit_or_credit,
                     }
                 },
                 "expense_items": [
@@ -875,6 +925,10 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
             if vendor:
                 analyzed_bill.vendor = vendor
 
+        # Update vendor debit_or_credit if provided
+        if 'vendor_debit_or_credit' in analyzed_data:
+            analyzed_bill.vendor_debit_or_credit = analyzed_data['vendor_debit_or_credit']
+
         # Update bill details - handle flattened structure
         if 'voucher' in analyzed_data:
             analyzed_bill.voucher = analyzed_data['voucher']
@@ -899,6 +953,8 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
                 igst_ledger = find_or_create_expense_tax_ledger(igst_data['ledger'], 'IGST', organization)
                 if igst_ledger:
                     analyzed_bill.igst_taxes = igst_ledger
+            if 'debit_or_credit' in igst_data:
+                analyzed_bill.igst_debit_or_credit = igst_data['debit_or_credit']
 
             cgst_data = taxes_data.get('cgst', {})
             if 'amount' in cgst_data:
@@ -907,6 +963,8 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
                 cgst_ledger = find_or_create_expense_tax_ledger(cgst_data['ledger'], 'CGST', organization)
                 if cgst_ledger:
                     analyzed_bill.cgst_taxes = cgst_ledger
+            if 'debit_or_credit' in cgst_data:
+                analyzed_bill.cgst_debit_or_credit = cgst_data['debit_or_credit']
 
             sgst_data = taxes_data.get('sgst', {})
             if 'amount' in sgst_data:
@@ -915,6 +973,8 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
                 sgst_ledger = find_or_create_expense_tax_ledger(sgst_data['ledger'], 'SGST', organization)
                 if sgst_ledger:
                     analyzed_bill.sgst_taxes = sgst_ledger
+            if 'debit_or_credit' in sgst_data:
+                analyzed_bill.sgst_debit_or_credit = sgst_data['debit_or_credit']
 
         # Determine GST type based on updated amounts
         if analyzed_bill.igst and analyzed_bill.igst > 0:
@@ -1090,7 +1150,8 @@ def update_analyzed_expense_products(analyzed_bill, expense_items, organization)
             total_credit += amount
 
     # Check if debit and credit amounts are equal
-    if abs(total_debit - total_credit) > 0.01:  # Allow for small rounding differences
+    # (allowing for small rounding differences)
+    if abs(total_debit - total_credit) > 0.01:
         raise Exception(
             f"Debit and Credit amounts must be equal. "
             f"Total Debit: {total_debit}, Total Credit: {total_credit}, "
@@ -1374,7 +1435,7 @@ def expense_bills_by_status(request, org_id):
     tags=['Tally TCP']
 )
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([OrganizationAPIKeyOrBearerToken])
 def expense_bills_sync_list(request, org_id):
     """Get all synced expense bills with their products"""
     organization = get_organization_from_request(request, org_id)
@@ -1437,6 +1498,45 @@ def prepare_expense_sync_data(analyzed_bill, organization):
                 cr_ledger.append(ledger_entry)
                 total_credit += float(item.amount)
 
+    # Process IGST based on debit_or_credit field
+    if analyzed_bill.igst and analyzed_bill.igst > 0 and analyzed_bill.igst_taxes:
+        igst_entry = {
+            "LEDGERNAME": str(analyzed_bill.igst_taxes),
+            "AMOUNT": float(analyzed_bill.igst)
+        }
+        if analyzed_bill.igst_debit_or_credit == 'debit':
+            dr_ledger.append(igst_entry)
+            total_debit += float(analyzed_bill.igst)
+        elif analyzed_bill.igst_debit_or_credit == 'credit':
+            cr_ledger.append(igst_entry)
+            total_credit += float(analyzed_bill.igst)
+
+    # Process CGST based on debit_or_credit field
+    if analyzed_bill.cgst and analyzed_bill.cgst > 0 and analyzed_bill.cgst_taxes:
+        cgst_entry = {
+            "LEDGERNAME": str(analyzed_bill.cgst_taxes),
+            "AMOUNT": float(analyzed_bill.cgst)
+        }
+        if analyzed_bill.cgst_debit_or_credit == 'debit':
+            dr_ledger.append(cgst_entry)
+            total_debit += float(analyzed_bill.cgst)
+        elif analyzed_bill.cgst_debit_or_credit == 'credit':
+            cr_ledger.append(cgst_entry)
+            total_credit += float(analyzed_bill.cgst)
+
+    # Process SGST based on debit_or_credit field
+    if analyzed_bill.sgst and analyzed_bill.sgst > 0 and analyzed_bill.sgst_taxes:
+        sgst_entry = {
+            "LEDGERNAME": str(analyzed_bill.sgst_taxes),
+            "AMOUNT": float(analyzed_bill.sgst)
+        }
+        if analyzed_bill.sgst_debit_or_credit == 'debit':
+            dr_ledger.append(sgst_entry)
+            total_debit += float(analyzed_bill.sgst)
+        elif analyzed_bill.sgst_debit_or_credit == 'credit':
+            cr_ledger.append(sgst_entry)
+            total_credit += float(analyzed_bill.sgst)
+
     # Ensure debit and credit are balanced
     # If only debits exist, add vendor as credit
     if total_debit > 0 and total_credit == 0:
@@ -1467,7 +1567,7 @@ def prepare_expense_sync_data(analyzed_bill, organization):
         "created_at": analyzed_bill.created_at
     }
 
-    return {"data": bill_data }
+    return {"data": bill_data}
 
 
 @extend_schema(
