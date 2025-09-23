@@ -783,6 +783,7 @@ def expense_bill_detail(request, org_id, bill_id):
                 "bill_date": bill_date_str,
                 "total": float(analyzed_bill.total or 0),
                 "vendor_debit_or_credit": analyzed_bill.vendor_debit_or_credit,
+                "vendor_amount": float(analyzed_bill.vendor_amount or 0),
                 "company_id": team_slug,
                 "taxes": {
                     "igst": {
@@ -928,6 +929,10 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
         # Update vendor debit_or_credit if provided
         if 'vendor_debit_or_credit' in analyzed_data:
             analyzed_bill.vendor_debit_or_credit = analyzed_data['vendor_debit_or_credit']
+
+        # Update vendor_amount if provided
+        if 'vendor_amount' in analyzed_data:
+            analyzed_bill.vendor_amount = round(float(analyzed_data['vendor_amount']), 2)
 
         # Update bill details - handle flattened structure
         if 'voucher' in analyzed_data:
@@ -1136,10 +1141,11 @@ def find_or_create_expense_tax_ledger(ledger_name, tax_type, organization):
 def update_analyzed_expense_products(analyzed_bill, expense_items, organization):
     """Update existing expense products and create new ones based on item_id"""
 
-    # Validate debit/credit balance before processing
+    # Validate debit/credit balance before processing - including all components
     total_debit = 0
     total_credit = 0
 
+    # Calculate debit/credit from expense items
     for item_data in expense_items:
         amount = round(float(item_data.get('amount', 0)), 2)
         debit_or_credit = item_data.get('debit_or_credit', '').lower()
@@ -1149,13 +1155,40 @@ def update_analyzed_expense_products(analyzed_bill, expense_items, organization)
         elif debit_or_credit == 'credit':
             total_credit += amount
 
-    # Check if debit and credit amounts are equal
+    # Add tax amounts to debit/credit totals
+    if analyzed_bill.igst and analyzed_bill.igst > 0:
+        if analyzed_bill.igst_debit_or_credit == 'debit':
+            total_debit += float(analyzed_bill.igst)
+        elif analyzed_bill.igst_debit_or_credit == 'credit':
+            total_credit += float(analyzed_bill.igst)
+
+    if analyzed_bill.cgst and analyzed_bill.cgst > 0:
+        if analyzed_bill.cgst_debit_or_credit == 'debit':
+            total_debit += float(analyzed_bill.cgst)
+        elif analyzed_bill.cgst_debit_or_credit == 'credit':
+            total_credit += float(analyzed_bill.cgst)
+
+    if analyzed_bill.sgst and analyzed_bill.sgst > 0:
+        if analyzed_bill.sgst_debit_or_credit == 'debit':
+            total_debit += float(analyzed_bill.sgst)
+        elif analyzed_bill.sgst_debit_or_credit == 'credit':
+            total_credit += float(analyzed_bill.sgst)
+
+    # Add vendor amount to debit/credit totals
+    if analyzed_bill.vendor_amount and analyzed_bill.vendor_amount > 0:
+        if analyzed_bill.vendor_debit_or_credit == 'debit':
+            total_debit += float(analyzed_bill.vendor_amount)
+        elif analyzed_bill.vendor_debit_or_credit == 'credit':
+            total_credit += float(analyzed_bill.vendor_amount)
+
+    # Check if debit and credit amounts are equal (including all components)
     # (allowing for small rounding differences)
     if abs(total_debit - total_credit) > 0.01:
         raise Exception(
-            f"Debit and Credit amounts must be equal. "
+            f"Total Debit and Credit amounts must be equal across all components. "
             f"Total Debit: {total_debit}, Total Credit: {total_credit}, "
-            f"Difference: {abs(total_debit - total_credit)}"
+            f"Difference: {abs(total_debit - total_credit)}. "
+            f"This includes expense items, taxes (IGST/CGST/SGST), and vendor amount."
         )
 
     # Get existing products mapped by their ID
@@ -1537,19 +1570,34 @@ def prepare_expense_sync_data(analyzed_bill, organization):
             cr_ledger.append(sgst_entry)
             total_credit += float(analyzed_bill.sgst)
 
-    # Ensure debit and credit are balanced
-    # If only debits exist, add vendor as credit
-    if total_debit > 0 and total_credit == 0:
-        cr_ledger.append({
-            "LEDGERNAME": vendor_ledger.name if vendor_ledger else "No Vendor Ledger",
-            "AMOUNT": total_debit
-        })
-    # If only credits exist, add vendor as debit
-    elif total_credit > 0 and total_debit == 0:
-        dr_ledger.append({
-            "LEDGERNAME": vendor_ledger.name if vendor_ledger else "No Vendor Ledger",
-            "AMOUNT": total_credit
-        })
+    # Process vendor based on vendor_debit_or_credit field using vendor_amount
+    if vendor_ledger and analyzed_bill.vendor_amount and analyzed_bill.vendor_amount > 0:
+        vendor_entry = {
+            "LEDGERNAME": vendor_ledger.name,
+            "AMOUNT": float(analyzed_bill.vendor_amount)
+        }
+
+        # Add vendor to appropriate ledger based on vendor_debit_or_credit
+        if analyzed_bill.vendor_debit_or_credit == 'debit':
+            dr_ledger.append(vendor_entry)
+            total_debit += float(analyzed_bill.vendor_amount)
+        elif analyzed_bill.vendor_debit_or_credit == 'credit':
+            cr_ledger.append(vendor_entry)
+            total_credit += float(analyzed_bill.vendor_amount)
+
+    # Ensure debit and credit are balanced - remove automatic vendor balancing
+    # since vendor is now explicitly handled based on vendor_debit_or_credit
+    # The previous logic is commented out:
+    # if total_debit > 0 and total_credit == 0:
+    #     cr_ledger.append({
+    #         "LEDGERNAME": vendor_ledger.name if vendor_ledger else "No Vendor Ledger",
+    #         "AMOUNT": total_debit
+    #     })
+    # elif total_credit > 0 and total_debit == 0:
+    #     dr_ledger.append({
+    #         "LEDGERNAME": vendor_ledger.name if vendor_ledger else "No Vendor Ledger",
+    #         "AMOUNT": total_credit
+    #     })
 
     # Build expense sync payload with structured format similar to vendor bills
     bill_data = {

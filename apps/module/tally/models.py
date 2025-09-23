@@ -456,6 +456,8 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
     vendor_debit_or_credit = models.CharField(
         choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.CREDIT
     )
+    vendor_amount = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+
     voucher = models.CharField(max_length=255, blank=True, null=True)
     bill_no = models.CharField(max_length=50, blank=True, null=True)
     bill_date = models.DateField(blank=True, null=True)
