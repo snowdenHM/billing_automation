@@ -380,7 +380,7 @@ def organization_list_api_keys_view(request, org_id):
         organization=organization
     ).select_related("created_by", "organization", "organization__owner", "organization__created_by")
     serializer = APIKeySerializer(queryset, many=True, context={"request": request})
-    return Response({"data": serializer.data})
+    return Response(serializer.data)
 
 
 @extend_schema(
