@@ -444,7 +444,7 @@ def organization_modules_view(request, org_id):
         organization=organization
     ).select_related("organization", "organization__owner", "organization__created_by", "module")
     serializer = OrganizationModuleSerializer(queryset, many=True, context={"request": request})
-    return Response({"data": serializer.data})
+    return Response(serializer.data)
 
 
 @extend_schema(
