@@ -15,6 +15,8 @@ from .views import (
     membership_detail_view,
     membership_update_view,
     membership_delete_view,
+    organization_onboarding_create_view,
+    organization_onboarding_enable_module_view,
 )
 from .class_views import (
     OrganizationRevokeAPIKeyView,
@@ -50,4 +52,8 @@ urlpatterns = [
     path("memberships/<uuid:pk>/", membership_detail_view, name="membership-detail"),
     path("memberships/<uuid:pk>/update/", membership_update_view, name="membership-update"),
     path("memberships/<uuid:pk>/delete/", membership_delete_view, name="membership-delete"),
+
+    # Onboarding endpoints
+    path("org/onboarding/create/", organization_onboarding_create_view, name="org-onboarding-create"),
+    path("org/onboarding/<uuid:org_id>/enable-module/", organization_onboarding_enable_module_view, name="org-onboarding-enable-module"),
 ]

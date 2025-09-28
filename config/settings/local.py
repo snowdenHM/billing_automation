@@ -10,7 +10,16 @@ EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "https://billmunshi.com",
+    "https://www.billmunshi.com",
 ])
+# If you use cookie-based session/CSRF auth:
+CSRF_TRUSTED_ORIGINS = [
+    "https://billmunshi.com",
+    "https://www.billmunshi.com",
+    "https://api.billmunshi.com",
+]
+
 
 # Faster passwords in dev
 PASSWORD_HASHERS = [

@@ -51,7 +51,7 @@ def organization_list_view(request):
         ).select_related("owner", "created_by")
 
     serializer = OrganizationSerializer(organizations, many=True, context={"request": request})
-    return Response(serializer.data)
+    return Response({"data": serializer.data})
 
 
 @extend_schema(
@@ -76,7 +76,7 @@ def organization_detail_view(request, pk):
             raise PermissionDenied("You don't have access to this organization")
 
     serializer = OrganizationSerializer(organization, context={"request": request})
-    return Response(serializer.data)
+    return Response({"data": serializer.data})
 
 
 @extend_schema(
@@ -114,7 +114,7 @@ def organization_update_view(request, pk):
     )
     serializer.is_valid(raise_exception=True)
     serializer.save()
-    return Response(serializer.data)
+    return Response({"data": serializer.data})
 
 
 # Member Management Views
@@ -150,7 +150,7 @@ def organization_add_member_view(request, org_id):
     )
     serializer.is_valid(raise_exception=True)
     serializer.save()
-    return Response(serializer.data, status=status.HTTP_201_CREATED)
+    return Response({"data": serializer.data}, status=status.HTTP_201_CREATED)
 
 
 @extend_schema(
@@ -176,9 +176,31 @@ def organization_members_view(request, org_id):
 
     queryset = OrgMembership.objects.filter(
         organization=organization, is_active=True
-    ).select_related("user", "organization")
+    ).select_related("user", "organization").order_by('-created_at')
+
     serializer = OrgMembershipSerializer(queryset, many=True, context={"request": request})
-    return Response(serializer.data)
+
+    # Enhanced response format with metadata
+    response_data = {
+        "data": {
+            "organization": {
+                "id": str(organization.id),
+                "name": organization.name,
+                "unique_name": organization.unique_name
+            },
+            "members": serializer.data,
+            "meta": {
+                "total_members": len(serializer.data),
+                "active_members": len(serializer.data),
+                "roles_breakdown": {
+                    "admins": len([m for m in serializer.data if m['role'] == 'ADMIN']),
+                    "members": len([m for m in serializer.data if m['role'] == 'MEMBER'])
+                }
+            }
+        }
+    }
+
+    return Response(response_data)
 
 
 @extend_schema(
@@ -277,7 +299,7 @@ def organization_update_member_role_view(request, org_id, membership_id):
     )
     serializer.is_valid(raise_exception=True)
     serializer.save()
-    return Response(OrgMembershipSerializer(membership, context={"request": request}).data)
+    return Response({"data": OrgMembershipSerializer(membership, context={"request": request}).data})
 
 
 # API Key Management Views
@@ -320,8 +342,10 @@ def organization_issue_api_key_view(request, org_id):
 
     return Response(
         {
-            **APIKeySerializer(org_api_key, context={"request": request}).data,
-            "key": key,  # Include the actual key in response
+            "data": {
+                **APIKeySerializer(org_api_key, context={"request": request}).data,
+                "key": key,  # Include the actual key in response
+            }
         },
         status=status.HTTP_201_CREATED,
     )
@@ -356,7 +380,7 @@ def organization_list_api_keys_view(request, org_id):
         organization=organization
     ).select_related("created_by", "organization", "organization__owner", "organization__created_by")
     serializer = APIKeySerializer(queryset, many=True, context={"request": request})
-    return Response(serializer.data)
+    return Response({"data": serializer.data})
 
 
 @extend_schema(
@@ -391,7 +415,7 @@ def organization_revoke_api_key_view(request, org_id, key_id):
 
     api_key.api_key.revoked = True
     api_key.api_key.save()
-    return Response(APIKeySerializer(api_key, context={"request": request}).data)
+    return Response({"data": APIKeySerializer(api_key, context={"request": request}).data})
 
 
 # Module Management Views
@@ -420,7 +444,7 @@ def organization_modules_view(request, org_id):
         organization=organization
     ).select_related("organization", "organization__owner", "organization__created_by", "module")
     serializer = OrganizationModuleSerializer(queryset, many=True, context={"request": request})
-    return Response(serializer.data)
+    return Response({"data": serializer.data})
 
 
 @extend_schema(
@@ -470,7 +494,7 @@ def organization_set_module_view(request, org_id, code):
         defaults={"is_enabled": True},
     )
     serializer = OrganizationModuleSerializer(obj, context={"request": request})
-    return Response(serializer.data)
+    return Response({"data": serializer.data})
 
 
 @extend_schema(
@@ -486,7 +510,7 @@ def modules_catalog_view(request):
     """
     queryset = Module.objects.all()
     serializer = ModuleSerializer(queryset, many=True, context={"request": request})
-    return Response(serializer.data)
+    return Response({"data": serializer.data})
 
 
 # Membership Management Views
@@ -521,7 +545,7 @@ def membership_list_view(request):
             ).select_related('user', 'organization')
 
         serializer = OrgMembershipSerializer(memberships, many=True, context={"request": request})
-        return Response(serializer.data)
+        return Response({"data": serializer.data})
 
     elif request.method == 'POST':
         serializer = OrgMembershipSerializer(data=request.data, context={"request": request})
@@ -538,7 +562,7 @@ def membership_list_view(request):
             raise PermissionDenied("You don't have permission to add members to this organization")
 
         serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response({"data": serializer.data}, status=status.HTTP_201_CREATED)
 
 
 @extend_schema(
@@ -567,7 +591,7 @@ def membership_detail_view(request, pk):
         return Response({"detail": "Membership not found."}, status=status.HTTP_404_NOT_FOUND)
 
     serializer = OrgMembershipSerializer(membership, context={"request": request})
-    return Response(serializer.data)
+    return Response({"data": serializer.data})
 
 
 @extend_schema(
@@ -605,7 +629,7 @@ def membership_update_view(request, pk):
     )
     serializer.is_valid(raise_exception=True)
     serializer.save()
-    return Response(serializer.data)
+    return Response({"data": serializer.data})
 
 
 @extend_schema(
@@ -640,3 +664,93 @@ def membership_delete_view(request, pk):
     membership.is_active = False
     membership.save(update_fields=['is_active'])
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# Onboarding Flow Endpoints
+@extend_schema(
+    request=OrganizationSerializer,
+    responses=OrganizationSerializer,
+    tags=["Organization Onboarding"],
+    methods=["POST"]
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def organization_onboarding_create_view(request):
+    """
+    Create a new organization with the requesting user as admin member.
+    This is part of the onboarding flow.
+    """
+    # Set the requesting user as both owner and creator
+    serializer = OrganizationSerializer(
+        data={**request.data, "owner_email": request.user.email},
+        context={"request": request}
+    )
+    serializer.is_valid(raise_exception=True)
+
+    # Create the organization
+    organization = serializer.save(
+        created_by=request.user,
+        owner=request.user
+    )
+
+    # Automatically create admin membership for the requesting user
+    OrgMembership.objects.create(
+        organization=organization,
+        user=request.user,
+        role=OrgMembership.ADMIN,
+        is_active=True
+    )
+
+    return Response({"data": serializer.data}, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(
+    request=OrganizationModuleSerializer,
+    responses=OrganizationModuleSerializer,
+    tags=["Organization Onboarding"],
+    methods=["POST"]
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def organization_onboarding_enable_module_view(request, org_id):
+    """
+    Enable a module for an organization during onboarding.
+    Only organization admins can enable modules.
+    """
+    try:
+        organization = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user is admin of the organization
+    if not (request.user.is_staff or
+            organization.memberships.filter(
+                user=request.user,
+                role='ADMIN',
+                is_active=True
+            ).exists()):
+        raise PermissionDenied("You don't have permission to enable modules for this organization")
+
+    # Get the module code from request data
+    module_code = request.data.get('module')
+    if not module_code:
+        return Response({"detail": "Module code is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        module = Module.objects.get(code=module_code)
+    except Module.DoesNotExist:
+        return Response({"detail": "Module not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Create or update organization module
+    org_module, created = OrganizationModule.objects.get_or_create(
+        organization=organization,
+        module=module,
+        defaults={'is_active': True}
+    )
+
+    if not created and not org_module.is_active:
+        org_module.is_active = True
+        org_module.save(update_fields=['is_active'])
+
+    serializer = OrganizationModuleSerializer(org_module, context={"request": request})
+    return Response({"data": serializer.data}, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)

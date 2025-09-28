@@ -26,23 +26,29 @@ SECURE_HSTS_PRELOAD = True
 SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=True)
 
 # CSRF/CORS trusted origins (include scheme)
-CSRF_TRUSTED_ORIGINS = env.list(
-    "CSRF_TRUSTED_ORIGINS",
-    default=["https://billmunshi.com", "https://www.billmunshi.com"]
-)
-CORS_ALLOWED_ORIGINS = env.list(
-    "CORS_ALLOWED_ORIGINS",
-    default=["https://billmunshi.com", "https://www.billmunshi.com"]
-)
+CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://billmunshi.com",
+    "https://www.billmunshi.com",
+])
+# If you use cookie-based session/CSRF auth:
+CSRF_TRUSTED_ORIGINS = [
+    "https://billmunshi.com",
+    "https://www.billmunshi.com",
+    "https://api.billmunshi.com",
+]
+
 CORS_ALLOW_CREDENTIALS = True
 
 # Email (override via env in prod)
 EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
-EMAIL_HOST = env("EMAIL_HOST", default="smtp.sendgrid.net")
+EMAIL_HOST = env("EMAIL_HOST", default="smtp.gmail.com")
 EMAIL_PORT = env.int("EMAIL_PORT", default=587)
-EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="apikey")
-EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")  # Your Gmail address
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")  # Your Gmail app password
 EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@billmunshi.com")
 
 # Auth backends & password hashers
