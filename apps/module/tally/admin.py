@@ -83,10 +83,12 @@ class TallyVendorAnalyzedBillAdmin(admin.ModelAdmin):
 
 
 class TallyVendorBillAdmin(admin.ModelAdmin):
-    list_display = ('bill_munshi_name', 'status', 'file_type', 'organization', 'display_file', 'created_at')
-    list_filter = ('status', 'file_type', 'organization', 'created_at')
-    search_fields = ('bill_munshi_name', 'organization__name')
+    list_display = ('bill_munshi_name', 'status', 'file_type', 'uploaded_by', 'organization', 'display_file', 'created_at')
+    list_filter = ('status', 'file_type', 'uploaded_by', 'organization', 'created_at')
+    search_fields = ('bill_munshi_name', 'uploaded_by__username', 'uploaded_by__first_name', 'uploaded_by__last_name', 'organization__name')
     readonly_fields = ('created_at', 'updated_at')
+    fields = ('bill_munshi_name', 'file', 'file_type', 'status', 'process', 'uploaded_by', 'organization', 'analysed_data', 'created_at', 'updated_at')
+    autocomplete_fields = ('uploaded_by', 'organization')
 
     def display_file(self, obj):
         if obj.file:
@@ -97,10 +99,12 @@ class TallyVendorBillAdmin(admin.ModelAdmin):
 
 
 class TallyExpenseBillAdmin(admin.ModelAdmin):
-    list_display = ('bill_munshi_name', 'status', 'file_type', 'organization', 'display_file', 'created_at')
-    list_filter = ('status', 'file_type', 'organization', 'created_at')
-    search_fields = ('bill_munshi_name', 'organization__name')
+    list_display = ('bill_munshi_name', 'status', 'file_type', 'uploaded_by', 'organization', 'display_file', 'created_at')
+    list_filter = ('status', 'file_type', 'uploaded_by', 'organization', 'created_at')
+    search_fields = ('bill_munshi_name', 'uploaded_by__username', 'uploaded_by__first_name', 'uploaded_by__last_name', 'organization__name')
     readonly_fields = ('created_at', 'updated_at')
+    fields = ('bill_munshi_name', 'file', 'file_type', 'status', 'process', 'uploaded_by', 'organization', 'analysed_data', 'created_at', 'updated_at')
+    autocomplete_fields = ('uploaded_by', 'organization')
 
     def display_file(self, obj):
         if obj.file:

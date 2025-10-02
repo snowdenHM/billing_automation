@@ -138,9 +138,9 @@ class VendorZohoProductInline(admin.TabularInline):
 
 @admin.register(VendorBill)
 class VendorBillAdmin(BaseOrgScopedAdmin):
-    list_display = ["billmunshiName", "fileType", "status", "process", "organization", "created_at"]
-    list_filter = ["status", "fileType", "process", "organization", "created_at"]
-    search_fields = ["billmunshiName"]
+    list_display = ["billmunshiName", "fileType", "status", "process", "uploaded_by", "organization", "created_at"]
+    list_filter = ["status", "fileType", "process", "uploaded_by", "organization", "created_at"]
+    search_fields = ["billmunshiName", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
     readonly_fields = ["analysed_data", "created_at", "update_at"]
     fields = (
         "organization",
@@ -150,10 +150,11 @@ class VendorBillAdmin(BaseOrgScopedAdmin):
         "analysed_data",
         "status",
         "process",
+        "uploaded_by",
         "created_at",
         "update_at",
     )
-    autocomplete_fields = ("organization",)
+    autocomplete_fields = ("organization", "uploaded_by")
 
     @admin.display(description="File", ordering="file")
     def file_link(self, obj):
@@ -200,9 +201,9 @@ class ExpenseZohoProductInline(admin.TabularInline):
 
 @admin.register(ExpenseBill)
 class ExpenseBillAdmin(BaseOrgScopedAdmin):
-    list_display = ["billmunshiName", "fileType", "status", "process", "organization", "created_at"]
-    list_filter = ["status", "fileType", "process", "organization", "created_at"]
-    search_fields = ["billmunshiName"]
+    list_display = ["billmunshiName", "fileType", "status", "process", "uploaded_by", "organization", "created_at"]
+    list_filter = ["status", "fileType", "process", "uploaded_by", "organization", "created_at"]
+    search_fields = ["billmunshiName", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
     readonly_fields = ["analysed_data", "created_at", "update_at"]
     fields = (
         "organization",
@@ -212,10 +213,11 @@ class ExpenseBillAdmin(BaseOrgScopedAdmin):
         "analysed_data",
         "status",
         "process",
+        "uploaded_by",
         "created_at",
         "update_at",
     )
-    autocomplete_fields = ("organization",)
+    autocomplete_fields = ("organization", "uploaded_by")
 
     @admin.display(description="File", ordering="file")
     def file_link(self, obj):
