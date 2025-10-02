@@ -342,7 +342,18 @@ def vendor_bills_list_view(request, org_id):
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    bills = VendorBill.objects.filter(organization=organization).order_by('-created_at')
+    bills = VendorBill.objects.filter(organization=organization)
+
+    # Filter by status based on query parameters
+    status_param = request.query_params.get('status', '').lower()
+    if status_param == 'draft':
+        bills = bills.filter(status='Draft')
+    elif status_param == 'analysed':
+        bills = bills.filter(status__in=['Analysed', 'Verified'])
+    elif status_param == 'synced':
+        bills = bills.filter(status='Synced')
+
+    bills = bills.order_by('-created_at')
 
     # Apply pagination
     paginator = DefaultPagination()
@@ -420,12 +431,6 @@ def vendor_bill_upload_view(request, org_id):
                 return Response({
                     "detail": f"Error processing PDF: {str(e)}"
                 }, status=status.HTTP_400_BAD_REQUEST)
-
-        # Restrict PDF uploads for single invoice
-        elif file_type == 'Single Invoice/File' and uploaded_file.name.endswith('.pdf'):
-            return Response({
-                "detail": "PDF upload is not allowed for Single Invoice/File type"
-            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Save regular file upload
         bill = serializer.save(organization=organization, status='Draft')

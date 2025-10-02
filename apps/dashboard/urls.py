@@ -1,20 +1,21 @@
 from django.urls import path
 from .views import (
-    OverviewView, TimeseriesView, FunnelView, TopVendorsView,
-    TaxesSummaryView, ExpenseSummaryView, PendingView,
-    IntegrationsHealthView, UsageView
+    ZohoOverviewView, ZohoTimeseriesView, ZohoFunnelView, ZohoTopVendorsView,
+    ZohoTaxesSummaryView, ZohoExpenseSummaryView, ZohoPendingView,
+    ZohoIntegrationsHealthView, ZohoUsageView
 )
 
 app_name = "dashboard"
 
 urlpatterns = [
-    path("<uuid:org_id>/overview/", OverviewView.as_view(), name="overview"),
-    path("<uuid:org_id>/timeseries/", TimeseriesView.as_view(), name="timeseries"),
-    path("<uuid:org_id>/funnel/", FunnelView.as_view(), name="funnel"),
-    path("<uuid:org_id>/top-vendors/", TopVendorsView.as_view(), name="top_vendors"),
-    path("<uuid:org_id>/taxes/summary/", TaxesSummaryView.as_view(), name="taxes_summary"),
-    path("<uuid:org_id>/expenses/summary/", ExpenseSummaryView.as_view(), name="expenses_summary"),
-    path("<uuid:org_id>/pending/", PendingView.as_view(), name="pending"),
-    path("<uuid:org_id>/integrations/health/", IntegrationsHealthView.as_view(), name="integrations_health"),
-    path("<uuid:org_id>/usage/", UsageView.as_view(), name="usage"),
+    # Zoho Dashboard Analytics - Organization Scoped
+    path('organizations/<uuid:org_id>/zoho/overview/', ZohoOverviewView.as_view(), name='zoho_overview'),
+    path('organizations/<uuid:org_id>/zoho/timeseries/', ZohoTimeseriesView.as_view(), name='zoho_timeseries'),
+    path('organizations/<uuid:org_id>/zoho/funnel/', ZohoFunnelView.as_view(), name='zoho_funnel'),
+    path('organizations/<uuid:org_id>/zoho/vendors/top/', ZohoTopVendorsView.as_view(), name='zoho_top_vendors'),
+    path('organizations/<uuid:org_id>/zoho/taxes/summary/', ZohoTaxesSummaryView.as_view(), name='zoho_taxes_summary'),
+    path('organizations/<uuid:org_id>/zoho/expenses/summary/', ZohoExpenseSummaryView.as_view(), name='zoho_expense_summary'),
+    path('organizations/<uuid:org_id>/zoho/pending/', ZohoPendingView.as_view(), name='zoho_pending'),
+    path('organizations/<uuid:org_id>/zoho/integrations/health/', ZohoIntegrationsHealthView.as_view(), name='zoho_integrations_health'),
+    path('organizations/<uuid:org_id>/zoho/usage/', ZohoUsageView.as_view(), name='zoho_usage'),
 ]

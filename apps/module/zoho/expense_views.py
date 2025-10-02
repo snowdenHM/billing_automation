@@ -12,7 +12,6 @@ from PyPDF2 import PdfReader
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Q
 from django.db.models.functions import Lower
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
@@ -370,7 +369,19 @@ def expense_bills_list_view(request, org_id):
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    bills = ExpenseBill.objects.filter(organization=organization).order_by('-created_at')
+    bills = ExpenseBill.objects.filter(organization=organization)
+
+    # Filter by status based on query parameters
+    status_param = request.query_params.get('status', '').lower()
+    if status_param == 'draft':
+        bills = bills.filter(status='Draft')
+    elif status_param == 'analysed':
+        # Include both Analysed and Verified status bills
+        bills = bills.filter(status__in=['Analysed', 'Verified'])
+    elif status_param == 'synced':
+        bills = bills.filter(status='Synced')
+
+    bills = bills.order_by('-created_at')
 
     # Apply pagination
     paginator = DefaultPagination()
@@ -449,13 +460,7 @@ def expense_bill_upload_view(request, org_id):
                     "detail": f"Error processing PDF: {str(e)}"
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-        # Restrict PDF uploads for single invoice
-        elif file_type == 'Single Invoice/File' and uploaded_file.name.endswith('.pdf'):
-            return Response({
-                "detail": "PDF upload is not allowed for Single Invoice/File type"
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        # Save regular file upload
+        # Save regular file upload (including PDFs for single invoices)
         bill = serializer.save(organization=organization, status='Draft')
         response_serializer = ZohoExpenseBillSerializer(bill)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
