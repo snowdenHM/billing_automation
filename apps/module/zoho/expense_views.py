@@ -126,15 +126,28 @@ def analyze_bill_with_openai(file_content, file_extension):
 
         # Prepare image data based on file type
         if file_extension.lower() == 'pdf':
-            # Convert PDF to image
-            images = convert_from_bytes(file_content, first_page=1, last_page=1)
+            # Convert PDF to image with high DPI for better OCR quality
+            images = convert_from_bytes(
+                file_content,
+                first_page=1,
+                last_page=1,
+                dpi=300,  # High DPI (300) instead of default (200) for better text clarity
+                fmt='PNG'  # PNG format for lossless quality
+            )
             if not images:
                 raise ValueError("Could not convert PDF to image")
 
-            # Convert PIL image to base64
+            # Get the converted image and ensure RGB mode for better processing
+            pdf_image = images[0]
+            if pdf_image.mode != 'RGB':
+                pdf_image = pdf_image.convert('RGB')
+
+            # Convert PIL image to base64 with high quality
             buffer = BytesIO()
-            images[0].save(buffer, format='PNG')
+            pdf_image.save(buffer, format='PNG', optimize=False)
             image_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+            logger.info(f"PDF converted to image: {pdf_image.size} pixels, mode: {pdf_image.mode}")
 
         elif file_extension.lower() in ['jpg', 'jpeg', 'png']:
             # Convert image to base64
@@ -185,7 +198,7 @@ def analyze_bill_with_openai(file_content, file_extension):
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
                 ]
             }],
-            max_tokens=1000
+            max_tokens=3000
         )
 
         json_data = json.loads(response.choices[0].message.content)

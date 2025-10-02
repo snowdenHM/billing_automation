@@ -498,9 +498,19 @@ def vendor_bills_list(request, org_id):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    bills = TallyVendorBill.objects.filter(
-        organization=organization
-    ).order_by('-created_at')
+    bills = TallyVendorBill.objects.filter(organization=organization)
+
+    # Filter by status based on query parameters
+    status_param = request.query_params.get('status', '').lower()
+    if status_param == 'draft':
+        bills = bills.filter(status='Draft')
+    elif status_param == 'analysed':
+        # Include both Analysed and Verified status bills
+        bills = bills.filter(status__in=['Analysed', 'Verified'])
+    elif status_param == 'synced':
+        bills = bills.filter(status='Synced')
+
+    bills = bills.order_by('-created_at')
 
     # Pagination
     paginator = DefaultPagination()
@@ -555,7 +565,7 @@ def vendor_bills_upload(request, org_id):
                     )
                     created_bills.extend(pdf_bills)
                 else:
-                    # Create single bill for non-PDF or single invoice type
+                    # Create single bill (including PDFs for single invoice type)
                     bill = TallyVendorBill.objects.create(
                         file=uploaded_file,
                         file_type=file_type,
