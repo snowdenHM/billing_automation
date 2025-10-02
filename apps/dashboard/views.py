@@ -14,6 +14,12 @@ from apps.module.zoho.models import (
     ExpenseBill, ExpenseZohoBill, ExpenseZohoProduct,
     ZohoVendor, ZohoCredentials
 )
+from .serializers import (
+    ZohoOverviewResponseSerializer, ZohoTimeseriesResponseSerializer,
+    ZohoFunnelResponseSerializer, ZohoTopVendorsResponseSerializer,
+    ZohoTaxesResponseSerializer, ZohoExpenseResponseSerializer,
+    ErrorResponseSerializer
+)
 
 
 class ZohoOverviewView(APIView):
@@ -26,7 +32,11 @@ class ZohoOverviewView(APIView):
     @extend_schema(
         summary="Get Zoho overview statistics",
         description="Returns comprehensive overview of Zoho bills, vendors, and processing status",
-        tags=["Zoho Dashboard"]
+        tags=["Zoho Dashboard"],
+        responses={
+            200: ZohoOverviewResponseSerializer,
+            404: ErrorResponseSerializer
+        }
     )
     def get(self, request, org_id):
         try:
@@ -96,7 +106,11 @@ class ZohoTimeseriesView(APIView):
     @extend_schema(
         summary="Get Zoho timeseries data",
         description="Returns time-series data for bill creation and processing trends",
-        tags=["Zoho Dashboard"]
+        tags=["Zoho Dashboard"],
+        responses={
+            200: ZohoTimeseriesResponseSerializer,
+            404: ErrorResponseSerializer
+        }
     )
     def get(self, request, org_id):
         try:
@@ -162,7 +176,11 @@ class ZohoFunnelView(APIView):
     @extend_schema(
         summary="Get Zoho processing funnel data",
         description="Returns funnel analysis of bill processing stages",
-        tags=["Zoho Dashboard"]
+        tags=["Zoho Dashboard"],
+        responses={
+            200: ZohoFunnelResponseSerializer,
+            404: ErrorResponseSerializer
+        }
     )
     def get(self, request, org_id):
         try:
@@ -226,7 +244,11 @@ class ZohoTopVendorsView(APIView):
     @extend_schema(
         summary="Get top Zoho vendors",
         description="Returns top vendors by bill count and amounts",
-        tags=["Zoho Dashboard"]
+        tags=["Zoho Dashboard"],
+        responses={
+            200: ZohoTopVendorsResponseSerializer,
+            404: ErrorResponseSerializer
+        }
     )
     def get(self, request, org_id):
         try:
@@ -279,7 +301,11 @@ class ZohoTaxesSummaryView(APIView):
     @extend_schema(
         summary="Get Zoho taxes summary",
         description="Returns comprehensive tax analysis for bills",
-        tags=["Zoho Dashboard"]
+        tags=["Zoho Dashboard"],
+        responses={
+            200: ZohoTaxesResponseSerializer,
+            404: ErrorResponseSerializer
+        }
     )
     def get(self, request, org_id):
         try:
@@ -336,7 +362,11 @@ class ZohoExpenseSummaryView(APIView):
     @extend_schema(
         summary="Get Zoho expense summary",
         description="Returns expense analysis and categorization",
-        tags=["Zoho Dashboard"]
+        tags=["Zoho Dashboard"],
+        responses={
+            200: ZohoExpenseResponseSerializer,
+            404: ErrorResponseSerializer
+        }
     )
     def get(self, request, org_id):
         try:
@@ -345,10 +375,10 @@ class ZohoExpenseSummaryView(APIView):
             # Expense Bills by Status
             expense_bills = ExpenseBill.objects.filter(organization=organization)
             expense_summary = {
-                'total_expense_bills': expense_bills.count(),
-                'draft_expenses': expense_bills.filter(status='Draft').count(),
-                'analysed_expenses': expense_bills.filter(status__in=['Analysed', 'Verified']).count(),
-                'synced_expenses': expense_bills.filter(status='Synced').count(),
+                'total_count': expense_bills.count(),
+                'draft_count': expense_bills.filter(status='Draft').count(),
+                'analysed_count': expense_bills.filter(status__in=['Analysed', 'Verified']).count(),
+                'synced_count': expense_bills.filter(status='Synced').count(),
             }
 
             # Expense amounts by chart of accounts (top categories)
@@ -398,7 +428,11 @@ class ZohoPendingView(APIView):
     @extend_schema(
         summary="Get Zoho pending items",
         description="Returns pending bills and items requiring attention",
-        tags=["Zoho Dashboard"]
+        tags=["Zoho Dashboard"],
+        responses={
+            200: ZohoOverviewResponseSerializer,  # Reusing for simplicity
+            404: ErrorResponseSerializer
+        }
     )
     def get(self, request, org_id):
         try:

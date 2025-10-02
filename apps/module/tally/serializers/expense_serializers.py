@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
+from drf_spectacular.utils import extend_schema_field
 from ..models import TallyExpenseBill, TallyExpenseAnalyzedBill, TallyExpenseAnalyzedProduct
 
 
@@ -24,7 +25,8 @@ class TallyExpenseBillSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'bill_munshi_name', 'file', 'uploaded_by', 'uploaded_by_name', 'created_at', 'updated_at']
 
-    def get_file(self, obj):
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_file(self, obj) -> str | None:
         """Return complete file URL"""
         if obj.file:
             request = self.context.get('request')

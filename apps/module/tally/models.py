@@ -121,22 +121,46 @@ class TallyConfig(BaseOrgModel):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
 
     igst_parents = models.ManyToManyField(
-        ParentLedger, blank=True, related_name="igst_tally_configs", verbose_name="IGST Parent Ledgers"
+        'ParentLedger',
+        blank=True,
+        related_name="igst_tally_configs",
+        verbose_name="IGST Parent Ledgers",
+        db_table='tally_config_igst_parents'
     )
     cgst_parents = models.ManyToManyField(
-        ParentLedger, blank=True, related_name="cgst_tally_configs", verbose_name="CGST Parent Ledgers"
+        'ParentLedger',
+        blank=True,
+        related_name="cgst_tally_configs",
+        verbose_name="CGST Parent Ledgers",
+        db_table='tally_config_cgst_parents'
     )
     sgst_parents = models.ManyToManyField(
-        ParentLedger, blank=True, related_name="sgst_tally_configs", verbose_name="SGST Parent Ledgers"
+        'ParentLedger',
+        blank=True,
+        related_name="sgst_tally_configs",
+        verbose_name="SGST Parent Ledgers",
+        db_table='tally_config_sgst_parents'
     )
     vendor_parents = models.ManyToManyField(
-        ParentLedger, blank=True, related_name="vendor_tally_configs", verbose_name="Vendor Parent Ledgers"
+        'ParentLedger',
+        blank=True,
+        related_name="vendor_tally_configs",
+        verbose_name="Vendor Parent Ledgers",
+        db_table='tally_config_vendor_parents'
     )
     chart_of_accounts_parents = models.ManyToManyField(
-        ParentLedger, blank=True, related_name="coa_tally_configs", verbose_name="COA Parent Ledgers"
+        'ParentLedger',
+        blank=True,
+        related_name="coa_tally_configs",
+        verbose_name="COA Parent Ledgers",
+        db_table='tally_config_coa_parents'
     )
     chart_of_accounts_expense_parents = models.ManyToManyField(
-        ParentLedger, blank=True, related_name="expense_coa_tally_configs", verbose_name="Expense COA Parent Ledgers"
+        'ParentLedger',
+        blank=True,
+        related_name="expense_coa_tally_configs",
+        verbose_name="Expense COA Parent Ledgers",
+        db_table='tally_config_expense_coa_parents'
     )
 
     class Meta:
