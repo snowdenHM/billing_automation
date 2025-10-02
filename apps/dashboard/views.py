@@ -446,24 +446,24 @@ class TallyUsageView(APIView):
                         TallyVendorBill.objects.filter(
                             organization=organization,
                             status__in=['Analysed', 'Verified', 'Synced'],
-                            update_at__gte=start_date
+                            updated_at__gte=start_date
                         ).count() +
                         TallyExpenseBill.objects.filter(
                             organization=organization,
                             status__in=['Analysed', 'Verified', 'Synced'],
-                            update_at__gte=start_date
+                            updated_at__gte=start_date
                         ).count()
                     ),
                     'bills_synced': (
                         TallyVendorBill.objects.filter(
                             organization=organization,
                             status='Synced',
-                            update_at__gte=start_date
+                            updated_at__gte=start_date
                         ).count() +
                         TallyExpenseBill.objects.filter(
                             organization=organization,
                             status='Synced',
-                            update_at__gte=start_date
+                            updated_at__gte=start_date
                         ).count()
                     )
                 }
