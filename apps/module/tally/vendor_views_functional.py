@@ -437,7 +437,7 @@ def find_vendor_ledger(company_name, organization):
         return None
 
 
-def process_pdf_splitting(pdf_file, organization, file_type):
+def process_pdf_splitting(pdf_file, organization, file_type, uploaded_by):
     """Split PDF into individual pages and create separate bills"""
     created_bills = []
 
@@ -460,14 +460,15 @@ def process_pdf_splitting(pdf_file, organization, file_type):
                 page_images[0].save(image_io, format='JPEG')
                 image_io.seek(0)
 
-                # Create bill for this page
+                # Create bill for this page with uploaded_by user
                 bill = TallyVendorBill.objects.create(
                     file=ContentFile(
                         image_io.read(),
                         name=f"BM-Page-{page_num + 1}-{unique_id}.jpg"
                     ),
                     file_type=file_type,
-                    organization=organization
+                    organization=organization,
+                    uploaded_by=uploaded_by
                 )
                 created_bills.append(bill)
 
@@ -561,7 +562,7 @@ def vendor_bills_upload(request, org_id):
                         file_extension == 'pdf'):
 
                     pdf_bills = process_pdf_splitting(
-                        uploaded_file, organization, file_type
+                        uploaded_file, organization, file_type, request.user
                     )
                     created_bills.extend(pdf_bills)
                 else:
@@ -569,7 +570,8 @@ def vendor_bills_upload(request, org_id):
                     bill = TallyVendorBill.objects.create(
                         file=uploaded_file,
                         file_type=file_type,
-                        organization=organization
+                        organization=organization,
+                        uploaded_by=request.user
                     )
                     created_bills.append(bill)
 

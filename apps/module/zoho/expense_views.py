@@ -450,18 +450,19 @@ def expense_bill_upload_view(request, org_id):
                         page_images[0].save(image_io, format='JPEG')
                         image_io.seek(0)
 
-                        # Create separate ExpenseBill for each page
+                        # Create separate ExpenseBill for each page with uploaded_by user
                         bill = ExpenseBill.objects.create(
                             billmunshiName=f"BM-Page-{page_num + 1}-{unique_id}",
                             file=ContentFile(image_io.read(), name=f"BM-Page-{page_num + 1}-{unique_id}.jpg"),
                             fileType=file_type,
                             status='Draft',
-                            organization=organization
+                            organization=organization,
+                            uploaded_by=request.user
                         )
                         created_bills.append(bill)
 
-                # Return list of created bills
-                response_serializer = ZohoExpenseBillSerializer(created_bills, many=True)
+                # Return list of created bills with request context for proper serialization
+                response_serializer = ZohoExpenseBillSerializer(created_bills, many=True, context={'request': request})
                 return Response({
                     "detail": f"PDF split into {len(created_bills)} bills successfully",
                     "bills": response_serializer.data
@@ -473,9 +474,9 @@ def expense_bill_upload_view(request, org_id):
                     "detail": f"Error processing PDF: {str(e)}"
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-        # Save regular file upload (including PDFs for single invoices)
-        bill = serializer.save(organization=organization, status='Draft')
-        response_serializer = ZohoExpenseBillSerializer(bill)
+        # Save regular file upload (including PDFs for single invoices) with uploaded_by user
+        bill = serializer.save(organization=organization, status='Draft', uploaded_by=request.user)
+        response_serializer = ZohoExpenseBillSerializer(bill, context={'request': request})
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -682,7 +683,7 @@ def expense_bill_verify_view(request, org_id, bill_id):
                 all_products = updated_bill.products.all()
                 total_debit = 0
                 total_credit = 0
-                
+
                 for product in all_products:
                     try:
                         amount = float(product.amount) if product.amount else 0
@@ -896,3 +897,8 @@ def expense_bill_delete_view(request, org_id, bill_id):
 
     except ExpenseBill.DoesNotExist:
         return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+
+
+

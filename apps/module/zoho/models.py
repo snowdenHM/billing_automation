@@ -7,6 +7,8 @@ from django.db import models
 from django.db.models import Max
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from django.contrib.auth.models import User
+from django.conf import settings
 
 from apps.organizations.models import Organization
 
@@ -258,6 +260,13 @@ class VendorBill(BaseTeamModel):
     analysed_data = models.JSONField(default=dict, null=True, blank=True)
     status = models.CharField(max_length=10, choices=BILL_STATUS_CHOICES, default="Draft", blank=True)
     process = models.BooleanField(default=False)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="uploaded_vendor_bills"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     update_at = models.DateTimeField(auto_now=True)
 
@@ -385,6 +394,13 @@ class ExpenseBill(BaseTeamModel):
     analysed_data = models.JSONField(default=dict, null=True, blank=True)
     status = models.CharField(max_length=10, choices=BILL_STATUS_CHOICES, default="Draft", blank=True)
     process = models.BooleanField(default=False)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="uploaded_expense_bills"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     update_at = models.DateTimeField(auto_now=True)
 

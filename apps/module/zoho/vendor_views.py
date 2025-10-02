@@ -428,7 +428,8 @@ def vendor_bill_upload_view(request, org_id):
                             file=ContentFile(image_io.read(), name=f"BM-Page-{page_num + 1}-{unique_id}.jpg"),
                             fileType=file_type,
                             status='Draft',
-                            organization=organization
+                            organization=organization,
+                            uploaded_by=request.user
                         )
                         created_bills.append(bill)
 
@@ -865,6 +866,10 @@ def vendor_bill_delete_view(request, org_id, bill_id):
 
     except VendorBill.DoesNotExist:
         return Response({"detail": "Vendor bill not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+
+
 
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from rest_framework import serializers
+from django.contrib.auth.models import User
 
 from apps.organizations.models import Organization
 from apps.module.zoho.models import (
@@ -45,6 +46,14 @@ class OrgField(serializers.PrimaryKeyRelatedField):
         return Organization.objects.all()
 
 
+class UploadedByUserSerializer(serializers.ModelSerializer):
+    """Serializer for user information in uploaded_by field"""
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'first_name', 'last_name', 'email']
+        read_only_fields = ['id', 'username', 'first_name', 'last_name', 'email']
+
+
 # ---------- Zoho Expense Bill Serializers ----------
 
 class ExpenseZohoProductSerializer(serializers.ModelSerializer):
@@ -76,14 +85,37 @@ class ExpenseZohoBillSerializer(serializers.ModelSerializer):
 class ZohoExpenseBillSerializer(serializers.ModelSerializer):
     """Serializer for Zoho Expense Bill listing and basic operations"""
 
+    file = serializers.SerializerMethodField()
+    uploaded_by = UploadedByUserSerializer(read_only=True)
+    uploaded_by_name = serializers.SerializerMethodField()
+
     class Meta:
         model = ExpenseBill
         fields = [
             "id", "billmunshiName", "file", "fileType", "status",
-            "process", "created_at", "update_at"
+            "process", "uploaded_by", "uploaded_by_name", "created_at", "update_at"
         ]
-        read_only_fields = ["id", "billmunshiName", "created_at", "update_at"]
+        read_only_fields = ["id", "billmunshiName", "file", "uploaded_by", "uploaded_by_name", "created_at", "update_at"]
         ref_name = "ZohoExpenseBill"  # Unique component name
+
+    def get_file(self, obj):
+        """Return complete file URL"""
+        if obj.file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.file.url)
+            else:
+                # Fallback if no request context
+                return obj.file.url
+        return None
+
+    def get_uploaded_by_name(self, obj):
+        """Return formatted name of the user who uploaded the bill"""
+        if obj.uploaded_by:
+            if obj.uploaded_by.first_name or obj.uploaded_by.last_name:
+                return f"{obj.uploaded_by.first_name} {obj.uploaded_by.last_name}".strip()
+            return obj.uploaded_by.username
+        return None
 
 
 class ZohoExpenseBillDetailSerializer(serializers.Serializer):

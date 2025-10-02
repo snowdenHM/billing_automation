@@ -1,19 +1,28 @@
 from rest_framework import serializers
-from drf_spectacular.utils import extend_schema_field
-from typing import List, Dict, Any
-from ..models import TallyExpenseBill, TallyExpenseAnalyzedBill, TallyExpenseAnalyzedProduct, Ledger
+from django.contrib.auth.models import User
+from ..models import TallyExpenseBill, TallyExpenseAnalyzedBill, TallyExpenseAnalyzedProduct
+
+
+class UploadedByUserSerializer(serializers.ModelSerializer):
+    """Serializer for user information in uploaded_by field"""
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'first_name', 'last_name', 'email']
+        read_only_fields = ['id', 'username', 'first_name', 'last_name', 'email']
 
 
 class TallyExpenseBillSerializer(serializers.ModelSerializer):
     file = serializers.SerializerMethodField()
+    uploaded_by = UploadedByUserSerializer(read_only=True)
+    uploaded_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = TallyExpenseBill
         fields = [
             'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
-            'status', 'process', 'created_at', 'updated_at'
+            'status', 'process', 'uploaded_by', 'uploaded_by_name', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'bill_munshi_name', 'file', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'bill_munshi_name', 'file', 'uploaded_by', 'uploaded_by_name', 'created_at', 'updated_at']
 
     def get_file(self, obj):
         """Return complete file URL"""
@@ -24,6 +33,14 @@ class TallyExpenseBillSerializer(serializers.ModelSerializer):
             else:
                 # Fallback if no request context
                 return obj.file.url
+        return None
+
+    def get_uploaded_by_name(self, obj):
+        """Return formatted name of the user who uploaded the bill"""
+        if obj.uploaded_by:
+            if obj.uploaded_by.first_name or obj.uploaded_by.last_name:
+                return f"{obj.uploaded_by.first_name} {obj.uploaded_by.last_name}".strip()
+            return obj.uploaded_by.username
         return None
 
     def validate_file(self, value):

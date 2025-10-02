@@ -6,8 +6,10 @@ import re
 import uuid
 from decimal import Decimal
 
+from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.conf import settings
 
 from apps.organizations.models import Organization
 
@@ -171,6 +173,14 @@ class TallyVendorBill(BaseOrgModel):
         max_length=10, choices=BillStatus.choices, default=BillStatus.DRAFT, blank=True
     )
     process = models.BooleanField(default=False)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tally_vendor_bills",
+        null=True,
+        blank=True,
+        help_text="User who uploaded this vendor bill"
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -404,6 +414,14 @@ class TallyExpenseBill(BaseOrgModel):
         max_length=10, choices=BillStatus.choices, default=BillStatus.DRAFT, blank=True
     )
     process = models.BooleanField(default=False)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tally_expense_bills",
+        null=True,
+        blank=True,
+        help_text="User who uploaded this expense bill"
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
