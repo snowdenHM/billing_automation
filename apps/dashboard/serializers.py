@@ -165,3 +165,41 @@ class ZohoExpenseResponseSerializer(serializers.Serializer):
 
 class ErrorResponseSerializer(serializers.Serializer):
     error = serializers.CharField()
+
+
+class UsageStatsSerializer(serializers.Serializer):
+    vendor_bills_uploaded = serializers.IntegerField()
+    expense_bills_uploaded = serializers.IntegerField()
+    bills_analysed = serializers.IntegerField()
+    bills_synced = serializers.IntegerField()
+
+
+class FileStatsSerializer(serializers.Serializer):
+    total_vendor_files = serializers.IntegerField()
+    total_expense_files = serializers.IntegerField()
+    total_files = serializers.IntegerField()
+
+
+class ZohoUsageResponseSerializer(serializers.Serializer):
+    usage_by_period = serializers.DictField(child=UsageStatsSerializer())
+    file_statistics = FileStatsSerializer()
+
+
+class CredentialsStatusSerializer(serializers.Serializer):
+    exists = serializers.BooleanField()
+    client_id_set = serializers.BooleanField()
+    access_token_set = serializers.BooleanField()
+    refresh_token_set = serializers.BooleanField()
+    organization_id_set = serializers.BooleanField()
+
+
+class SuccessRatesSerializer(serializers.Serializer):
+    vendor_bills_sync_rate = serializers.FloatField()
+    expense_bills_sync_rate = serializers.FloatField()
+    overall_sync_rate = serializers.FloatField()
+
+
+class ZohoHealthResponseSerializer(serializers.Serializer):
+    credentials_status = CredentialsStatusSerializer()
+    success_rates = SuccessRatesSerializer()
+    health_score = serializers.FloatField()

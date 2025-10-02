@@ -18,6 +18,7 @@ from .serializers import (
     ZohoOverviewResponseSerializer, ZohoTimeseriesResponseSerializer,
     ZohoFunnelResponseSerializer, ZohoTopVendorsResponseSerializer,
     ZohoTaxesResponseSerializer, ZohoExpenseResponseSerializer,
+    ZohoUsageResponseSerializer, ZohoHealthResponseSerializer,
     ErrorResponseSerializer
 )
 
@@ -514,7 +515,11 @@ class ZohoIntegrationsHealthView(APIView):
     @extend_schema(
         summary="Get Zoho integrations health",
         description="Returns health status of Zoho credentials and integrations",
-        tags=["Zoho Dashboard"]
+        tags=["Zoho Dashboard"],
+        responses={
+            200: ZohoHealthResponseSerializer,
+            404: ErrorResponseSerializer
+        }
     )
     def get(self, request, org_id):
         try:
@@ -586,7 +591,11 @@ class ZohoUsageView(APIView):
     @extend_schema(
         summary="Get Zoho usage statistics",
         description="Returns usage statistics and activity metrics",
-        tags=["Zoho Dashboard"]
+        tags=["Zoho Dashboard"],
+        responses={
+            200: ZohoUsageResponseSerializer,
+            404: ErrorResponseSerializer
+        }
     )
     def get(self, request, org_id):
         try:
