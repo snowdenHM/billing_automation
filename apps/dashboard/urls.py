@@ -1,9 +1,5 @@
 from django.urls import path
-from .views import (
-    ZohoOverviewView, ZohoTimeseriesView, ZohoFunnelView, ZohoTopVendorsView,
-    ZohoTaxesSummaryView, ZohoExpenseSummaryView, ZohoPendingView,
-    ZohoIntegrationsHealthView, ZohoUsageView
-)
+from .views import ZohoOverviewView, ZohoFunnelView, ZohoUsageView
 
 app_name = "dashboard"
 

@@ -186,20 +186,8 @@ SPECTACULAR_SETTINGS = {
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
-    # Add custom preprocessors to handle problematic models
-    'PREPROCESSING_HOOKS': [
-        'apps.common.spectacular_preprocessors.preprocess_exclude_problematic_models',
-    ],
-    # Custom schema class to safely handle model introspection
-    'DEFAULT_GENERATOR_CLASS': 'drf_spectacular.openapi.AutoSchema',
     # Disable automatic field introspection for problematic cases
     'DISABLE_ERRORS_AND_WARNINGS': True,
-    # Add custom extensions
-    'EXTENSIONS_INFO': {
-        'apps.common.spectacular_preprocessors.SafeManyToManyFieldExtension': {},
-    },
-    # Skip problematic serializers
-    'SERIALIZER_COMPONENT_FALLBACK_STRATEGY': 'fallback_unsafe',
     # Temporarily disable enum name overrides to fix the schema generation issue
     'ENUM_NAME_OVERRIDES': {},
 }
