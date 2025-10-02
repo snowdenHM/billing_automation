@@ -2,13 +2,14 @@
 Monkey patch for Django REST Framework's model_meta utility to handle
 ManyToMany fields with None through models safely.
 """
-from rest_framework.utils import model_meta
+from rest_framework.utils import model_meta, field_mapping
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Store the original function
+# Store the original functions
 _original_get_forward_relationships = model_meta._get_forward_relationships
+_original_get_relation_kwargs = field_mapping.get_relation_kwargs
 
 
 def safe_get_forward_relationships(opts):
@@ -59,8 +60,58 @@ def safe_get_forward_relationships(opts):
     return forward_relations
 
 
-# Apply the monkey patch
+def safe_get_relation_kwargs(field_name, relation_info):
+    """
+    Safely get relation kwargs, handling cases where relation_info is not a tuple.
+    This fixes the TypeError: cannot unpack non-iterable OneToOneField object issue.
+    """
+    try:
+        # Check if relation_info is iterable and has the expected structure
+        if hasattr(relation_info, '__iter__') and not isinstance(relation_info, str):
+            # Try to unpack as expected
+            try:
+                if len(relation_info) == 6:
+                    model_field, related_model, to_many, to_field, has_through_model, reverse = relation_info
+                else:
+                    # Unexpected length, use original function
+                    return _original_get_relation_kwargs(field_name, relation_info)
+            except (TypeError, ValueError) as e:
+                logger.warning(f"Cannot unpack relation_info for field {field_name}: {e}")
+                # Return basic kwargs to avoid crash
+                return {
+                    'queryset': None,
+                    'many': False,
+                    'read_only': True,
+                    'allow_null': True,
+                }
+        else:
+            # relation_info is not iterable (like a OneToOneField object)
+            logger.warning(f"Relation info for field {field_name} is not iterable: {type(relation_info)}")
+            # Return basic kwargs to avoid crash
+            return {
+                'queryset': None,
+                'many': False,
+                'read_only': True,
+                'allow_null': True,
+            }
+
+        # If we get here, proceed with normal processing
+        return _original_get_relation_kwargs(field_name, relation_info)
+
+    except Exception as e:
+        logger.warning(f"Error processing relation kwargs for field {field_name}: {e}")
+        # Return basic kwargs as fallback
+        return {
+            'queryset': None,
+            'many': False,
+            'read_only': True,
+            'allow_null': True,
+        }
+
+
+# Apply the monkey patches
 model_meta._get_forward_relationships = safe_get_forward_relationships
+field_mapping.get_relation_kwargs = safe_get_relation_kwargs
 
 # Also patch the model_meta.get_field_info function to be extra safe
 _original_get_field_info = model_meta.get_field_info
@@ -71,8 +122,8 @@ def safe_get_field_info(model):
     """
     try:
         return _original_get_field_info(model)
-    except AttributeError as e:
-        if "'NoneType' object has no attribute '_meta'" in str(e):
+    except (AttributeError, TypeError) as e:
+        if "'NoneType' object has no attribute '_meta'" in str(e) or "cannot unpack" in str(e):
             logger.warning(f"Falling back to basic field info for model {model} due to error: {e}")
             # Return minimal field info structure
             return model_meta.FieldInfo(
