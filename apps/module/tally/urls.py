@@ -37,6 +37,10 @@ urlpatterns = [
     # Organization-scoped endpoints (UUID only)
     path('org/<uuid:org_id>/', include([
         path('', include(router.urls)),
+
+        # Organization comprehensive data endpoint
+        path('help/', organization_tally_data, name='organization-tally-data'),
+
         # Custom ledger endpoints (only GET and POST)
         path('ledgers/', LedgerViewSet.as_view({'get': 'list', 'post': 'create'}), name='ledger-list'),
 
