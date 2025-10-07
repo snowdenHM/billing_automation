@@ -87,13 +87,12 @@ class OrgMembership(TimeStampedModel):
 
 class OrganizationAPIKey(TimeStampedModel):
     api_key = models.OneToOneField(APIKey, on_delete=models.CASCADE, related_name="organization_link")
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="api_keys")
+    organization = models.OneToOneField(Organization, on_delete=models.CASCADE, related_name="api_key")
     name = models.CharField(max_length=100)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    related_name="issued_org_api_keys")
 
     class Meta:
-        unique_together = ("api_key", "organization")
         ordering = ("-id",)
 
     def __str__(self):  # pragma: no cover

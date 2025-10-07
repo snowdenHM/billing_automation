@@ -18,8 +18,15 @@ class OrgMembershipAdmin(admin.ModelAdmin):
 
 @admin.register(OrganizationAPIKey)
 class OrganizationAPIKeyAdmin(admin.ModelAdmin):
-    list_display = ("id", "organization", "name", "created_by", "created_at")
+    list_display = ("id", "organization", "name", "api_key_prefix", "created_by", "created_at")
     search_fields = ("organization__name", "name")
+    list_filter = ("created_at",)
+    readonly_fields = ("api_key",)
+
+    def api_key_prefix(self, obj):
+        """Display API key prefix for identification"""
+        return obj.api_key.prefix if obj.api_key else "N/A"
+    api_key_prefix.short_description = "API Key Prefix"
 
 
 @admin.register(Module)
