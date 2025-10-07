@@ -38,13 +38,56 @@ class TallyConfigAdmin(admin.ModelAdmin):
         'chart_of_accounts_parents',
         'chart_of_accounts_expense_parents',
     )
-    list_display = ('organization', 'display_mappings')
+    list_display = ('organization', 'display_mappings', 'display_parent_ledgers')
+    list_filter = ('organization',)
     search_fields = ('organization__name',)
+    ordering = ('organization__name',)
+
+    def get_queryset(self, request):
+        """Filter queryset based on user permissions and prefetch related data"""
+        qs = super().get_queryset(request)
+        return qs.select_related('organization').prefetch_related(
+            'igst_parents',
+            'cgst_parents',
+            'sgst_parents',
+            'vendor_parents',
+            'chart_of_accounts_parents',
+            'chart_of_accounts_expense_parents'
+        )
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        """Filter ManyToMany fields by organization context"""
+        if hasattr(request, '_obj_'):
+            # If editing existing object, filter by its organization
+            org = request._obj_.organization
+        else:
+            # For new objects, try to get organization from GET params or user
+            org_id = request.GET.get('organization')
+            if org_id:
+                try:
+                    from apps.organizations.models import Organization
+                    org = Organization.objects.get(id=org_id)
+                except (Organization.DoesNotExist, ValueError):
+                    org = None
+            else:
+                org = None
+
+        if org and db_field.name in ['igst_parents', 'cgst_parents', 'sgst_parents',
+                                   'vendor_parents', 'chart_of_accounts_parents',
+                                   'chart_of_accounts_expense_parents']:
+            kwargs["queryset"] = ParentLedger.objects.filter(organization=org)
+
+        return super().formfield_for_manytomany(db_field, request, **kwargs)
+
+    def get_form(self, request, obj=None, **kwargs):
+        """Store the object in request for use in formfield_for_manytomany"""
+        request._obj_ = obj
+        return super().get_form(request, obj, **kwargs)
 
     def display_mappings(self, obj):
         """Display a summary of the number of ledger mappings"""
         return format_html(
-            "IGST: {}, CGST: {}, SGST: {}, Vendors: {}, COA: {}, Expense COA: {}",
+            "<strong>IGST:</strong> {} | <strong>CGST:</strong> {} | <strong>SGST:</strong> {} | <strong>Vendors:</strong> {} | <strong>COA:</strong> {} | <strong>Expense COA:</strong> {}",
             obj.igst_parents.count(),
             obj.cgst_parents.count(),
             obj.sgst_parents.count(),
@@ -52,8 +95,62 @@ class TallyConfigAdmin(admin.ModelAdmin):
             obj.chart_of_accounts_parents.count(),
             obj.chart_of_accounts_expense_parents.count(),
         )
+    display_mappings.short_description = "Configuration Summary"
 
-    display_mappings.short_description = "Mappings"
+    def display_parent_ledgers(self, obj):
+        """Display detailed parent ledger information for organization context"""
+        details = []
+
+        # IGST Parents
+        igst_names = [parent.parent for parent in obj.igst_parents.all()[:3]]
+        if igst_names:
+            igst_display = ", ".join(igst_names)
+            if obj.igst_parents.count() > 3:
+                igst_display += f" (+{obj.igst_parents.count() - 3} more)"
+            details.append(f"<strong>IGST:</strong> {igst_display}")
+
+        # CGST Parents
+        cgst_names = [parent.parent for parent in obj.cgst_parents.all()[:3]]
+        if cgst_names:
+            cgst_display = ", ".join(cgst_names)
+            if obj.cgst_parents.count() > 3:
+                cgst_display += f" (+{obj.cgst_parents.count() - 3} more)"
+            details.append(f"<strong>CGST:</strong> {cgst_display}")
+
+        # SGST Parents
+        sgst_names = [parent.parent for parent in obj.sgst_parents.all()[:3]]
+        if sgst_names:
+            sgst_display = ", ".join(sgst_names)
+            if obj.sgst_parents.count() > 3:
+                sgst_display += f" (+{obj.sgst_parents.count() - 3} more)"
+            details.append(f"<strong>SGST:</strong> {sgst_display}")
+
+        # Vendor Parents
+        vendor_names = [parent.parent for parent in obj.vendor_parents.all()[:3]]
+        if vendor_names:
+            vendor_display = ", ".join(vendor_names)
+            if obj.vendor_parents.count() > 3:
+                vendor_display += f" (+{obj.vendor_parents.count() - 3} more)"
+            details.append(f"<strong>Vendors:</strong> {vendor_display}")
+
+        return format_html("<br>".join(details)) if details else "No mappings configured"
+
+    display_parent_ledgers.short_description = "Parent Ledger Details"
+
+    fieldsets = (
+        ('Organization', {
+            'fields': ('organization',),
+            'description': 'Select the organization for this Tally configuration.'
+        }),
+        ('GST Parent Ledger Mappings', {
+            'fields': ('igst_parents', 'cgst_parents', 'sgst_parents'),
+            'description': 'Map parent ledgers for different GST types. These will be used for GST calculations and reporting.'
+        }),
+        ('Business Parent Ledger Mappings', {
+            'fields': ('vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents'),
+            'description': 'Map parent ledgers for vendors and chart of accounts categorization.'
+        }),
+    )
 
 
 class TallyVendorAnalyzedProductInline(admin.TabularInline):
