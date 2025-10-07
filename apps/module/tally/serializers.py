@@ -1,6 +1,6 @@
 # apps/module/tally/serializers.py
 from rest_framework import serializers
-from .models import Ledger, ParentLedger, TallyConfig, StockItem
+from .models import Ledger, ParentLedger, TallyConfig, StockItem, TallyVendorBill, TallyExpenseBill
 
 
 class ParentLedgerSerializer(serializers.ModelSerializer):
@@ -57,3 +57,31 @@ class LedgerBulkCreateSerializer(serializers.Serializer):
     Expects: {"LEDGER": [{"Name": "...", "Master_Id": "...", ...}, ...]}
     """
     LEDGER = LedgerSerializer(many=True)
+
+
+class TallyVendorBillSerializer(serializers.ModelSerializer):
+    uploaded_by_username = serializers.CharField(source='uploaded_by.username', read_only=True)
+    organization_name = serializers.CharField(source='organization.name', read_only=True)
+
+    class Meta:
+        model = TallyVendorBill
+        fields = [
+            'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
+            'status', 'process', 'uploaded_by', 'uploaded_by_username',
+            'organization_name', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'uploaded_by_username', 'organization_name']
+
+
+class TallyExpenseBillSerializer(serializers.ModelSerializer):
+    uploaded_by_username = serializers.CharField(source='uploaded_by.username', read_only=True)
+    organization_name = serializers.CharField(source='organization.name', read_only=True)
+
+    class Meta:
+        model = TallyExpenseBill
+        fields = [
+            'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
+            'status', 'process', 'uploaded_by', 'uploaded_by_username',
+            'organization_name', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'uploaded_by_username', 'organization_name']

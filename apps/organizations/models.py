@@ -63,8 +63,14 @@ class Organization(TimeStampedModel):
 
 class OrgMembership(TimeStampedModel):
     ADMIN = "ADMIN"
-    MEMBER = "MEMBER"
-    ROLE_CHOICES = [(ADMIN, "Admin"), (MEMBER, "Member")]
+    MANAGER = "MANAGER"
+    ACCOUNTANT = "ACCOUNTANT"
+    CONSULTANT = "CONSULTANT"
+    ROLE_CHOICES = [(ADMIN, "Admin"),
+                    (MANAGER, "Manager"),
+                    (ACCOUNTANT, "Accountant"),
+                    (CONSULTANT, "Consultant"),
+                    ]
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="memberships")
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="memberships")

@@ -25,6 +25,7 @@ from .vendor_views_functional import (
     vendor_bill_sync_external
 )
 from .views import LedgerViewSet, TallyConfigViewSet, MasterAPIView
+from .organization_data_views import organization_tally_data
 
 # Create router for the remaining viewsets
 router = DefaultRouter()
