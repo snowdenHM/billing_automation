@@ -163,7 +163,7 @@ def organization_tally_data(request, org_id):
                 )
 
             # Build base URL for the organization
-            base_url = request.build_absolute_uri().rstrip('/').replace('/data/', '/')
+            base_url = request.build_absolute_uri().rstrip('/').replace('/help/', '/')
 
             # Return URLs for each endpoint
             response_data = {
@@ -175,8 +175,8 @@ def organization_tally_data(request, org_id):
                 },
                 "ledgers": f"{base_url}ledgers/",
                 "masters": f"{base_url}masters/",
-                "vendor_bills_sync_external": f"{base_url}vendor-bills/sync_external/",
-                "expense_bills_sync_external": f"{base_url}expense-bills/sync_external/",
+                "vendor_bills_sync_external": f"{base_url}vendor-bills/sync_bills/",
+                "expense_bills_sync_external": f"{base_url}expense-bills/sync_bills/",
                 "api_key": api_key_value
             }
 
