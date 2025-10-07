@@ -154,8 +154,19 @@ class TallyConfigAdmin(admin.ModelAdmin):
         request._obj_ = obj
         form = super().get_form(request, obj, **kwargs)
 
-        # Add custom JavaScript for dependent dropdowns
-        form.Media.js = form.Media.js + ('admin/js/tally_dependent_dropdown.js',)
+        # Ensure the form has Media class and add our JavaScript
+        if not hasattr(form, 'Media'):
+            class Media:
+                js = ('admin/js/tally_dependent_dropdown.js',)
+            form.Media = Media
+        else:
+            # If Media exists, extend the js tuple
+            existing_js = getattr(form.Media, 'js', ())
+            if isinstance(existing_js, (list, tuple)):
+                new_js = list(existing_js) + ['admin/js/tally_dependent_dropdown.js']
+            else:
+                new_js = ['admin/js/tally_dependent_dropdown.js']
+            form.Media.js = tuple(new_js)
 
         return form
 
