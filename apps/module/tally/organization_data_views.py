@@ -1,12 +1,13 @@
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample, OpenApiParameter
+from rest_framework import serializers
+from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework import status
-from django.shortcuts import get_object_or_404
-from django.db import transaction
 from rest_framework_api_key.models import APIKey
-from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample, OpenApiParameter
-from rest_framework import serializers
+
 from apps.organizations.models import Organization, OrganizationAPIKey
 
 
@@ -132,7 +133,11 @@ def organization_tally_data(request, org_id):
 
         # Check if user has access to this organization
         if not request.user.is_superuser:
-            user_orgs = request.user.organizations.all()
+            # Get organizations through memberships relationship
+            user_orgs = Organization.objects.filter(
+                memberships__user=request.user,
+                memberships__is_active=True
+            )
             if organization not in user_orgs:
                 return Response(
                     {"error": "You don't have access to this organization"},
@@ -140,36 +145,48 @@ def organization_tally_data(request, org_id):
                 )
 
         with transaction.atomic():
-            # Generate API Key if not available - use get_or_create to prevent duplicates
+            # Generate API Key if not available - ensure consistent API key value
             try:
                 # Try to get existing API key for this organization (now OneToOne relationship)
                 org_api_key = OrganizationAPIKey.objects.select_related('api_key').get(
                     organization=organization
                 )
-                api_key_value = org_api_key.api_key.id
+                # Store the actual API key value from when it was created
+                # We need to get the key that was returned during create_key()
+                api_key_value = org_api_key.api_key_value_gen  # This is the actual key string
 
             except OrganizationAPIKey.DoesNotExist:
                 # Use select_for_update to prevent race conditions
                 organization_locked = Organization.objects.select_for_update().get(id=org_id)
 
-                # Use get_or_create for atomic operation
-                api_key_name = f"{organization.name} - Tally Integration"
+                # Double-check if API key was created by another concurrent request
+                existing_org_api_key = OrganizationAPIKey.objects.select_related('api_key').filter(
+                    organization=organization_locked
+                ).first()
 
-                # Create APIKey instance first
-                api_key_obj, api_key_value = APIKey.objects.create_key(name=api_key_name)
+                if existing_org_api_key:
+                    # Another request already created the key, use it
+                    api_key_value = existing_org_api_key.api_key.id
+                else:
+                    # Safe to create new API key
+                    api_key_name = f"{organization.name} - Tally Integration"
 
-                try:
-                    # Create OrganizationAPIKey link
-                    org_api_key = OrganizationAPIKey.objects.create(
-                        api_key=api_key_obj,
-                        organization=organization_locked,
-                        name="Tally Integration Key",
-                        created_by=request.user
-                    )
-                except Exception as e:
-                    # If creation fails, clean up the APIKey that was created
-                    api_key_obj.delete()
-                    raise e
+                    # Create APIKey instance first - api_key_value contains the actual key string
+                    api_key_obj, api_key_value = APIKey.objects.create_key(name=api_key_name)
+
+                    try:
+                        # Create OrganizationAPIKey link
+                        org_api_key = OrganizationAPIKey.objects.create(
+                            api_key=api_key_obj,
+                            api_key_value_gen=api_key_value,
+                            organization=organization_locked,
+                            name="Tally Integration Key",
+                            created_by=request.user
+                        )
+                    except Exception as e:
+                        # If creation fails, clean up the APIKey that was created
+                        api_key_obj.delete()
+                        raise e
 
             # Build base URL for the organization
             # Get the current request URL and remove the 'help/' part

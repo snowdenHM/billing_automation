@@ -88,6 +88,7 @@ class OrgMembership(TimeStampedModel):
 class OrganizationAPIKey(TimeStampedModel):
     api_key = models.OneToOneField(APIKey, on_delete=models.CASCADE, related_name="organization_link")
     organization = models.OneToOneField(Organization, on_delete=models.CASCADE, related_name="api_key")
+    api_key_value_gen = models.CharField(max_length=500, unique=True, null=True, blank=True)
     name = models.CharField(max_length=100)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    related_name="issued_org_api_keys")
