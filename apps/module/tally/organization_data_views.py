@@ -169,15 +169,13 @@ def organization_tally_data(request, org_id):
             response_data = {
                 "organization": {
                     "id": str(organization.id),
-                    "name": organization.name,
-                    "unique_name": organization.unique_name,
-                    "status": organization.status
+                    "name": organization.name
                 },
                 "ledgers": f"{base_url}ledgers/",
                 "masters": f"{base_url}masters/",
                 "vendor_bills_sync_external": f"{base_url}vendor-bills/sync_bills/",
                 "expense_bills_sync_external": f"{base_url}expense-bills/sync_bills/",
-                "api_key": api_key_value
+                "api_key": f"Authorization:Api-Key {api_key_value}"
             }
 
             return Response(response_data, status=status.HTTP_200_OK)
