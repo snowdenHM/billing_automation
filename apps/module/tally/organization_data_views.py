@@ -151,9 +151,19 @@ def organization_tally_data(request, org_id):
                 org_api_key = OrganizationAPIKey.objects.select_related('api_key').get(
                     organization=organization
                 )
-                # Store the actual API key value from when it was created
-                # We need to get the key that was returned during create_key()
-                api_key_value = org_api_key.api_key_value_gen  # This is the actual key string
+
+                # Use the stored API key value that was saved during creation
+                api_key_value = org_api_key.api_key_value_gen
+
+                # Handle existing records that don't have api_key_value_gen populated
+                if not api_key_value:
+                    # For existing records, we need to use the API key ID as fallback
+                    # Note: This won't be the original key string, but it's the best we can do
+                    api_key_value = org_api_key.api_key.id
+
+                    # Update the record with the fallback value for future use
+                    org_api_key.api_key_value_gen = api_key_value
+                    org_api_key.save(update_fields=['api_key_value_gen'])
 
             except OrganizationAPIKey.DoesNotExist:
                 # Use select_for_update to prevent race conditions
@@ -165,8 +175,8 @@ def organization_tally_data(request, org_id):
                 ).first()
 
                 if existing_org_api_key:
-                    # Another request already created the key, use it
-                    api_key_value = existing_org_api_key.api_key.id
+                    # Another request already created the key, use the stored value
+                    api_key_value = existing_org_api_key.api_key_value_gen
                 else:
                     # Safe to create new API key
                     api_key_name = f"{organization.name} - Tally Integration"
@@ -175,10 +185,10 @@ def organization_tally_data(request, org_id):
                     api_key_obj, api_key_value = APIKey.objects.create_key(name=api_key_name)
 
                     try:
-                        # Create OrganizationAPIKey link
+                        # Create OrganizationAPIKey link and store the actual key value
                         org_api_key = OrganizationAPIKey.objects.create(
                             api_key=api_key_obj,
-                            api_key_value_gen=api_key_value,
+                            api_key_value_gen=api_key_value,  # Store the actual key for future use
                             organization=organization_locked,
                             name="Tally Integration Key",
                             created_by=request.user
