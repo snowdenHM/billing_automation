@@ -7,13 +7,14 @@ from django.db import transaction
 from django.utils import timezone
 from django.urls import reverse
 from rest_framework_api_key.models import APIKey
-
+from drf_spectacular.utils import extend_schema
 from apps.organizations.models import Organization, OrganizationAPIKey
 from .models import ParentLedger, Ledger, StockItem, TallyVendorBill, TallyExpenseBill
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+@extend_schema(tags=['Tally Config'])
 def organization_tally_data(request, org_id):
     """
     Comprehensive endpoint that returns URLs for all Tally data endpoints for an organization:
