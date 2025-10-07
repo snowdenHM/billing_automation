@@ -11,19 +11,28 @@
             return;
         }
 
-        // Get the AJAX URL from context
-        var ajaxUrl = '/admin/tally/tallyconfig/get-parent-ledgers/';
+        // Get the AJAX URL - use relative path that works with Django admin
+        var ajaxUrl = window.location.pathname.replace(/\/add\/$/, '/get-parent-ledgers/').replace(/\/\d+\/change\/$/, '/get-parent-ledgers/');
+
+        // Fallback to absolute URL if needed
+        if (!ajaxUrl.includes('/get-parent-ledgers/')) {
+            ajaxUrl = '/admin/tally/tallyconfig/get-parent-ledgers/';
+        }
 
         $.ajax({
             url: ajaxUrl,
             data: {
-                'org_id': organizationId
+                'org_id': organizationId,
+                'csrfmiddlewaretoken': $('[name=csrfmiddlewaretoken]').val()
             },
+            method: 'GET',
             success: function(data) {
+                console.log('Parent ledgers received:', data.parent_ledgers);
                 updateFilterHorizontalOptions(data.parent_ledgers);
             },
-            error: function() {
-                console.error('Failed to fetch parent ledgers');
+            error: function(xhr, status, error) {
+                console.error('Failed to fetch parent ledgers:', status, error);
+                console.error('Response:', xhr.responseText);
                 clearAllParentLedgerOptions();
             }
         });
@@ -45,6 +54,15 @@
             var toBox = $('#id_' + fieldName + '_to');
 
             if (fromBox.length && toBox.length) {
+                // Store currently selected items
+                var selectedItems = [];
+                toBox.find('option').each(function() {
+                    selectedItems.push({
+                        value: $(this).val(),
+                        text: $(this).text()
+                    });
+                });
+
                 // Clear current options in from box
                 fromBox.empty();
 
@@ -54,13 +72,17 @@
                     fromBox.append(option);
                 });
 
-                // Keep selected items in to box, but remove any that don't exist anymore
-                var selectedIds = parentLedgers.map(function(ledger) { return ledger.id.toString(); });
+                // Remove selected items that no longer exist in the organization
+                var availableIds = parentLedgers.map(function(ledger) { return ledger.id.toString(); });
                 toBox.find('option').each(function() {
-                    if (selectedIds.indexOf($(this).val()) === -1) {
+                    if (availableIds.indexOf($(this).val()) === -1) {
                         $(this).remove();
                     }
                 });
+
+                console.log('Updated filter horizontal for field:', fieldName);
+            } else {
+                console.warn('Filter horizontal boxes not found for field:', fieldName);
             }
         });
     }
@@ -84,21 +106,26 @@
                 toBox.empty();
             }
         });
+        console.log('Cleared all parent ledger options');
     }
 
     // Initialize when DOM is ready
     $(document).ready(function() {
+        console.log('Tally dependent dropdown initialized');
+
         // Handle organization change
         $('#id_organization').on('change', function() {
             var organizationId = $(this).val();
+            console.log('Organization changed to:', organizationId);
             updateParentLedgerOptions(organizationId);
         });
 
         // Load initial data if organization is already selected
         var initialOrgId = $('#id_organization').val();
         if (initialOrgId) {
+            console.log('Loading initial data for organization:', initialOrgId);
             updateParentLedgerOptions(initialOrgId);
         }
     });
 
-})(django.jQuery);
+})(django.jQuery || jQuery);
