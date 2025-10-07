@@ -168,7 +168,17 @@ def organization_tally_data(request, org_id):
                 )
 
             # Build base URL for the organization
-            base_url = request.build_absolute_uri().rstrip('/').replace('/help/', '/')
+            # Get the current request URL and remove the 'help/' part
+            current_url = request.build_absolute_uri().rstrip('/')
+            # Remove '/help' from the end of the URL to get the org base URL
+            if current_url.endswith('/help'):
+                base_url = current_url[:-5]  # Remove '/help'
+            else:
+                base_url = current_url
+
+            # Ensure base_url ends with '/'
+            if not base_url.endswith('/'):
+                base_url += '/'
 
             # Return URLs for each endpoint
             response_data = {
