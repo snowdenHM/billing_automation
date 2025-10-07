@@ -142,16 +142,21 @@ def organization_tally_data(request, org_id):
         with transaction.atomic():
             # Generate API Key if not available
             org_api_key = None
+            api_key_value = None
+
             try:
                 org_api_key = OrganizationAPIKey.objects.select_related('api_key').get(
                     organization=organization
                 )
-                api_key_value = org_api_key.api_key.key
+                # For existing keys, we need to get the key that can work with get_from_key()
+                # The actual key string is what's used for authentication
+                api_key_value = org_api_key.api_key.id
+
             except OrganizationAPIKey.DoesNotExist:
                 # Generate new API key for the organization
                 api_key_name = f"{organization.name} - Tally Integration"
 
-                # Create APIKey instance
+                # Create APIKey instance - api_key_value will contain the actual key string
                 api_key_obj, api_key_value = APIKey.objects.create_key(name=api_key_name)
 
                 # Create OrganizationAPIKey link
