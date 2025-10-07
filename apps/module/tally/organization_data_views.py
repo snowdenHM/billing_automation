@@ -6,7 +6,6 @@ from django.shortcuts import get_object_or_404
 from django.db import transaction
 from rest_framework_api_key.models import APIKey
 from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample, OpenApiParameter
-from drf_spectacular.openapi import AutoSchema
 from rest_framework import serializers
 from apps.organizations.models import Organization, OrganizationAPIKey
 
@@ -55,9 +54,8 @@ class OrganizationTallyDataResponseSerializer(serializers.Serializer):
             name='org_id',
             type=str,
             location=OpenApiParameter.PATH,
-            description='Organization UUID',
-            required=True,
-            example='123e4567-e89b-12d3-a456-426614174000'
+            description='Organization UUID (e.g., 123e4567-e89b-12d3-a456-426614174000)',
+            required=True
         ),
     ],
     responses={
