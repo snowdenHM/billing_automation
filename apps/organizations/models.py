@@ -74,7 +74,7 @@ class OrgMembership(TimeStampedModel):
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="memberships")
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="memberships")
-    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default=MEMBER)
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default=MANAGER)
     is_active = models.BooleanField(default=True)
 
     class Meta:
