@@ -179,7 +179,10 @@ def organization_tally_data(request, org_id):
                     api_key_value = existing_org_api_key.api_key_value_gen
                 else:
                     # Safe to create new API key
-                    api_key_name = f"{organization.name} - Tally Integration"
+                    # Shorten the API key name to avoid database constraint issues
+                    api_key_name = f"Tally-{organization.unique_name}"  # Use unique_name instead of full name
+                    if len(api_key_name) > 45:  # Leave some buffer for the 50-char limit
+                        api_key_name = api_key_name[:45]
 
                     # Create APIKey instance first - api_key_value contains the actual key string
                     api_key_obj, api_key_value = APIKey.objects.create_key(name=api_key_name)
@@ -188,7 +191,7 @@ def organization_tally_data(request, org_id):
                         # Create OrganizationAPIKey link and store the actual key value
                         org_api_key = OrganizationAPIKey.objects.create(
                             api_key=api_key_obj,
-                            api_key_value_gen=api_key_value,  # Store the actual key for future use
+                            api_key_value_gen=api_key_value,  # Store the actual 41-char key for future use
                             organization=organization_locked,
                             name="Tally Integration Key",
                             created_by=request.user
