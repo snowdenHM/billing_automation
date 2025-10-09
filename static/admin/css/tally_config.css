@@ -1,0 +1,78 @@
+/* Tally Config Admin Styles */
+
+.form-row select[multiple] {
+    min-height: 200px;
+    width: 100%;
+}
+
+.form-row select[multiple] option {
+    padding: 8px 12px;
+    border-bottom: 1px solid #eee;
+}
+
+.form-row select[multiple] option:hover {
+    background-color: #f5f5f5;
+}
+
+.form-row select[multiple] option:selected {
+    background-color: #417690;
+    color: white;
+}
+
+/* Fieldset styling for better organization */
+.module fieldset {
+    margin-bottom: 20px;
+}
+
+.module fieldset h2 {
+    background-color: #417690;
+    color: white;
+    padding: 10px 15px;
+    margin: 0;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.module fieldset .description {
+    background-color: #f8f8f8;
+    padding: 10px 15px;
+    margin: 0;
+    font-style: italic;
+    color: #666;
+    border-bottom: 1px solid #ddd;
+}
+
+/* Loading state styles */
+select[disabled] {
+    background-color: #f5f5f5;
+    color: #999;
+}
+
+.form-row label {
+    font-weight: bold;
+    color: #333;
+}
+
+/* Help text styling */
+.help {
+    font-size: 11px;
+    color: #666;
+    margin-top: 5px;
+}
+
+/* Multi-select specific improvements */
+select[multiple] {
+    font-family: "Roboto", "Lucida Grande", Verdana, Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.4;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-shadow: inset 0 1px 3px #ddd;
+}
+
+select[multiple]:focus {
+    border-color: #417690;
+    outline: none;
+    box-shadow: inset 0 1px 3px #ddd, 0 0 5px rgba(65, 118, 144, 0.3);
+}

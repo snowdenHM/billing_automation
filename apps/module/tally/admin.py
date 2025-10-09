@@ -15,6 +15,7 @@ from .models import (
     TallyExpenseAnalyzedBill,
     TallyExpenseAnalyzedProduct, StockItem
 )
+from .forms import TallyConfigForm
 
 
 class ParentLedgerAdmin(admin.ModelAdmin):
@@ -66,19 +67,26 @@ class LedgerAdmin(admin.ModelAdmin):
 
 
 class TallyConfigAdmin(admin.ModelAdmin):
-    filter_horizontal = (
-        'igst_parents',
-        'cgst_parents',
-        'sgst_parents',
-        'vendor_parents',
-        'chart_of_accounts_parents',
-        'chart_of_accounts_expense_parents',
-    )
+    form = TallyConfigForm
     list_display = ('organization', 'display_mappings', 'display_parent_ledgers')
     list_filter = ('organization',)
     search_fields = ('organization__name',)
     ordering = ('organization__name',)
     autocomplete_fields = ('organization',)
+
+    fieldsets = (
+        ('Organization', {
+            'fields': ('organization',)
+        }),
+        ('GST Parent Ledger Mappings', {
+            'fields': ('igst_parents', 'cgst_parents', 'sgst_parents'),
+            'description': 'Map parent ledgers for different GST types. These will be used for GST calculations and reporting.'
+        }),
+        ('Vendor & Chart of Accounts Mappings', {
+            'fields': ('vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents'),
+            'description': 'Map parent ledgers for vendor bills and chart of accounts.'
+        }),
+    )
 
     def get_queryset(self, request):
         """Filter queryset based on user permissions and prefetch related data"""
@@ -120,53 +128,21 @@ class TallyConfigAdmin(admin.ModelAdmin):
                 kwargs["queryset"] = request.user.organizations.all()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
-    def formfield_for_manytomany(self, db_field, request, **kwargs):
-        """Filter ManyToMany fields by organization context"""
-        if hasattr(request, '_obj_') and request._obj_ is not None:
-            # If editing existing object, filter by its organization
-            org = request._obj_.organization
-        else:
-            # For new objects, try to get organization from GET params
-            org_id = request.GET.get('organization')
-            if org_id:
-                try:
-                    from apps.organizations.models import Organization
-                    org = Organization.objects.get(id=org_id)
-                except (Organization.DoesNotExist, ValueError):
-                    org = None
-            else:
-                org = None
-
-        if org and db_field.name in ['igst_parents', 'cgst_parents', 'sgst_parents',
-                                   'vendor_parents', 'chart_of_accounts_parents',
-                                   'chart_of_accounts_expense_parents']:
-            kwargs["queryset"] = ParentLedger.objects.filter(organization=org)
-        elif db_field.name in ['igst_parents', 'cgst_parents', 'sgst_parents',
-                              'vendor_parents', 'chart_of_accounts_parents',
-                              'chart_of_accounts_expense_parents']:
-            # Show empty queryset if no organization is selected
-            kwargs["queryset"] = ParentLedger.objects.none()
-
-        return super().formfield_for_manytomany(db_field, request, **kwargs)
-
     def get_form(self, request, obj=None, **kwargs):
-        """Store the object in request for use in formfield_for_manytomany"""
-        request._obj_ = obj
+        """Use custom form and add JavaScript for dynamic updates"""
         form = super().get_form(request, obj, **kwargs)
 
-        # Ensure the form has Media class and add our JavaScript
-        if not hasattr(form, 'Media'):
-            class Media:
-                js = ('admin/js/tally_dependent_dropdown.js',)
-            form.Media = Media
-        else:
-            # If Media exists, extend the js tuple
-            existing_js = getattr(form.Media, 'js', ())
-            if isinstance(existing_js, (list, tuple)):
-                new_js = list(existing_js) + ['admin/js/tally_dependent_dropdown.js']
-            else:
-                new_js = ['admin/js/tally_dependent_dropdown.js']
-            form.Media.js = tuple(new_js)
+        # Add organization to form initial data if creating new object
+        if not obj and 'organization' in request.GET:
+            form.base_fields['organization'].initial = request.GET['organization']
+
+        # Add Media class for JavaScript
+        class Media:
+            js = ('admin/js/tally_simple_dropdown.js',)
+            css = {
+                'all': ('admin/css/tally_config.css',)
+            }
+        form.Media = Media
 
         return form
 
@@ -227,21 +203,6 @@ class TallyConfigAdmin(admin.ModelAdmin):
         return format_html("<br>".join(details)) if details else "No mappings configured"
 
     display_parent_ledgers.short_description = "Parent Ledger Details"
-
-    fieldsets = (
-        ('Organization', {
-            'fields': ('organization',),
-            'description': 'Select the organization for this Tally configuration.'
-        }),
-        ('GST Parent Ledger Mappings', {
-            'fields': ('igst_parents', 'cgst_parents', 'sgst_parents'),
-            'description': 'Map parent ledgers for different GST types. These will be used for GST calculations and reporting.'
-        }),
-        ('Business Parent Ledger Mappings', {
-            'fields': ('vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents'),
-            'description': 'Map parent ledgers for vendors and chart of accounts categorization.'
-        }),
-    )
 
     class Media:
         js = ('admin/js/tally_dependent_dropdown.js',)

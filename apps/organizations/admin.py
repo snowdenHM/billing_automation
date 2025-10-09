@@ -22,7 +22,7 @@ class OrganizationAPIKeyAdmin(admin.ModelAdmin):
     search_fields = ("organization__name", "name")
     list_filter = ("created_at",)
     readonly_fields = ("api_key",)
-
+    
     def api_key_prefix(self, obj):
         """Display API key prefix for identification"""
         return obj.api_key.prefix if obj.api_key else "N/A"

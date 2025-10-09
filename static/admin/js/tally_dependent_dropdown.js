@@ -1,131 +1,190 @@
-// Tally Dependent Dropdown JavaScript
-// Handles dynamic updating of parent ledger options based on organization selection
+/**
+ * Tally Dependent Dropdown JavaScript
+ * Handles dynamic updating of parent ledger options based on organization selection
+ */
 
-(function($) {
+(function() {
     'use strict';
 
-    function updateParentLedgerOptions(organizationId) {
-        if (!organizationId) {
-            // Clear all parent ledger options if no organization selected
-            clearAllParentLedgerOptions();
+    // Function to initialize the script once jQuery is available
+    function initializeTallyDropdown() {
+        // Use django.jQuery if available, otherwise fall back to window.jQuery or $
+        var $ = window.django && window.django.jQuery || window.jQuery || window.$;
+
+        if (!$) {
+            console.error('jQuery not found. Cannot initialize tally dependent dropdown.');
             return;
         }
 
-        // Get the AJAX URL - use relative path that works with Django admin
-        var ajaxUrl = window.location.pathname.replace(/\/add\/$/, '/get-parent-ledgers/').replace(/\/\d+\/change\/$/, '/get-parent-ledgers/');
-
-        // Fallback to absolute URL if needed
-        if (!ajaxUrl.includes('/get-parent-ledgers/')) {
-            ajaxUrl = '/admin/tally/tallyconfig/get-parent-ledgers/';
-        }
-
-        $.ajax({
-            url: ajaxUrl,
-            data: {
-                'org_id': organizationId,
-                'csrfmiddlewaretoken': $('[name=csrfmiddlewaretoken]').val()
-            },
-            method: 'GET',
-            success: function(data) {
-                console.log('Parent ledgers received:', data.parent_ledgers);
-                updateFilterHorizontalOptions(data.parent_ledgers);
-            },
-            error: function(xhr, status, error) {
-                console.error('Failed to fetch parent ledgers:', status, error);
-                console.error('Response:', xhr.responseText);
+        function updateParentLedgerOptions(organizationId) {
+            if (!organizationId) {
                 clearAllParentLedgerOptions();
+                return;
             }
-        });
-    }
 
-    function updateFilterHorizontalOptions(parentLedgers) {
-        // List of filter horizontal field names
-        var fieldNames = [
-            'igst_parents',
-            'cgst_parents',
-            'sgst_parents',
-            'vendor_parents',
-            'chart_of_accounts_parents',
-            'chart_of_accounts_expense_parents'
-        ];
+            // Get the AJAX URL for fetching parent ledgers
+            var ajaxUrl = '/admin/tally/tallyconfig/get-parent-ledgers/';
 
-        fieldNames.forEach(function(fieldName) {
-            var fromBox = $('#id_' + fieldName + '_from');
-            var toBox = $('#id_' + fieldName + '_to');
-
-            if (fromBox.length && toBox.length) {
-                // Store currently selected items
-                var selectedItems = [];
-                toBox.find('option').each(function() {
-                    selectedItems.push({
-                        value: $(this).val(),
-                        text: $(this).text()
-                    });
-                });
-
-                // Clear current options in from box
-                fromBox.empty();
-
-                // Add new options to from box
-                parentLedgers.forEach(function(ledger) {
-                    var option = new Option(ledger.parent, ledger.id);
-                    fromBox.append(option);
-                });
-
-                // Remove selected items that no longer exist in the organization
-                var availableIds = parentLedgers.map(function(ledger) { return ledger.id.toString(); });
-                toBox.find('option').each(function() {
-                    if (availableIds.indexOf($(this).val()) === -1) {
-                        $(this).remove();
-                    }
-                });
-
-                console.log('Updated filter horizontal for field:', fieldName);
-            } else {
-                console.warn('Filter horizontal boxes not found for field:', fieldName);
-            }
-        });
-    }
-
-    function clearAllParentLedgerOptions() {
-        var fieldNames = [
-            'igst_parents',
-            'cgst_parents',
-            'sgst_parents',
-            'vendor_parents',
-            'chart_of_accounts_parents',
-            'chart_of_accounts_expense_parents'
-        ];
-
-        fieldNames.forEach(function(fieldName) {
-            var fromBox = $('#id_' + fieldName + '_from');
-            var toBox = $('#id_' + fieldName + '_to');
-
-            if (fromBox.length && toBox.length) {
-                fromBox.empty();
-                toBox.empty();
-            }
-        });
-        console.log('Cleared all parent ledger options');
-    }
-
-    // Initialize when DOM is ready
-    $(document).ready(function() {
-        console.log('Tally dependent dropdown initialized');
-
-        // Handle organization change
-        $('#id_organization').on('change', function() {
-            var organizationId = $(this).val();
-            console.log('Organization changed to:', organizationId);
-            updateParentLedgerOptions(organizationId);
-        });
-
-        // Load initial data if organization is already selected
-        var initialOrgId = $('#id_organization').val();
-        if (initialOrgId) {
-            console.log('Loading initial data for organization:', initialOrgId);
-            updateParentLedgerOptions(initialOrgId);
+            $.ajax({
+                url: ajaxUrl,
+                data: {
+                    'org_id': organizationId,
+                    'csrfmiddlewaretoken': $('[name=csrfmiddlewaretoken]').val()
+                },
+                method: 'GET',
+                success: function(data) {
+                    console.log('Parent ledgers received:', data.parent_ledgers);
+                    updateFilterHorizontalOptions(data.parent_ledgers);
+                },
+                error: function(xhr, status, error) {
+                    console.error('Failed to fetch parent ledgers:', status, error);
+                    clearAllParentLedgerOptions();
+                }
+            });
         }
-    });
 
-})(django.jQuery || jQuery);
+        function updateFilterHorizontalOptions(parentLedgers) {
+            // List of filter horizontal field names
+            var fieldNames = [
+                'igst_parents',
+                'cgst_parents',
+                'sgst_parents',
+                'vendor_parents',
+                'chart_of_accounts_parents',
+                'chart_of_accounts_expense_parents'
+            ];
+
+            fieldNames.forEach(function(fieldName) {
+                var selectFrom = $('#id_' + fieldName + '_from');
+                var selectTo = $('#id_' + fieldName + '_to');
+
+                if (selectFrom.length && selectTo.length) {
+                    // Store currently selected items in the "to" list
+                    var selectedItems = [];
+                    selectTo.find('option').each(function() {
+                        selectedItems.push({
+                            id: $(this).val(),
+                            text: $(this).text()
+                        });
+                    });
+
+                    // Clear existing options in "from" list only
+                    selectFrom.empty();
+
+                    // Add new options to "from" list
+                    parentLedgers.forEach(function(ledger) {
+                        // Don't add if already selected in "to" list
+                        var alreadySelected = selectedItems.some(function(item) {
+                            return item.id === ledger.id.toString();
+                        });
+
+                        if (!alreadySelected) {
+                            var option = $('<option></option>')
+                                .attr('value', ledger.id)
+                                .text(ledger.parent);
+                            selectFrom.append(option);
+                        }
+                    });
+
+                    // Only use SelectBox if it exists and the elements are properly initialized
+                    if (window.SelectBox && selectFrom[0] && selectTo[0]) {
+                        try {
+                            // Check if SelectBox cache exists for these elements
+                            var fromId = fieldName + '_from';
+                            var toId = fieldName + '_to';
+
+                            // Only call redisplay if the SelectBox is already initialized
+                            if (SelectBox.cache[fromId]) {
+                                SelectBox.redisplay(fromId);
+                            }
+                            if (SelectBox.cache[toId]) {
+                                SelectBox.redisplay(toId);
+                            }
+                        } catch (e) {
+                            console.warn('SelectBox operation failed for ' + fieldName + ':', e);
+                        }
+                    }
+
+                    // Trigger change event to update the widget
+                    selectFrom.trigger('change');
+                }
+            });
+        }
+
+        function clearAllParentLedgerOptions() {
+            var fieldNames = [
+                'igst_parents',
+                'cgst_parents',
+                'sgst_parents',
+                'vendor_parents',
+                'chart_of_accounts_parents',
+                'chart_of_accounts_expense_parents'
+            ];
+
+            fieldNames.forEach(function(fieldName) {
+                var selectFrom = $('#id_' + fieldName + '_from');
+
+                if (selectFrom.length) {
+                    selectFrom.empty();
+
+                    // Only refresh SelectBox if it exists and is properly initialized
+                    if (window.SelectBox && selectFrom[0]) {
+                        try {
+                            var fromId = fieldName + '_from';
+                            if (SelectBox.cache[fromId]) {
+                                SelectBox.redisplay(fromId);
+                            }
+                        } catch (e) {
+                            console.warn('SelectBox redisplay failed for ' + fieldName + ':', e);
+                        }
+                    }
+                }
+            });
+        }
+
+        // Initialize when document is ready
+        $(document).ready(function() {
+            var organizationField = $('#id_organization');
+
+            if (organizationField.length) {
+                // Handle organization field changes
+                organizationField.on('change', function() {
+                    var selectedOrg = $(this).val();
+                    updateParentLedgerOptions(selectedOrg);
+                });
+
+                // If organization is already selected (edit mode), update options
+                var currentOrg = organizationField.val();
+                if (currentOrg) {
+                    updateParentLedgerOptions(currentOrg);
+                }
+            }
+        });
+    }
+
+    // Try to initialize immediately if jQuery is available
+    if (window.django && window.django.jQuery) {
+        initializeTallyDropdown();
+    } else {
+        // Wait for django admin to load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Try multiple times with delays to ensure django.jQuery is loaded
+            var attempts = 0;
+            var maxAttempts = 10;
+
+            function tryInitialize() {
+                attempts++;
+                if (window.django && window.django.jQuery) {
+                    initializeTallyDropdown();
+                } else if (attempts < maxAttempts) {
+                    setTimeout(tryInitialize, 100);
+                } else {
+                    console.error('Could not find django.jQuery after multiple attempts');
+                }
+            }
+
+            tryInitialize();
+        });
+    }
+
+})();

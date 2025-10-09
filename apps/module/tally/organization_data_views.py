@@ -17,8 +17,6 @@ class OrganizationTallyDataResponseSerializer(serializers.Serializer):
     class OrganizationSerializer(serializers.Serializer):
         id = serializers.UUIDField(help_text="Organization UUID")
         name = serializers.CharField(help_text="Organization name")
-        unique_name = serializers.CharField(help_text="Organization unique name (BM-XXXXX format)")
-        status = serializers.CharField(help_text="Organization status")
 
     organization = OrganizationSerializer(help_text="Organization details")
     ledgers = serializers.URLField(help_text="URL to access organization's ledgers endpoint")
@@ -71,15 +69,13 @@ class OrganizationTallyDataResponseSerializer(serializers.Serializer):
                     value={
                         "organization": {
                             "id": "123e4567-e89b-12d3-a456-426614174000",
-                            "name": "Sample Organization",
-                            "unique_name": "BM-ABC123",
-                            "status": "ACTIVE"
+                            "name": "Sample Organization"
                         },
                         "ledgers": "https://api.example.com/api/v1/tally/org/123e4567-e89b-12d3-a456-426614174000/ledgers/",
                         "masters": "https://api.example.com/api/v1/tally/org/123e4567-e89b-12d3-a456-426614174000/masters/",
                         "vendor_bills_sync_external": "https://api.example.com/api/v1/tally/org/123e4567-e89b-12d3-a456-426614174000/vendor-bills/sync_external/",
                         "expense_bills_sync_external": "https://api.example.com/api/v1/tally/org/123e4567-e89b-12d3-a456-426614174000/expense-bills/sync_external/",
-                        "api_key": "abc123def456ghi789jkl012mno345pqr678stu901vwx234yz"
+                        "api_key": "Authorization:Api-Key abc123def456ghi789jkl012mno345pqr678stu901vwx234yz"
                     }
                 )
             ]
@@ -133,7 +129,7 @@ def organization_tally_data(request, org_id):
 
         # Check if user has access to this organization
         if not request.user.is_superuser:
-            # Get organizations through memberships relationship
+            # Fix: Use the correct relationship through memberships
             user_orgs = Organization.objects.filter(
                 memberships__user=request.user,
                 memberships__is_active=True
@@ -145,23 +141,21 @@ def organization_tally_data(request, org_id):
                 )
 
         with transaction.atomic():
-            # Generate API Key if not available - ensure consistent API key value
+            # Get or create API Key - ensure only one API key per organization
             try:
-                # Try to get existing API key for this organization (now OneToOne relationship)
+                # Try to get existing API key for this organization
                 org_api_key = OrganizationAPIKey.objects.select_related('api_key').get(
                     organization=organization
                 )
 
-                # Use the stored API key value that was saved during creation
+                # Use the stored API key value
                 api_key_value = org_api_key.api_key_value_gen
 
                 # Handle existing records that don't have api_key_value_gen populated
                 if not api_key_value:
-                    # For existing records, we need to use the API key ID as fallback
-                    # Note: This won't be the original key string, but it's the best we can do
+                    # For existing records, use the API key ID as fallback
                     api_key_value = org_api_key.api_key.id
-
-                    # Update the record with the fallback value for future use
+                    # Update the record with the fallback value
                     org_api_key.api_key_value_gen = api_key_value
                     org_api_key.save(update_fields=['api_key_value_gen'])
 
@@ -175,23 +169,24 @@ def organization_tally_data(request, org_id):
                 ).first()
 
                 if existing_org_api_key:
-                    # Another request already created the key, use the stored value
+                    # Another request already created the key
                     api_key_value = existing_org_api_key.api_key_value_gen
                 else:
                     # Safe to create new API key
-                    # Shorten the API key name to avoid database constraint issues
-                    api_key_name = f"Tally-{organization.unique_name}"  # Use unique_name instead of full name
-                    if len(api_key_name) > 45:  # Leave some buffer for the 50-char limit
-                        api_key_name = api_key_name[:45]
+                    # Fix: Shorten the API key name to avoid database constraint issues
+                    api_key_name = f"Tally-{organization.unique_name}"
+                    # Ensure name doesn't exceed 50 characters (database constraint)
+                    if len(api_key_name) > 50:
+                        api_key_name = api_key_name[:50]
 
-                    # Create APIKey instance first - api_key_value contains the actual key string
+                    # Create APIKey instance - api_key_value contains the actual key string
                     api_key_obj, api_key_value = APIKey.objects.create_key(name=api_key_name)
 
                     try:
                         # Create OrganizationAPIKey link and store the actual key value
                         org_api_key = OrganizationAPIKey.objects.create(
                             api_key=api_key_obj,
-                            api_key_value_gen=api_key_value,  # Store the actual 41-char key for future use
+                            api_key_value_gen=api_key_value,  # Store the actual key for future use
                             organization=organization_locked,
                             name="Tally Integration Key",
                             created_by=request.user
@@ -202,9 +197,9 @@ def organization_tally_data(request, org_id):
                         raise e
 
             # Build base URL for the organization
-            # Get the current request URL and remove the 'help/' part
+            # Get the current request URL and remove the trailing part
             current_url = request.build_absolute_uri().rstrip('/')
-            # Remove '/help' from the end of the URL to get the org base URL
+            # Remove '/data' from the end of the URL to get the org base URL
             if current_url.endswith('/help'):
                 base_url = current_url[:-5]  # Remove '/help'
             else:
