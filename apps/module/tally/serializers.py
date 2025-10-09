@@ -45,7 +45,7 @@ class TallyConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = TallyConfig
         fields = [
-            'id', 'igst_parents', 'cgst_parents', 'sgst_parents',
+            'id', 'tally_product_allow_sync', 'igst_parents', 'cgst_parents', 'sgst_parents',
             'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents'
         ]
         read_only_fields = ['id']

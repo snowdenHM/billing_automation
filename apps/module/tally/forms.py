@@ -12,6 +12,9 @@ class TallyConfigForm(forms.ModelForm):
         model = TallyConfig
         fields = '__all__'
         widgets = {
+            'tally_product_allow_sync': forms.CheckboxInput(attrs={
+                'class': 'form-check-input',
+            }),
             'igst_parents': forms.SelectMultiple(attrs={
                 'class': 'form-control',
                 'style': 'height: 200px;',

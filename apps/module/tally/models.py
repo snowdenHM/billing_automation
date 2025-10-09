@@ -119,7 +119,7 @@ class TallyConfig(BaseOrgModel):
     All fields are ManyToMany as requested.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
-
+    tally_product_allow_sync = models.BooleanField(default=False)
     igst_parents = models.ManyToManyField(
         'ParentLedger',
         blank=True,

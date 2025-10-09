@@ -1588,6 +1588,14 @@ def prepare_sync_data(analyzed_bill, organization):
     bill_date_str = analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
     team_slug = organization.name if hasattr(organization, 'name') else str(organization.id)
 
+    # Check TallyConfig for tally_product_allow_sync setting
+    try:
+        from .models import TallyConfig
+        tally_config = TallyConfig.objects.filter(organization=organization).first()
+        allow_product_sync = tally_config.tally_product_allow_sync if tally_config else False
+    except Exception:
+        allow_product_sync = False
+
     # Use the same structured format as get_structured_bill_data
     bill_data = {
         "vendor_name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
@@ -1609,8 +1617,14 @@ def prepare_sync_data(analyzed_bill, organization):
                 "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
             }
         },
-        "products": [
-            {
+        "products": []
+    }
+
+    # Build products array based on tally_product_allow_sync setting
+    for item in analyzed_bill_products:
+        if allow_product_sync:
+            # Include all product fields when sync is allowed
+            product_data = {
                 "id": str(item.id),
                 "item_name": item.item_name,
                 "item_details": item.item_details,
@@ -1623,9 +1637,18 @@ def prepare_sync_data(analyzed_bill, organization):
                 "cgst": float(item.cgst or 0),
                 "sgst": float(item.sgst or 0),
             }
-            for item in analyzed_bill_products
-        ],
-    }
+        else:
+            # Exclude item_name, item_details, price, quantity, amount when sync is not allowed
+            product_data = {
+                "id": str(item.id),
+                "tax_ledger": str(item.taxes) if item.taxes else "No Tax Ledger",
+                "product_gst": item.product_gst,
+                "igst": float(item.igst or 0),
+                "cgst": float(item.cgst or 0),
+                "sgst": float(item.sgst or 0),
+            }
+
+        bill_data["products"].append(product_data)
 
     return {"data": bill_data}
 

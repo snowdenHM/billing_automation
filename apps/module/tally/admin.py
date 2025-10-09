@@ -78,6 +78,10 @@ class TallyConfigAdmin(admin.ModelAdmin):
         ('Organization', {
             'fields': ('organization',)
         }),
+        ('Product Sync Settings', {
+            'fields': ('tally_product_allow_sync',),
+            'description': 'Configure whether product synchronization is allowed for this organization.'
+        }),
         ('GST Parent Ledger Mappings', {
             'fields': ('igst_parents', 'cgst_parents', 'sgst_parents'),
             'description': 'Map parent ledgers for different GST types. These will be used for GST calculations and reporting.'
