@@ -60,7 +60,7 @@
                 if (selectField.length) {
                     // Store currently selected values
                     var selectedValues = selectField.val() || [];
-
+                    
                     // Re-enable the field and clear existing options
                     selectField.prop('disabled', false);
                     selectField.empty();
@@ -70,12 +70,12 @@
                         var option = $('<option></option>')
                             .attr('value', ledger.id)
                             .text(ledger.parent);
-
+                        
                         // Re-select if it was previously selected
                         if (selectedValues.includes(ledger.id.toString())) {
                             option.attr('selected', 'selected');
                         }
-
+                        
                         selectField.append(option);
                     });
 

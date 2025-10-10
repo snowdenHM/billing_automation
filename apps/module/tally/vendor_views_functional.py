@@ -1643,6 +1643,7 @@ def prepare_sync_data(analyzed_bill, organization):
                 "id": str(item.id),
                 "tax_ledger": str(item.taxes) if item.taxes else "No Tax Ledger",
                 "product_gst": item.product_gst,
+                "amount": float(item.amount or 0),
                 "igst": float(item.igst or 0),
                 "cgst": float(item.cgst or 0),
                 "sgst": float(item.sgst or 0),
