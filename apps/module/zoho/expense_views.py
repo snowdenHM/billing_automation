@@ -111,10 +111,10 @@ def make_zoho_api_request(credentials, endpoint, method='GET', data=None):
 
 def analyze_bill_with_openai(file_content, file_extension):
     """
-    Analyze bill content using OpenAI to extract structured data.
-    Supports PDF, JPG, PNG file formats.
+    Analyze expense bill content using OpenAI to extract structured data with enhanced PDF handling.
+    Supports PDF, JPG, PNG file formats with robust validation and optimization.
     """
-    logger.info(f"Starting bill analysis for file type: {file_extension}")
+    logger.info(f"Starting enhanced expense bill analysis for file type: {file_extension}")
 
     try:
         # Initialize OpenAI client
@@ -124,92 +124,182 @@ def analyze_bill_with_openai(file_content, file_extension):
 
         client = OpenAI(api_key=api_key)
 
-        # Prepare image data based on file type
+        # Prepare image data based on file type with enhanced processing
         if file_extension.lower() == 'pdf':
-            # Convert PDF to image with high DPI for better OCR quality
-            images = convert_from_bytes(
-                file_content,
-                first_page=1,
-                last_page=1,
-                dpi=300,  # High DPI (300) instead of default (200) for better text clarity
-                fmt='PNG'  # PNG format for lossless quality
-            )
-            if not images:
-                raise ValueError("Could not convert PDF to image")
+            logger.info(f"Processing PDF file with enhanced settings...")
+            
+            file_size = len(file_content)
+            logger.info(f"PDF loaded: {file_size:,} bytes")
 
-            # Get the converted image and ensure RGB mode for better processing
-            pdf_image = images[0]
-            if pdf_image.mode != 'RGB':
-                pdf_image = pdf_image.convert('RGB')
+            # Enhanced PDF validation
+            if not file_content.startswith(b'%PDF'):
+                raise ValueError("Invalid PDF file format")
 
-            # Convert PIL image to base64 with high quality
-            buffer = BytesIO()
-            pdf_image.save(buffer, format='PNG', optimize=False)
-            image_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            if file_size < 100:
+                raise ValueError("PDF file too small (possibly corrupted)")
 
-            logger.info(f"PDF converted to image: {pdf_image.size} pixels, mode: {pdf_image.mode}")
+            logger.info("PDF validation passed")
+
+            # Convert PDF to image with enhanced settings
+            try:
+                from PIL import Image, ImageEnhance
+                
+                logger.info("Converting PDF to image with enhanced settings...")
+                images = convert_from_bytes(
+                    file_content,
+                    first_page=1,
+                    last_page=1,
+                    dpi=200,  # Good balance of quality vs speed
+                    fmt='jpeg'
+                )
+
+                if not images:
+                    raise ValueError("No images generated from PDF")
+
+                image = images[0]
+                logger.info(f"PDF converted successfully - Image size: {image.size}, Mode: {image.mode}")
+
+                # Enhanced image optimization for OCR
+                logger.info("Optimizing image for OCR...")
+                
+                # Convert to RGB if needed
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+
+                # Enhance for better OCR
+                enhancer = ImageEnhance.Contrast(image)
+                image = enhancer.enhance(1.2)
+
+                enhancer = ImageEnhance.Sharpness(image)
+                image = enhancer.enhance(1.1)
+
+                # Ensure minimum size for better OCR accuracy
+                width, height = image.size
+                if width < 1000 or height < 1000:
+                    scale = max(1000 / width, 1000 / height)
+                    new_size = (int(width * scale), int(height * scale))
+                    image = image.resize(new_size, Image.Resampling.LANCZOS)
+                    logger.info(f"Image upscaled to: {new_size}")
+
+                logger.info("Image optimization completed")
+
+                # Convert PIL image to base64
+                buffer = BytesIO()
+                image.save(buffer, format='JPEG', quality=95)
+                image_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                mime_type = "image/jpeg"
+                logger.info(f"Base64 conversion completed: {len(image_data):,} characters")
+
+            except Exception as e:
+                logger.error(f"Enhanced PDF conversion failed: {str(e)}")
+                raise ValueError(f"PDF conversion failed: {str(e)}")
 
         elif file_extension.lower() in ['jpg', 'jpeg', 'png']:
-            # Convert image to base64
+            # Handle image files with MIME type detection
+            logger.info(f"Processing image file: {file_extension}")
+            
+            if file_extension.lower() in ['jpg', 'jpeg']:
+                mime_type = "image/jpeg"
+            elif file_extension.lower() == 'png':
+                mime_type = "image/png"
+            else:
+                mime_type = "image/jpeg"  # Default fallback
+                
             image_data = base64.b64encode(file_content).decode('utf-8')
+            logger.info(f"Successfully processed image with MIME type: {mime_type}")
 
         else:
             raise ValueError(f"Unsupported file format: {file_extension}")
 
-        # JSON Schema for AI extraction
-        invoice_schema = {
-            "$schema": "http://json-schema.org/draft/2020-12/schema",
-            "title": "Invoice",
-            "description": "A simple invoice format",
-            "type": "object",
-            "properties": {
-                "invoiceNumber": {"type": "string"},
-                "dateIssued": {"type": "string", "format": "date"},
-                "dueDate": {"type": "string", "format": "date"},
-                "from": {"type": "object", "properties": {"name": {"type": "string"}, "address": {"type": "string"}}},
-                "to": {"type": "object", "properties": {"name": {"type": "string"}, "address": {"type": "string"}}},
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "description": {"type": "string"},
-                            "quantity": {"type": "number"},
-                            "price": {"type": "number"}
-                        }
-                    }
-                },
-                "total": {"type": "number"},
-                "igst": {"type": "number"},
-                "cgst": {"type": "number"},
-                "sgst": {"type": "number"}
-            }
+        # Enhanced prompt for Indian expense bills/receipts
+        enhanced_prompt = """
+        Analyze this expense bill/receipt image carefully and extract ALL visible information in JSON format.
+        This appears to be an Indian business expense bill/receipt. Look for:
+        
+        1. Bill/Receipt Number (may be labeled as Bill No, Receipt No, Invoice No, etc.)
+        2. Dates (Bill Date, Receipt Date, Transaction Date - convert to YYYY-MM-DD format)
+        3. Vendor/Company details in "from" section (name and address)
+        4. Customer details in "to" section (name and address) 
+        5. Expense items with descriptions, categories, and amounts
+        6. Tax amounts (IGST, CGST, SGST - look for percentages and amounts)
+        7. Total amount (may include terms like "Total", "Grand Total", "Amount Payable", "Net Amount")
+        
+        IMPORTANT RULES:
+        - Extract EXACT text as it appears on the document
+        - For numbers, remove currency symbols (₹, Rs.) and commas
+        - If any field is not visible or unclear, use empty string "" or 0 for numbers
+        - Look carefully at the entire document, including headers, footers, and margins
+        - Pay special attention to tax sections which may be in tables or separate areas
+        - For expense categories, try to identify the type of expense (travel, food, supplies, etc.)
+        
+        Return data in this JSON structure:
+        {
+            "invoiceNumber": "Bill/Receipt number as shown on document",
+            "dateIssued": "Bill/Receipt date in YYYY-MM-DD format",
+            "dueDate": "Due date in YYYY-MM-DD format if mentioned",
+            "from": {
+                "name": "Vendor/Company name",
+                "address": "Vendor address"
+            },
+            "to": {
+                "name": "Customer name", 
+                "address": "Customer address"
+            },
+            "items": [
+                {
+                    "description": "Expense item description",
+                    "quantity": 0,
+                    "price": 0
+                }
+            ],
+            "total": 0,
+            "igst": 0,
+            "cgst": 0,
+            "sgst": 0
         }
+        """
 
-        # Make OpenAI API call
+        # Enhanced OpenAI API call with better settings
+        logger.info("Sending request to OpenAI API...")
         response = client.chat.completions.create(
             model='gpt-4o',
             response_format={"type": "json_object"},
             messages=[{
                 "role": "user",
                 "content": [
-                    {"type": "text",
-                     "text": f"Extract invoice data in JSON format using this schema: {json.dumps(invoice_schema)}"},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
+                    {
+                        "type": "text",
+                        "text": enhanced_prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{image_data}",
+                            "detail": "high"  # Enhanced detail setting
+                        }
+                    }
                 ]
             }],
-            max_tokens=3000
+            max_tokens=2000,  # Increased token limit
+            temperature=0.1   # Lower temperature for more consistent results
         )
+
+        if not response.choices or not response.choices[0].message.content:
+            raise ValueError("Empty response from OpenAI API")
+
+        logger.info("Successfully received response from OpenAI API")
+        logger.info(f"Raw OpenAI response: {response.choices[0].message.content}")
 
         json_data = json.loads(response.choices[0].message.content)
         logger.info(f"Successfully parsed analyzed data: {json_data}")
         return json_data
 
     except Exception as e:
-        logger.error(f"Error in bill analysis: {str(e)}")
+        logger.error(f"Error in enhanced expense bill analysis: {str(e)}")
         return {
             "invoiceNumber": "",
             "dateIssued": "",
+            "dueDate": "",
             "from": {"name": "", "address": ""},
             "to": {"name": "", "address": ""},
             "items": [],
@@ -897,7 +987,4 @@ def expense_bill_delete_view(request, org_id, bill_id):
 
     except ExpenseBill.DoesNotExist:
         return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
-
-
-
 

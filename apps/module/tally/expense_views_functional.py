@@ -133,7 +133,7 @@ def analyze_expense_bill_with_ai(bill, organization):
         # Read and process file based on type
         if file_name.endswith('.pdf'):
             logger.info(f"Processing PDF file: {file_name}")
-
+            
             # Enhanced PDF processing with validation
             with open(file_path, 'rb') as f:
                 pdf_bytes = f.read()
@@ -153,7 +153,7 @@ def analyze_expense_bill_with_ai(bill, organization):
             # Convert PDF to image with enhanced settings
             try:
                 from PIL import Image, ImageEnhance
-
+                
                 logger.info("Converting PDF to image with enhanced settings...")
                 page_images = convert_from_bytes(
                     pdf_bytes,
@@ -171,7 +171,7 @@ def analyze_expense_bill_with_ai(bill, organization):
 
                 # Enhanced image optimization for OCR
                 logger.info("Optimizing image for OCR...")
-
+                
                 # Convert to RGB if needed
                 if image.mode != 'RGB':
                     image = image.convert('RGB')
