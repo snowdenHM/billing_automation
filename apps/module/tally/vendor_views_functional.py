@@ -133,26 +133,76 @@ def analyze_bill_with_ai(bill, organization):
         # Read and process file based on type
         if file_name.endswith('.pdf'):
             logger.info(f"Processing PDF file: {file_name}")
-            # Convert PDF to image for AI analysis
+
+            # Enhanced PDF processing with validation
             with open(file_path, 'rb') as f:
                 pdf_bytes = f.read()
 
-            # Convert first page of PDF to image
+            file_size = len(pdf_bytes)
+            logger.info(f"PDF loaded: {file_size:,} bytes")
+
+            # Enhanced PDF validation
+            if not pdf_bytes.startswith(b'%PDF'):
+                raise Exception("Invalid PDF file format")
+
+            if file_size < 100:
+                raise Exception("PDF file too small (possibly corrupted)")
+
+            logger.info("PDF validation passed")
+
+            # Convert PDF to image with enhanced settings
             try:
-                page_images = convert_from_bytes(pdf_bytes, first_page=1, last_page=1, dpi=300)
+                from PIL import Image, ImageEnhance
+
+                logger.info("Converting PDF to image with enhanced settings...")
+                page_images = convert_from_bytes(
+                    pdf_bytes,
+                    first_page=1,
+                    last_page=1,
+                    dpi=200,  # Good balance of quality vs speed
+                    fmt='jpeg'
+                )
+
                 if not page_images:
-                    raise Exception("Failed to convert PDF to image")
+                    raise Exception("No images generated from PDF")
+
+                image = page_images[0]
+                logger.info(f"PDF converted successfully - Image size: {image.size}, Mode: {image.mode}")
+
+                # Enhanced image optimization for OCR
+                logger.info("Optimizing image for OCR...")
+
+                # Convert to RGB if needed
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+
+                # Enhance for better OCR
+                enhancer = ImageEnhance.Contrast(image)
+                image = enhancer.enhance(1.2)
+
+                enhancer = ImageEnhance.Sharpness(image)
+                image = enhancer.enhance(1.1)
+
+                # Ensure minimum size for better OCR accuracy
+                width, height = image.size
+                if width < 1000 or height < 1000:
+                    scale = max(1000 / width, 1000 / height)
+                    new_size = (int(width * scale), int(height * scale))
+                    image = image.resize(new_size, Image.Resampling.LANCZOS)
+                    logger.info(f"Image upscaled to: {new_size}")
+
+                logger.info("Image optimization completed")
 
                 # Convert PIL image to base64
                 image_io = BytesIO()
-                page_images[0].save(image_io, format='JPEG', quality=95)
+                image.save(image_io, format='JPEG', quality=95)
                 image_io.seek(0)
                 image_base64 = base64.b64encode(image_io.read()).decode('utf-8')
                 mime_type = "image/jpeg"
-                logger.info("Successfully converted PDF to JPEG for AI analysis")
+                logger.info(f"Base64 conversion completed: {len(image_base64):,} characters")
 
             except Exception as e:
-                logger.error(f"PDF conversion failed: {str(e)}")
+                logger.error(f"Enhanced PDF conversion failed: {str(e)}")
                 raise Exception(f"PDF conversion failed: {str(e)}")
 
         else:
@@ -184,61 +234,54 @@ def analyze_bill_with_ai(bill, organization):
         logger.error(f"Error reading/processing bill file: {str(e)}")
         raise Exception(f"Error reading bill file: {str(e)}")
 
-    # Enhanced prompt for better extraction
+    # Enhanced prompt for Indian invoices (from successful test script)
     enhanced_prompt = """
-    Please analyze this invoice/bill image and extract the following information in JSON format.
-    Be very careful to extract exact values as they appear on the document.
+    Analyze this invoice/bill image carefully and extract ALL visible information in JSON format.
+    This appears to be an Indian business invoice/bill. Look for:
     
-    For dates, use YYYY-MM-DD format.
-    For numbers, include only numeric values (no currency symbols or commas).
-    If any field is not clearly visible or missing, use null or empty string.
+    1. Invoice/Bill Number (may be labeled as Invoice No, Bill No, Receipt No, etc.)
+    2. Dates (Invoice Date, Bill Date, Due Date - convert to YYYY-MM-DD format)
+    3. Vendor/Company details in "from" section (name and address)
+    4. Customer details in "to" section (name and address) 
+    5. Line items with descriptions, quantities, and prices
+    6. Tax amounts (IGST, CGST, SGST - look for percentages and amounts)
+    7. Total amount (may include terms like "Total", "Grand Total", "Amount Payable")
     
-    Return data in this exact JSON structure:
+    IMPORTANT RULES:
+    - Extract EXACT text as it appears on the document
+    - For numbers, remove currency symbols (₹, Rs.) and commas
+    - If any field is not visible or unclear, use empty string "" or 0 for numbers
+    - Look carefully at the entire document, including headers, footers, and margins
+    - Pay special attention to tax sections which may be in tables or separate areas
+    
+    Return data in this JSON structure:
+    {
+        "invoiceNumber": "Invoice/Bill number as shown on document",
+        "dateIssued": "Invoice/Bill date in YYYY-MM-DD format",
+        "dueDate": "Due date in YYYY-MM-DD format if mentioned",
+        "from": {
+            "name": "Vendor/Company name",
+            "address": "Vendor address"
+        },
+        "to": {
+            "name": "Customer name", 
+            "address": "Customer address"
+        },
+        "items": [
+            {
+                "description": "Item/Service description",
+                "quantity": 0,
+                "price": 0
+            }
+        ],
+        "total": 0,
+        "igst": 0,
+        "cgst": 0,
+        "sgst": 0
+    }
     """
 
-    # Invoice schema for AI extraction
-    invoice_schema = {
-        "$schema": "http://json-schema.org/draft/2020-12/schema",
-        "title": "Invoice",
-        "description": "Invoice extraction schema",
-        "type": "object",
-        "properties": {
-            "invoiceNumber": {"type": "string"},
-            "dateIssued": {"type": "string", "format": "date"},
-            "dueDate": {"type": "string", "format": "date"},
-            "from": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "address": {"type": "string"}
-                }
-            },
-            "to": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "address": {"type": "string"}
-                }
-            },
-            "items": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "description": {"type": "string"},
-                        "quantity": {"type": "number"},
-                        "price": {"type": "number"}
-                    }
-                }
-            },
-            "total": {"type": "number"},
-            "igst": {"type": "number"},
-            "cgst": {"type": "number"},
-            "sgst": {"type": "number"}
-        }
-    }
-
-    # AI processing request with enhanced error handling
+    # AI processing request with enhanced settings
     try:
         logger.info("Sending request to OpenAI API...")
         response = client.chat.completions.create(
@@ -249,15 +292,18 @@ def analyze_bill_with_ai(bill, organization):
                 "content": [
                     {
                         "type": "text",
-                        "text": f"{enhanced_prompt}\n{json.dumps(invoice_schema, indent=2)}"
+                        "text": enhanced_prompt
                     },
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:{mime_type};base64,{image_base64}"}
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{image_base64}",
+                            "detail": "high"  # Enhanced detail setting
+                        }
                     }
                 ]
             }],
-            max_tokens=1500,  # Increased token limit
+            max_tokens=2000,  # Increased token limit
             temperature=0.1   # Lower temperature for more consistent results
         )
 
