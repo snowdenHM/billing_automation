@@ -119,22 +119,88 @@ def get_organization_from_request(request, org_id=None):
 
 
 def analyze_bill_with_ai(bill, organization):
-    """Analyze bill using OpenAI API"""
+    """Analyze bill using OpenAI API with proper file type handling"""
     if not client:
         raise Exception("OpenAI client not configured")
 
-    # Read file and convert to base64
+    logger.info(f"Starting AI analysis for bill {bill.id}, file: {bill.file.name}")
+
+    # Determine file type and process accordingly
+    file_path = bill.file.path
+    file_name = bill.file.name.lower()
+
     try:
-        with open(bill.file.path, 'rb') as f:
-            image_base64 = base64.b64encode(f.read()).decode('utf-8')
+        # Read and process file based on type
+        if file_name.endswith('.pdf'):
+            logger.info(f"Processing PDF file: {file_name}")
+            # Convert PDF to image for AI analysis
+            with open(file_path, 'rb') as f:
+                pdf_bytes = f.read()
+
+            # Convert first page of PDF to image
+            try:
+                page_images = convert_from_bytes(pdf_bytes, first_page=1, last_page=1, dpi=300)
+                if not page_images:
+                    raise Exception("Failed to convert PDF to image")
+
+                # Convert PIL image to base64
+                image_io = BytesIO()
+                page_images[0].save(image_io, format='JPEG', quality=95)
+                image_io.seek(0)
+                image_base64 = base64.b64encode(image_io.read()).decode('utf-8')
+                mime_type = "image/jpeg"
+                logger.info("Successfully converted PDF to JPEG for AI analysis")
+
+            except Exception as e:
+                logger.error(f"PDF conversion failed: {str(e)}")
+                raise Exception(f"PDF conversion failed: {str(e)}")
+
+        else:
+            # Handle image files
+            logger.info(f"Processing image file: {file_name}")
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+
+            # Determine MIME type based on file extension
+            if file_name.endswith(('.jpg', '.jpeg')):
+                mime_type = "image/jpeg"
+            elif file_name.endswith('.png'):
+                mime_type = "image/png"
+            elif file_name.endswith('.gif'):
+                mime_type = "image/gif"
+            elif file_name.endswith('.bmp'):
+                mime_type = "image/bmp"
+            elif file_name.endswith('.webp'):
+                mime_type = "image/webp"
+            else:
+                # Default to JPEG for unknown image types
+                mime_type = "image/jpeg"
+                logger.warning(f"Unknown image type for {file_name}, defaulting to JPEG")
+
+            image_base64 = base64.b64encode(file_content).decode('utf-8')
+            logger.info(f"Successfully processed image with MIME type: {mime_type}")
+
     except Exception as e:
+        logger.error(f"Error reading/processing bill file: {str(e)}")
         raise Exception(f"Error reading bill file: {str(e)}")
+
+    # Enhanced prompt for better extraction
+    enhanced_prompt = """
+    Please analyze this invoice/bill image and extract the following information in JSON format.
+    Be very careful to extract exact values as they appear on the document.
+    
+    For dates, use YYYY-MM-DD format.
+    For numbers, include only numeric values (no currency symbols or commas).
+    If any field is not clearly visible or missing, use null or empty string.
+    
+    Return data in this exact JSON structure:
+    """
 
     # Invoice schema for AI extraction
     invoice_schema = {
         "$schema": "http://json-schema.org/draft/2020-12/schema",
         "title": "Invoice",
-        "description": "A simple invoice format",
+        "description": "Invoice extraction schema",
         "type": "object",
         "properties": {
             "invoiceNumber": {"type": "string"},
@@ -172,8 +238,9 @@ def analyze_bill_with_ai(bill, organization):
         }
     }
 
-    # AI processing request
+    # AI processing request with enhanced error handling
     try:
+        logger.info("Sending request to OpenAI API...")
         response = client.chat.completions.create(
             model='gpt-4o',
             response_format={"type": "json_object"},
@@ -182,18 +249,33 @@ def analyze_bill_with_ai(bill, organization):
                 "content": [
                     {
                         "type": "text",
-                        "text": f"Extract invoice data in JSON format using this schema: {json.dumps(invoice_schema)}"
+                        "text": f"{enhanced_prompt}\n{json.dumps(invoice_schema, indent=2)}"
                     },
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
+                        "image_url": {"url": f"data:{mime_type};base64,{image_base64}"}
                     }
                 ]
             }],
-            max_tokens=1000
+            max_tokens=1500,  # Increased token limit
+            temperature=0.1   # Lower temperature for more consistent results
         )
+
+        if not response.choices or not response.choices[0].message.content:
+            raise Exception("Empty response from OpenAI API")
+
+        logger.info("Successfully received response from OpenAI API")
+        logger.info(f"Raw OpenAI response: {response.choices[0].message.content}")
+
         json_data = json.loads(response.choices[0].message.content)
+        logger.info("Successfully parsed JSON response from OpenAI")
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON from OpenAI response: {str(e)}")
+        logger.error(f"Raw response: {response.choices[0].message.content if response.choices else 'No response'}")
+        raise Exception(f"Invalid JSON response from OpenAI: {str(e)}")
     except Exception as e:
+        logger.error(f"AI processing failed: {str(e)}")
         raise Exception(f"AI processing failed: {str(e)}")
 
     # Process and save extracted data
