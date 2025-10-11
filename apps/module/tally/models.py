@@ -393,14 +393,14 @@ class TallyVendorAnalyzedProduct(BaseOrgModel):
     item_details = models.TextField(blank=True, null=True)
     taxes = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
 
-    price = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
+    price = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
     quantity = models.PositiveIntegerField(blank=True, null=True, default=0)
-    amount = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
+    amount = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
 
-    product_gst = models.CharField(max_length=10, choices=GST_CHOICES, blank=True, null=True)
-    igst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
-    cgst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
-    sgst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    product_gst = models.CharField(max_length=50, choices=GST_CHOICES, blank=True, null=True)
+    igst = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    cgst = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    sgst = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True, default=Decimal("0"))
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -560,7 +560,7 @@ class TallyExpenseAnalyzedProduct(BaseOrgModel):
     chart_of_accounts = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
     amount = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     debit_or_credit = models.CharField(
-        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT
+        choices=DebitCredit.choices, max_length=50, blank=True, null=True, default=DebitCredit.DEBIT
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

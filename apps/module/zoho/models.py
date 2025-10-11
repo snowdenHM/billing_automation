@@ -353,9 +353,9 @@ class VendorZohoProduct(BaseTeamModel):
         blank=True,
         default="eligible",
     )
-    rate = models.CharField(max_length=10, null=True, blank=True)
-    quantity = models.CharField(max_length=10, null=True, blank=True, default=0)
-    amount = models.CharField(max_length=10, null=True, blank=True)
+    rate = models.CharField(max_length=50, null=True, blank=True)
+    quantity = models.CharField(max_length=50, null=True, blank=True, default=0)
+    amount = models.CharField(max_length=50, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -475,7 +475,7 @@ class ExpenseZohoProduct(BaseTeamModel):
     item_details = models.CharField(max_length=2000, null=True, blank=True)
     chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
     vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
-    amount = models.CharField(max_length=10, null=True, blank=True)
+    amount = models.CharField(max_length=50, null=True, blank=True)
     debit_or_credit = models.CharField(choices=TRANSACTION_TYPE_CHOICES, max_length=10, null=True, blank=True, default="credit")
     created_at = models.DateTimeField(auto_now_add=True)
 
