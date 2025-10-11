@@ -119,60 +119,171 @@ def get_organization_from_request(request, org_id=None):
 
 
 def analyze_expense_bill_with_ai(bill, organization):
-    """Analyze expense bill using OpenAI API"""
+    """Analyze expense bill using OpenAI API with enhanced PDF handling and error recovery"""
     if not client:
         raise Exception("OpenAI client not configured")
 
-    # Read file and convert to base64
+    logger.info(f"Starting AI analysis for expense bill {bill.id}, file: {bill.file.name}")
+
+    # Determine file type and process accordingly
+    file_path = bill.file.path
+    file_name = bill.file.name.lower()
+
     try:
-        with open(bill.file.path, 'rb') as f:
-            image_base64 = base64.b64encode(f.read()).decode('utf-8')
+        # Read and process file based on type
+        if file_name.endswith('.pdf'):
+            logger.info(f"Processing PDF file: {file_name}")
+
+            # Enhanced PDF processing with validation
+            with open(file_path, 'rb') as f:
+                pdf_bytes = f.read()
+
+            file_size = len(pdf_bytes)
+            logger.info(f"PDF loaded: {file_size:,} bytes")
+
+            # Enhanced PDF validation
+            if not pdf_bytes.startswith(b'%PDF'):
+                raise Exception("Invalid PDF file format")
+
+            if file_size < 100:
+                raise Exception("PDF file too small (possibly corrupted)")
+
+            logger.info("PDF validation passed")
+
+            # Convert PDF to image with enhanced settings
+            try:
+                from PIL import Image, ImageEnhance
+
+                logger.info("Converting PDF to image with enhanced settings...")
+                page_images = convert_from_bytes(
+                    pdf_bytes,
+                    first_page=1,
+                    last_page=1,
+                    dpi=200,  # Good balance of quality vs speed
+                    fmt='jpeg'
+                )
+
+                if not page_images:
+                    raise Exception("No images generated from PDF")
+
+                image = page_images[0]
+                logger.info(f"PDF converted successfully - Image size: {image.size}, Mode: {image.mode}")
+
+                # Enhanced image optimization for OCR
+                logger.info("Optimizing image for OCR...")
+
+                # Convert to RGB if needed
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+
+                # Enhance for better OCR
+                enhancer = ImageEnhance.Contrast(image)
+                image = enhancer.enhance(1.2)
+
+                enhancer = ImageEnhance.Sharpness(image)
+                image = enhancer.enhance(1.1)
+
+                # Ensure minimum size for better OCR accuracy
+                width, height = image.size
+                if width < 1000 or height < 1000:
+                    scale = max(1000 / width, 1000 / height)
+                    new_size = (int(width * scale), int(height * scale))
+                    image = image.resize(new_size, Image.Resampling.LANCZOS)
+                    logger.info(f"Image upscaled to: {new_size}")
+
+                logger.info("Image optimization completed")
+
+                # Convert PIL image to base64
+                image_io = BytesIO()
+                image.save(image_io, format='JPEG', quality=95)
+                image_io.seek(0)
+                image_base64 = base64.b64encode(image_io.read()).decode('utf-8')
+                mime_type = "image/jpeg"
+                logger.info(f"Base64 conversion completed: {len(image_base64):,} characters")
+
+            except Exception as e:
+                logger.error(f"Enhanced PDF conversion failed: {str(e)}")
+                raise Exception(f"PDF conversion failed: {str(e)}")
+
+        else:
+            # Handle image files
+            logger.info(f"Processing image file: {file_name}")
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+
+            # Determine MIME type based on file extension
+            if file_name.endswith(('.jpg', '.jpeg')):
+                mime_type = "image/jpeg"
+            elif file_name.endswith('.png'):
+                mime_type = "image/png"
+            elif file_name.endswith('.gif'):
+                mime_type = "image/gif"
+            elif file_name.endswith('.bmp'):
+                mime_type = "image/bmp"
+            elif file_name.endswith('.webp'):
+                mime_type = "image/webp"
+            else:
+                # Default to JPEG for unknown image types
+                mime_type = "image/jpeg"
+                logger.warning(f"Unknown image type for {file_name}, defaulting to JPEG")
+
+            image_base64 = base64.b64encode(file_content).decode('utf-8')
+            logger.info(f"Successfully processed image with MIME type: {mime_type}")
+
     except Exception as e:
-        raise Exception(f"Error reading bill file: {str(e)}")
+        logger.error(f"Error reading/processing expense bill file: {str(e)}")
+        raise Exception(f"Error reading expense bill file: {str(e)}")
 
-    # Expense schema for AI extraction
-    expense_schema = {
-        "$schema": "http://json-schema.org/draft/2020-12/schema",
-        "title": "Expense Bill",
-        "description": "An expense bill format",
-        "type": "object",
-        "properties": {
-            "billNumber": {"type": "string"},
-            "dateIssued": {"type": "string", "format": "date"},
-            "from": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "address": {"type": "string"}
-                }
-            },
-            "to": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "address": {"type": "string"}
-                }
-            },
-            "expenses": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "description": {"type": "string"},
-                        "category": {"type": "string"},
-                        "amount": {"type": "number"}
-                    }
-                }
-            },
-            "total": {"type": "number"},
-            "igst": {"type": "number"},
-            "cgst": {"type": "number"},
-            "sgst": {"type": "number"}
-        }
+    # Enhanced prompt for Indian expense bills/receipts
+    enhanced_prompt = """
+    Analyze this expense bill/receipt image carefully and extract ALL visible information in JSON format.
+    This appears to be an Indian business expense bill/receipt. Look for:
+    
+    1. Bill/Receipt Number (may be labeled as Bill No, Receipt No, Invoice No, etc.)
+    2. Dates (Bill Date, Receipt Date, Transaction Date - convert to YYYY-MM-DD format)
+    3. Vendor/Company details in "from" section (name and address)
+    4. Customer details in "to" section (name and address) 
+    5. Expense items with descriptions, categories, and amounts
+    6. Tax amounts (IGST, CGST, SGST - look for percentages and amounts)
+    7. Total amount (may include terms like "Total", "Grand Total", "Amount Payable", "Net Amount")
+    
+    IMPORTANT RULES:
+    - Extract EXACT text as it appears on the document
+    - For numbers, remove currency symbols (₹, Rs.) and commas
+    - If any field is not visible or unclear, use empty string "" or 0 for numbers
+    - Look carefully at the entire document, including headers, footers, and margins
+    - Pay special attention to tax sections which may be in tables or separate areas
+    - For expense categories, try to identify the type of expense (travel, food, supplies, etc.)
+    
+    Return data in this JSON structure:
+    {
+        "billNumber": "Bill/Receipt number as shown on document",
+        "dateIssued": "Bill/Receipt date in YYYY-MM-DD format",
+        "from": {
+            "name": "Vendor/Company name",
+            "address": "Vendor address"
+        },
+        "to": {
+            "name": "Customer name", 
+            "address": "Customer address"
+        },
+        "expenses": [
+            {
+                "description": "Expense item description",
+                "category": "Expense category (travel, food, supplies, etc.)",
+                "amount": 0
+            }
+        ],
+        "total": 0,
+        "igst": 0,
+        "cgst": 0,
+        "sgst": 0
     }
+    """
 
-    # AI processing request
+    # AI processing request with enhanced settings
     try:
+        logger.info("Sending request to OpenAI API...")
         response = client.chat.completions.create(
             model='gpt-4o',
             response_format={"type": "json_object"},
@@ -181,18 +292,36 @@ def analyze_expense_bill_with_ai(bill, organization):
                 "content": [
                     {
                         "type": "text",
-                        "text": f"Extract expense bill data in JSON format using this schema: {json.dumps(expense_schema)}"
+                        "text": enhanced_prompt
                     },
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{image_base64}",
+                            "detail": "high"  # Enhanced detail setting
+                        }
                     }
                 ]
             }],
-            max_tokens=1000
+            max_tokens=2000,  # Increased token limit
+            temperature=0.1   # Lower temperature for more consistent results
         )
+
+        if not response.choices or not response.choices[0].message.content:
+            raise Exception("Empty response from OpenAI API")
+
+        logger.info("Successfully received response from OpenAI API")
+        logger.info(f"Raw OpenAI response: {response.choices[0].message.content}")
+
         json_data = json.loads(response.choices[0].message.content)
+        logger.info("Successfully parsed JSON response from OpenAI")
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON from OpenAI response: {str(e)}")
+        logger.error(f"Raw response: {response.choices[0].message.content if response.choices else 'No response'}")
+        raise Exception(f"Invalid JSON response from OpenAI: {str(e)}")
     except Exception as e:
+        logger.error(f"AI processing failed: {str(e)}")
         raise Exception(f"AI processing failed: {str(e)}")
 
     # Process and save extracted data
