@@ -119,7 +119,7 @@ def get_organization_from_request(request, org_id=None):
 
 
 def analyze_bill_with_ai(bill, organization):
-    """Analyze bill using OpenAI API with proper file type handling"""
+    """Analyze bill using OpenAI API with enhanced PDF handling and error recovery"""
     if not client:
         raise Exception("OpenAI client not configured")
 
@@ -1786,3 +1786,4 @@ def vendor_bill_sync_external(request, org_id):
             {'error': f'External sync failed: {str(e)}'},
             status=status.HTTP_400_BAD_REQUEST
         )
+
