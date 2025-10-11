@@ -341,8 +341,8 @@ class VendorZohoProduct(BaseTeamModel):
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     zohoBill = models.ForeignKey("VendorZohoBill", on_delete=models.CASCADE, related_name="products")
-    item_name = models.CharField(max_length=100, null=True, blank=True)
-    item_details = models.CharField(max_length=200, null=True, blank=True)
+    item_name = models.CharField(max_length=1000, null=True, blank=True)
+    item_details = models.CharField(max_length=2000, null=True, blank=True)
     chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
     taxes = models.ForeignKey("ZohoTaxes", on_delete=models.CASCADE, null=True, blank=True)
     reverse_charge_tax_id = models.BooleanField(default=False)
@@ -472,7 +472,7 @@ class ExpenseZohoProduct(BaseTeamModel):
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     zohoBill = models.ForeignKey("ExpenseZohoBill", on_delete=models.CASCADE, related_name="products")
-    item_details = models.CharField(max_length=200, null=True, blank=True)
+    item_details = models.CharField(max_length=2000, null=True, blank=True)
     chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
     vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
     amount = models.CharField(max_length=10, null=True, blank=True)

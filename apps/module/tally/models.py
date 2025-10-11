@@ -389,7 +389,7 @@ class TallyVendorAnalyzedProduct(BaseOrgModel):
         TallyVendorAnalyzedBill, on_delete=models.CASCADE, related_name="products"
     )
 
-    item_name = models.CharField(max_length=100, blank=True, null=True)
+    item_name = models.CharField(max_length=2000, blank=True, null=True)
     item_details = models.TextField(blank=True, null=True)
     taxes = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
 
@@ -556,7 +556,7 @@ class TallyExpenseAnalyzedProduct(BaseOrgModel):
         TallyExpenseAnalyzedBill, related_name="products", on_delete=models.CASCADE
     )
 
-    item_details = models.CharField(max_length=200, blank=True, null=True)
+    item_details = models.CharField(max_length=2000, blank=True, null=True)
     chart_of_accounts = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
     amount = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     debit_or_credit = models.CharField(
