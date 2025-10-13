@@ -541,15 +541,15 @@ def vendor_bill_upload_view(request, org_id):
         # Ensure files_data is always a list
         if not isinstance(files_data, list):
             files_data = [files_data] if files_data else []
-        logger.info(f"Found 'files' field with {len(files_data)} file(s)")
+        print(f"[VENDOR DEBUG] Found 'files' field with {len(files_data)} file(s)")
     # Check if a single file is provided
     elif 'file' in request.data:
         single_file = request.data.get('file')
         if single_file:
             files_data = [single_file]
-        logger.info(f"Found 'file' field with {len(files_data)} file(s)")
+        print(f"[VENDOR DEBUG] Found 'file' field with {len(files_data)} file(s)")
     
-    logger.info(f"Total files collected: {len(files_data)}")
+    print(f"[VENDOR DEBUG] Total files collected: {len(files_data)}")
     
     # Prepare data for serializer validation
     serializer_data = {

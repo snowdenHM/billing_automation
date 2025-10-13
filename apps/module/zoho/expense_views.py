@@ -562,10 +562,10 @@ def expense_bill_upload_view(request, org_id):
     # Handle both single file and multiple files seamlessly
     files_data = []
     
-    # Debug logging
-    logger.info(f"Request data keys: {list(request.data.keys())}")
-    logger.info(f"'files' in request.data: {'files' in request.data}")
-    logger.info(f"'file' in request.data: {'file' in request.data}")
+    # Debug logging with prints (will show in gunicorn logs)
+    print(f"[EXPENSE DEBUG] Request data keys: {list(request.data.keys())}")
+    print(f"[EXPENSE DEBUG] 'files' in request.data: {'files' in request.data}")
+    print(f"[EXPENSE DEBUG] 'file' in request.data: {'file' in request.data}")
     
     # Check if files are provided as a list (multiple files)
     if 'files' in request.data:
@@ -573,21 +573,27 @@ def expense_bill_upload_view(request, org_id):
         # Ensure files_data is always a list
         if not isinstance(files_data, list):
             files_data = [files_data] if files_data else []
-        logger.info(f"Found 'files' field with {len(files_data)} file(s)")
+        print(f"[EXPENSE DEBUG] Found 'files' field with {len(files_data)} file(s)")
     # Check if a single file is provided
     elif 'file' in request.data:
         single_file = request.data.get('file')
         if single_file:
             files_data = [single_file]
-        logger.info(f"Found 'file' field with {len(files_data)} file(s)")
+        print(f"[EXPENSE DEBUG] Found 'file' field with {len(files_data)} file(s)")
     
-    logger.info(f"Total files collected: {len(files_data)}")
+    print(f"[EXPENSE DEBUG] Total files collected: {len(files_data)}")
+    
+    # Debug: Print details about each file
+    for i, f in enumerate(files_data):
+        print(f"[EXPENSE DEBUG] File {i+1}: {getattr(f, 'name', 'Unknown')} - Size: {getattr(f, 'size', 'Unknown')}")
     
     # Prepare data for serializer validation
     serializer_data = {
         'files': files_data,
         'fileType': request.data.get('fileType', 'Single Invoice/File')
     }
+    
+    print(f"[EXPENSE DEBUG] Serializer data: files count = {len(serializer_data['files'])}, fileType = {serializer_data['fileType']}")
     
     serializer = ZohoExpenseBillMultipleUploadSerializer(data=serializer_data)
     if not serializer.is_valid():
@@ -604,6 +610,8 @@ def expense_bill_upload_view(request, org_id):
     file_type = serializer.validated_data['fileType']
     created_bills = []
     
+    print(f"[EXPENSE DEBUG] After serializer validation - files count: {len(files)}, fileType: {file_type}")
+    
     if not files:
         return Response(
             {'error': 'No files provided for upload'},
@@ -613,23 +621,23 @@ def expense_bill_upload_view(request, org_id):
     try:
         # Temporarily removing atomic transaction to debug
         # with transaction.atomic():
-        logger.info(f"Starting to process {len(files)} files")
+        print(f"[EXPENSE DEBUG] Starting to process {len(files)} files")
         for i, uploaded_file in enumerate(files):
-                logger.info(f"Processing file {i+1}/{len(files)}: {uploaded_file.name}")
+                print(f"[EXPENSE DEBUG] Processing file {i+1}/{len(files)}: {uploaded_file.name}")
                 file_extension = uploaded_file.name.lower().split('.')[-1]
 
                 # Handle PDF splitting for multiple invoice files
                 if (file_type == 'Multiple Invoice/File' and file_extension == 'pdf'):
-                    logger.info(f"Processing as PDF split for file: {uploaded_file.name}")
+                    print(f"[EXPENSE DEBUG] Processing as PDF split for file: {uploaded_file.name}")
                     pdf_bills = process_pdf_splitting_expense(
                         uploaded_file, organization, file_type, request.user
                     )
-                    logger.info(f"PDF splitting created {len(pdf_bills)} bills")
+                    print(f"[EXPENSE DEBUG] PDF splitting created {len(pdf_bills)} bills")
                     created_bills.extend(pdf_bills)
                 else:
                     # Create single bill (including PDFs for single invoice type)
                     # Let the model generate billmunshiName automatically
-                    logger.info(f"Creating single bill for file: {uploaded_file.name}")
+                    print(f"[EXPENSE DEBUG] Creating single bill for file: {uploaded_file.name}")
                     bill = ExpenseBill.objects.create(
                         file=uploaded_file,
                         fileType=file_type,
@@ -637,10 +645,14 @@ def expense_bill_upload_view(request, org_id):
                         organization=organization,
                         uploaded_by=request.user
                     )
-                    logger.info(f"Created bill: {bill.billmunshiName} (ID: {bill.id})")
+                    print(f"[EXPENSE DEBUG] Created bill: {bill.billmunshiName} (ID: {bill.id})")
                     created_bills.append(bill)
         
-        logger.info(f"Completed processing all files. Total bills created: {len(created_bills)}")
+        print(f"[EXPENSE DEBUG] Completed processing all files. Total bills created: {len(created_bills)}")
+        
+        # Debug: Print all created bills
+        for i, bill in enumerate(created_bills):
+            print(f"[EXPENSE DEBUG] Bill {i+1}: {bill.billmunshiName} (ID: {bill.id})")
 
         response_serializer = ZohoExpenseBillSerializer(created_bills, many=True, context={'request': request})
         
