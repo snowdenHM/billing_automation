@@ -559,10 +559,6 @@ def expense_bills_list_view(request, org_id):
 def expense_bill_upload_view(request, org_id):
     """Handle single or multiple expense bill file uploads with PDF splitting support"""
     
-    organization = get_organization_from_request(request, org_id=org_id)
-    if not organization:
-        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
-
     # Handle both single file and multiple files seamlessly
     files_data = []
     
@@ -578,7 +574,7 @@ def expense_bill_upload_view(request, org_id):
         if single_file:
             files_data = [single_file]
     
-    # Always use multiple upload serializer for consistent validation
+    # Prepare data for serializer validation
     serializer_data = {
         'files': files_data,
         'fileType': request.data.get('fileType', 'Single Invoice/File')
@@ -587,6 +583,13 @@ def expense_bill_upload_view(request, org_id):
     serializer = ZohoExpenseBillMultipleUploadSerializer(data=serializer_data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response(
+            {'error': 'Organization not found'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
     files = serializer.validated_data['files']
     file_type = serializer.validated_data['fileType']
@@ -604,9 +607,7 @@ def expense_bill_upload_view(request, org_id):
                 file_extension = uploaded_file.name.lower().split('.')[-1]
 
                 # Handle PDF splitting for multiple invoice files
-                if (file_type == 'Multiple Invoice/File' and
-                        file_extension == 'pdf'):
-
+                if (file_type == 'Multiple Invoice/File' and file_extension == 'pdf'):
                     pdf_bills = process_pdf_splitting_expense(
                         uploaded_file, organization, file_type, request.user
                     )
