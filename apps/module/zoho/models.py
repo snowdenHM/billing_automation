@@ -279,6 +279,10 @@ class VendorBill(BaseTeamModel):
 
     def save(self, *args, **kwargs):
         if not self.billmunshiName and self.file:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Generating billmunshiName for VendorBill with file: {self.file.name}")
+            
             from datetime import date
             today = date.today()
             date_prefix = today.strftime("%Y%m%d")
@@ -289,6 +293,8 @@ class VendorBill(BaseTeamModel):
                 organization=self.organization,
                 billmunshiName__startswith=bill_prefix
             ).values_list('billmunshiName', flat=True)
+
+            logger.info(f"Found {len(existing_bills)} existing bills with prefix {bill_prefix}")
 
             # Extract numbers and find the maximum for today
             max_num = 0
@@ -302,8 +308,14 @@ class VendorBill(BaseTeamModel):
 
             next_num = max_num + 1
             self.billmunshiName = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
+            logger.info(f"Generated billmunshiName: {self.billmunshiName}")
 
         super().save(*args, **kwargs)
+        
+        # Log successful save
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Successfully saved VendorBill: {self.billmunshiName} (ID: {self.id})")
 
 
 class VendorZohoBill(BaseTeamModel):
@@ -423,6 +435,10 @@ class ExpenseBill(BaseTeamModel):
 
     def save(self, *args, **kwargs):
         if not self.billmunshiName and self.file:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Generating billmunshiName for ExpenseBill with file: {self.file.name}")
+            
             from datetime import date
             today = date.today()
             date_prefix = today.strftime("%Y%m%d")
@@ -433,6 +449,8 @@ class ExpenseBill(BaseTeamModel):
                 organization=self.organization,
                 billmunshiName__startswith=bill_prefix
             ).values_list('billmunshiName', flat=True)
+
+            logger.info(f"Found {len(existing_bills)} existing bills with prefix {bill_prefix}")
 
             # Extract numbers and find the maximum for today
             max_num = 0
@@ -446,8 +464,14 @@ class ExpenseBill(BaseTeamModel):
 
             next_num = max_num + 1
             self.billmunshiName = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
+            logger.info(f"Generated billmunshiName: {self.billmunshiName}")
 
         super().save(*args, **kwargs)
+        
+        # Log successful save
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Successfully saved ExpenseBill: {self.billmunshiName} (ID: {self.id})")
 
 
 class ExpenseZohoBill(BaseTeamModel):

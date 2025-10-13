@@ -579,20 +579,26 @@ def vendor_bill_upload_view(request, org_id):
         )
 
     try:
-        with transaction.atomic():
-            for uploaded_file in files:
+        # Temporarily removing atomic transaction to debug
+        # with transaction.atomic():
+        logger.info(f"Starting to process {len(files)} files")
+        for i, uploaded_file in enumerate(files):
+                logger.info(f"Processing file {i+1}/{len(files)}: {uploaded_file.name}")
                 file_extension = uploaded_file.name.lower().split('.')[-1]
 
                 # Handle PDF splitting for multiple invoice files
                 if (file_type == 'Multiple Invoice/File' and
                         file_extension == 'pdf'):
 
+                    logger.info(f"Processing as PDF split for file: {uploaded_file.name}")
                     pdf_bills = process_pdf_splitting_vendor(
                         uploaded_file, organization, file_type, request.user
                     )
+                    logger.info(f"PDF splitting created {len(pdf_bills)} bills")
                     created_bills.extend(pdf_bills)
                 else:
                     # Create single bill (including PDFs for single invoice type)
+                    logger.info(f"Creating single bill for file: {uploaded_file.name}")
                     bill = VendorBill.objects.create(
                         file=uploaded_file,
                         fileType=file_type,
@@ -600,7 +606,10 @@ def vendor_bill_upload_view(request, org_id):
                         uploaded_by=request.user,
                         status='Draft'
                     )
+                    logger.info(f"Created bill: {bill.billmunshiName} (ID: {bill.id})")
                     created_bills.append(bill)
+        
+        logger.info(f"Completed processing all files. Total bills created: {len(created_bills)}")
 
         response_serializer = ZohoVendorBillSerializer(created_bills, many=True, context={'request': request})
         
@@ -618,6 +627,9 @@ def vendor_bill_upload_view(request, org_id):
 
     except Exception as e:
         logger.error(f"Error uploading vendor bills: {str(e)}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return Response(
             {'error': f'Error processing files: {str(e)}'},
             status=status.HTTP_400_BAD_REQUEST
