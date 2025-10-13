@@ -457,8 +457,8 @@ def process_pdf_splitting_expense(pdf_file, organization, file_type, uploaded_by
                 image_io.seek(0)
 
                 # Create bill for this page with uploaded_by user
+                # Let the model generate billmunshiName automatically
                 bill = ExpenseBill.objects.create(
-                    billmunshiName=f"BM-Expense-Page-{page_num + 1}-{unique_id}",
                     file=ContentFile(
                         image_io.read(),
                         name=f"BM-Expense-Page-{page_num + 1}-{unique_id}.jpg"
@@ -614,9 +614,8 @@ def expense_bill_upload_view(request, org_id):
                     created_bills.extend(pdf_bills)
                 else:
                     # Create single bill (including PDFs for single invoice type)
-                    unique_id = datetime.now().strftime("%Y%m%d%H%M%S")
+                    # Let the model generate billmunshiName automatically
                     bill = ExpenseBill.objects.create(
-                        billmunshiName=f"BM-Expense-{unique_id}",
                         file=uploaded_file,
                         fileType=file_type,
                         status='Draft',
