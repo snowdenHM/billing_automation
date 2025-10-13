@@ -41,6 +41,7 @@ from .serializers.vendor_bills import (
     ZohoVendorBillDetailSerializer,
     VendorZohoBillSerializer,
     ZohoVendorBillUploadSerializer,
+    ZohoVendorBillMultipleUploadSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -426,6 +427,49 @@ def refresh_zoho_access_token(current_token):
         return None
 
 
+def process_pdf_splitting_vendor(pdf_file, organization, file_type, uploaded_by):
+    """Split PDF into individual pages and create separate vendor bills"""
+    created_bills = []
+
+    try:
+        pdf_file.seek(0)
+        pdf_bytes = pdf_file.read()
+        pdf = PdfReader(BytesIO(pdf_bytes))
+        unique_id = datetime.now().strftime("%Y%m%d%H%M%S")
+
+        for page_num in range(len(pdf.pages)):
+            # Convert PDF page to image
+            page_images = convert_from_bytes(
+                pdf_bytes,
+                first_page=page_num + 1,
+                last_page=page_num + 1
+            )
+
+            if page_images:
+                image_io = BytesIO()
+                page_images[0].save(image_io, format='JPEG')
+                image_io.seek(0)
+
+                # Create bill for this page with uploaded_by user
+                bill = VendorBill.objects.create(
+                    file=ContentFile(
+                        image_io.read(),
+                        name=f"BM-Vendor-Page-{page_num + 1}-{unique_id}.jpg"
+                    ),
+                    fileType=file_type,
+                    organization=organization,
+                    uploaded_by=uploaded_by,
+                    status='Draft'
+                )
+                created_bills.append(bill)
+
+    except Exception as e:
+        logger.error(f"Error splitting vendor PDF: {str(e)}")
+        raise Exception(f"Vendor PDF processing failed: {str(e)}")
+
+    return created_bills
+
+
 # ============================================================================
 # Vendor Bills API Views
 # ============================================================================
@@ -471,20 +515,18 @@ def vendor_bills_list_view(request, org_id):
 
 # ✅
 @extend_schema(
+    summary="Upload Vendor Bills",
+    description="Upload single or multiple vendor bill files (PDF, JPG, PNG). Supports both single file and multiple file uploads.",
     request=ZohoVendorBillUploadSerializer,
-    responses=ZohoVendorBillSerializer(many=True),
-    tags=["Zoho Vendor Bills"],
-    methods=["POST"]
+    responses={201: ZohoVendorBillSerializer(many=True)},
+    tags=['Zoho Vendor Bills']
 )
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
 def vendor_bill_upload_view(request, org_id):
-    """Upload single or multiple vendor bill files with PDF splitting support for multiple invoices."""
-    organization = get_organization_from_request(request, org_id=org_id)
-    if not organization:
-        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
-
+    """Handle single or multiple vendor bill file uploads with PDF splitting support"""
+    
     # Handle both single file and multiple files seamlessly
     files_data = []
     
@@ -501,101 +543,70 @@ def vendor_bill_upload_view(request, org_id):
             files_data = [single_file]
     
     # Prepare data for serializer validation
-    if len(files_data) > 1:
-        # Use multiple file serializer for validation
-        from .serializers.vendor_bills import ZohoVendorBillMultipleUploadSerializer
-        serializer_data = {
-            'files': files_data,
-            'fileType': request.data.get('fileType', 'Single Invoice/File')
-        }
-        serializer = ZohoVendorBillMultipleUploadSerializer(data=serializer_data)
-    else:
-        # Use single file serializer for validation
-        serializer_data = {
-            'file': files_data[0] if files_data else None,
-            'fileType': request.data.get('fileType', 'Single Invoice/File')
-        }
-        serializer = ZohoVendorBillUploadSerializer(data=serializer_data)
+    serializer_data = {
+        'files': files_data,
+        'fileType': request.data.get('fileType', 'Single Invoice/File')
+    }
     
+    serializer = ZohoVendorBillMultipleUploadSerializer(data=serializer_data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-    if not files_data:
+
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
         return Response(
-            {"detail": "No files provided for upload"},
+            {'error': 'Organization not found'},
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    bill_data = serializer.validated_data
-    file_type = bill_data.get('fileType', 'Single Invoice/File')
-    files_to_process = files_data if len(files_data) > 1 else [bill_data['file']]
+    files = serializer.validated_data['files']
+    file_type = serializer.validated_data['fileType']
     created_bills = []
+    
+    if not files:
+        return Response(
+            {'error': 'No files provided for upload'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
     try:
         with transaction.atomic():
-            for uploaded_file in files_to_process:
-                # Handle PDF splitting for multiple invoices
-                if file_type == 'Multiple Invoice/File' and uploaded_file.name.lower().endswith('.pdf'):
-                    try:
-                        uploaded_file.seek(0)
-                        pdf_bytes = uploaded_file.read()
-                        pdf = PdfReader(BytesIO(pdf_bytes))
+            for uploaded_file in files:
+                file_extension = uploaded_file.name.lower().split('.')[-1]
 
-                        unique_id = datetime.now().strftime("%Y%m%d%H%M%S")
+                # Handle PDF splitting for multiple invoice files
+                if (file_type == 'Multiple Invoice/File' and
+                        file_extension == 'pdf'):
 
-                        for page_num in range(len(pdf.pages)):
-                            # Convert each PDF page to an image
-                            page_images = convert_from_bytes(pdf_bytes, first_page=page_num + 1, last_page=page_num + 1)
-
-                            if page_images:
-                                image_io = BytesIO()
-                                page_images[0].save(image_io, format='JPEG')
-                                image_io.seek(0)
-
-                                # Create separate VendorBill for each page
-                                bill = VendorBill.objects.create(
-                                    billmunshiName=f"BM-Vendor-Page-{page_num + 1}-{unique_id}",
-                                    file=ContentFile(image_io.read(), name=f"BM-Vendor-Page-{page_num + 1}-{unique_id}.jpg"),
-                                    fileType=file_type,
-                                    status='Draft',
-                                    organization=organization,
-                                    uploaded_by=request.user
-                                )
-                                created_bills.append(bill)
-
-                    except Exception as e:
-                        logger.error(f"Error processing PDF {uploaded_file.name}: {str(e)}")
-                        return Response({
-                            "detail": f"Error processing PDF {uploaded_file.name}: {str(e)}"
-                        }, status=status.HTTP_400_BAD_REQUEST)
-
+                    pdf_bills = process_pdf_splitting_vendor(
+                        uploaded_file, organization, file_type, request.user
+                    )
+                    created_bills.extend(pdf_bills)
                 else:
                     # Create single bill (including PDFs for single invoice type)
-                    unique_id = datetime.now().strftime("%Y%m%d%H%M%S")
                     bill = VendorBill.objects.create(
-                        billmunshiName=f"BM-Vendor-{unique_id}",
                         file=uploaded_file,
                         fileType=file_type,
-                        status='Draft',
                         organization=organization,
-                        uploaded_by=request.user
+                        uploaded_by=request.user,
+                        status='Draft'
                     )
                     created_bills.append(bill)
 
-        # Return response with all created bills
         response_serializer = ZohoVendorBillSerializer(created_bills, many=True, context={'request': request})
         return Response({
-            "message": f"Successfully uploaded {len(files_to_process)} file(s) and created {len(created_bills)} bill(s)",
-            "files_uploaded": len(files_to_process),
-            "bills_created": len(created_bills),
-            "bills": response_serializer.data
+            'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} bill(s)',
+            'files_uploaded': len(files),
+            'bills_created': len(created_bills),
+            'bills': response_serializer.data
         }, status=status.HTTP_201_CREATED)
 
     except Exception as e:
         logger.error(f"Error uploading vendor bills: {str(e)}")
-        return Response({
-            "detail": f"Error processing files: {str(e)}"
-        }, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {'error': f'Error processing files: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
 
 # ✅
