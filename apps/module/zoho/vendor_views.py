@@ -535,7 +535,7 @@ def vendor_bill_upload_view(request, org_id):
                 }, status=status.HTTP_400_BAD_REQUEST)
 
         # Save regular file upload
-        bill = serializer.save(organization=organization, status='Draft')
+        bill = serializer.save(organization=organization, status='Draft', uploaded_by=request.user)
         response_serializer = ZohoVendorBillSerializer(bill, context={'request': request})
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
@@ -954,6 +954,7 @@ def vendor_bill_delete_view(request, org_id, bill_id):
 
     except VendorBill.DoesNotExist:
         return Response({"detail": "Vendor bill not found"}, status=status.HTTP_404_NOT_FOUND)
+
 
 
 
