@@ -516,8 +516,8 @@ def vendor_bills_list_view(request, org_id):
 # ✅
 @extend_schema(
     summary="Upload Vendor Bills",
-    description="Upload single or multiple vendor bill files (PDF, JPG, PNG). Supports both single file and multiple file uploads.",
-    request=ZohoVendorBillUploadSerializer,
+    description="Upload single or multiple vendor bill files (PDF, JPG, PNG). Supports both single file and multiple file uploads with PDF splitting for multiple invoices.",
+    request=ZohoVendorBillMultipleUploadSerializer,
     responses={201: ZohoVendorBillSerializer(many=True)},
     tags=['Zoho Vendor Bills']
 )
@@ -530,17 +530,26 @@ def vendor_bill_upload_view(request, org_id):
     # Handle both single file and multiple files seamlessly
     files_data = []
     
+    # Debug logging
+    logger.info(f"Request data keys: {list(request.data.keys())}")
+    logger.info(f"'files' in request.data: {'files' in request.data}")
+    logger.info(f"'file' in request.data: {'file' in request.data}")
+    
     # Check if files are provided as a list (multiple files)
     if 'files' in request.data:
         files_data = request.data.getlist('files') if hasattr(request.data, 'getlist') else request.data.get('files', [])
         # Ensure files_data is always a list
         if not isinstance(files_data, list):
             files_data = [files_data] if files_data else []
+        logger.info(f"Found 'files' field with {len(files_data)} file(s)")
     # Check if a single file is provided
     elif 'file' in request.data:
         single_file = request.data.get('file')
         if single_file:
             files_data = [single_file]
+        logger.info(f"Found 'file' field with {len(files_data)} file(s)")
+    
+    logger.info(f"Total files collected: {len(files_data)}")
     
     # Prepare data for serializer validation
     serializer_data = {
@@ -594,6 +603,12 @@ def vendor_bill_upload_view(request, org_id):
                     created_bills.append(bill)
 
         response_serializer = ZohoVendorBillSerializer(created_bills, many=True, context={'request': request})
+        
+        # Log the successful result
+        logger.info(f"Successfully processed {len(files)} files and created {len(created_bills)} bills")
+        for i, bill in enumerate(created_bills):
+            logger.info(f"Created bill {i+1}: {bill.billmunshiName} (ID: {bill.id})")
+        
         return Response({
             'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} bill(s)',
             'files_uploaded': len(files),
