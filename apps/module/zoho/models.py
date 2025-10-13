@@ -279,20 +279,30 @@ class VendorBill(BaseTeamModel):
 
     def save(self, *args, **kwargs):
         if not self.billmunshiName and self.file:
-            # Extract the numeric part from the highest 'billmunshiName' starting with 'BM-ZV-'
-            highest_bill_name = VendorBill.objects.filter(
-                billmunshiName__startswith="BM-ZV-"
-            ).aggregate(max_number=Max("billmunshiName"))["max_number"]
-            if highest_bill_name:
-                match = re.match(r"BM-ZV-(\d+)", highest_bill_name)
-                if match:
-                    existing_count = int(match.group(1)) + 1
-                else:
-                    existing_count = 1
-            else:
-                existing_count = 1
+            from datetime import date
+            today = date.today()
+            date_prefix = today.strftime("%Y%m%d")
+            bill_prefix = f"{date_prefix}ZB"
 
-            self.billmunshiName = f"BM-ZV-{existing_count}"
+            # Get all existing bills with today's date prefix for this organization
+            existing_bills = VendorBill.objects.filter(
+                organization=self.organization,
+                billmunshiName__startswith=bill_prefix
+            ).values_list('billmunshiName', flat=True)
+
+            # Extract numbers and find the maximum for today
+            max_num = 0
+            pattern = rf"{re.escape(bill_prefix)}(\d+)$"
+            for bill_name in existing_bills:
+                if bill_name:
+                    m = re.match(pattern, bill_name)
+                    if m:
+                        num = int(m.group(1))
+                        max_num = max(max_num, num)
+
+            next_num = max_num + 1
+            self.billmunshiName = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
+
         super().save(*args, **kwargs)
 
 
@@ -413,20 +423,30 @@ class ExpenseBill(BaseTeamModel):
 
     def save(self, *args, **kwargs):
         if not self.billmunshiName and self.file:
-            # Extract the numeric part from the highest 'billmunshiName' starting with 'BM-ZE-'
-            highest_bill_name = ExpenseBill.objects.filter(
-                billmunshiName__startswith="BM-ZE-"
-            ).aggregate(max_number=Max("billmunshiName"))["max_number"]
-            if highest_bill_name:
-                match = re.match(r"BM-ZE-(\d+)", highest_bill_name)
-                if match:
-                    existing_count = int(match.group(1)) + 1
-                else:
-                    existing_count = 1
-            else:
-                existing_count = 1
+            from datetime import date
+            today = date.today()
+            date_prefix = today.strftime("%Y%m%d")
+            bill_prefix = f"{date_prefix}ZE"
 
-            self.billmunshiName = f"BM-ZE-{existing_count}"
+            # Get all existing bills with today's date prefix for this organization
+            existing_bills = ExpenseBill.objects.filter(
+                organization=self.organization,
+                billmunshiName__startswith=bill_prefix
+            ).values_list('billmunshiName', flat=True)
+
+            # Extract numbers and find the maximum for today
+            max_num = 0
+            pattern = rf"{re.escape(bill_prefix)}(\d+)$"
+            for bill_name in existing_bills:
+                if bill_name:
+                    m = re.match(pattern, bill_name)
+                    if m:
+                        num = int(m.group(1))
+                        max_num = max(max_num, num)
+
+            next_num = max_num + 1
+            self.billmunshiName = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
+
         super().save(*args, **kwargs)
 
 

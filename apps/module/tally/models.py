@@ -6,10 +6,9 @@ import re
 import uuid
 from decimal import Decimal
 
-from django.contrib.auth.models import User
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.conf import settings
 
 from apps.organizations.models import Organization
 
@@ -69,12 +68,13 @@ class Ledger(BaseOrgModel):
 
     parent = models.ForeignKey(ParentLedger, on_delete=models.CASCADE, related_name="ledgers")
     alias = models.CharField(max_length=255, blank=True, null=True)
-    opening_balance = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))  # Fixed: was CharField
+    opening_balance = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True,
+                                          default=Decimal("0"))  # Fixed: was CharField
     gst_in = models.CharField(max_length=255, blank=True, null=True)
     company = models.CharField(max_length=255, blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)  # Added missing timestamp
-    updated_at = models.DateTimeField(auto_now=True)     # Added missing timestamp
+    updated_at = models.DateTimeField(auto_now=True)  # Added missing timestamp
 
     class Meta:
         verbose_name = "Ledger"
@@ -218,69 +218,35 @@ class TallyVendorBill(BaseOrgModel):
 
     def save(self, *args, **kwargs):
         """
-        Autogenerate bill_munshi_name as 'BM-TB-{N}' if missing.
+        Autogenerate bill_munshi_name as 'YYYYMMDDTB{N}' if missing.
         Also validates status transitions.
         """
         if not self.bill_munshi_name:
-            last = (
-                TallyVendorBill.objects.filter(
-                    organization=self.organization, bill_munshi_name__startswith="BM-TB-"
-                )
-                .order_by("-bill_munshi_name")
-                .first()
-            )
-            if last and last.bill_munshi_name:
-                m = re.match(r"BM-TB-(\d+)$", last.bill_munshi_name)
-                next_num = int(m.group(1)) + 1 if m else 1
-            else:
-                next_num = 1
-            self.bill_munshi_name = f"BM-TB-{next_num}"
+            from datetime import date
+            today = date.today()
+            date_prefix = today.strftime("%Y%m%d")
+            bill_prefix = f"{date_prefix}TB"
 
-        # Perform status transition validation for existing records
-        # if self.pk:  # Skip validation for new records
-        #     try:
-        #         old_instance = TallyVendorBill.objects.get(pk=self.pk)
-        #         if old_instance.status != self.status:
-        #             valid_transitions = {
-        #                 self.BillStatus.DRAFT: [self.BillStatus.ANALYSED],
-        #                 self.BillStatus.ANALYSED: [self.BillStatus.VERIFIED],
-        #                 self.BillStatus.VERIFIED: [self.BillStatus.SYNCED],
-        #                 self.BillStatus.SYNCED: [],  # No further transitions allowed
-        #             }
-        #
-        #             if self.status not in valid_transitions.get(old_instance.status, []):
-        #                 raise ValidationError({
-        #                     'status': f"Invalid status transition from {old_instance.status} to {self.status}. "
-        #                             f"Valid next states are: {', '.join(valid_transitions.get(old_instance.status, []))}"
-        #                 })
-        #     except TallyVendorBill.DoesNotExist:
-        #         pass  # Handle case where pk exists but object doesn't (unlikely)
+            # Get all existing bills with today's date prefix for this organization
+            existing_bills = TallyVendorBill.objects.filter(
+                organization=self.organization,
+                bill_munshi_name__startswith=bill_prefix
+            ).values_list('bill_munshi_name', flat=True)
+
+            # Extract numbers and find the maximum for today
+            max_num = 0
+            pattern = rf"{re.escape(bill_prefix)}(\d+)$"
+            for bill_name in existing_bills:
+                if bill_name:
+                    m = re.match(pattern, bill_name)
+                    if m:
+                        num = int(m.group(1))
+                        max_num = max(max_num, num)
+
+            next_num = max_num + 1
+            self.bill_munshi_name = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
 
         super().save(*args, **kwargs)
-
-    # def clean(self):
-    #     """Validate status transitions"""
-    #     super().clean()
-    #     if not self.pk:  # Skip validation for new records
-    #         return
-    #
-    #     try:
-    #         old_instance = TallyVendorBill.objects.get(pk=self.pk)
-    #         if old_instance.status != self.status:
-    #             valid_transitions = {
-    #                 self.BillStatus.DRAFT: [self.BillStatus.ANALYSED],
-    #                 self.BillStatus.ANALYSED: [self.BillStatus.VERIFIED],
-    #                 self.BillStatus.VERIFIED: [self.BillStatus.SYNCED],
-    #                 self.BillStatus.SYNCED: [],  # No further transitions allowed
-    #             }
-    #
-    #             if self.status not in valid_transitions.get(old_instance.status, []):
-    #                 raise ValidationError({
-    #                     'status': f"Invalid status transition from {old_instance.status} to {self.status}. "
-    #                              f"Valid next states are: {', '.join(valid_transitions.get(old_instance.status, []))}"
-    #                 })
-    #     except TallyVendorBill.DoesNotExist:
-    #         pass  # Handle case where pk exists but object doesn't (unlikely)
 
 
 class TallyVendorAnalyzedBill(BaseOrgModel):
@@ -459,22 +425,33 @@ class TallyExpenseBill(BaseOrgModel):
 
     def save(self, *args, **kwargs):
         """
-        Autogenerate bill_munshi_name as 'BM-TE-{N}' if missing.
+        Autogenerate bill_munshi_name as 'YYYYMMDDТЕ{N}' if missing.
         """
         if not self.bill_munshi_name:
-            last = (
-                TallyExpenseBill.objects.filter(
-                    organization=self.organization, bill_munshi_name__startswith="BM-TE-"
-                )
-                .order_by("-bill_munshi_name")
-                .first()
-            )
-            if last and last.bill_munshi_name:
-                m = re.match(r"BM-TE-(\d+)$", last.bill_munshi_name)
-                next_num = int(m.group(1)) + 1 if m else 1
-            else:
-                next_num = 1
-            self.bill_munshi_name = f"BM-TE-{next_num}"
+            from datetime import date
+            today = date.today()
+            date_prefix = today.strftime("%Y%m%d")
+            bill_prefix = f"{date_prefix}TE"
+
+            # Get all existing bills with today's date prefix for this organization
+            existing_bills = TallyExpenseBill.objects.filter(
+                organization=self.organization,
+                bill_munshi_name__startswith=bill_prefix
+            ).values_list('bill_munshi_name', flat=True)
+
+            # Extract numbers and find the maximum for today
+            max_num = 0
+            pattern = rf"{re.escape(bill_prefix)}(\d+)$"
+            for bill_name in existing_bills:
+                if bill_name:
+                    m = re.match(pattern, bill_name)
+                    if m:
+                        num = int(m.group(1))
+                        max_num = max(max_num, num)
+
+            next_num = max_num + 1
+            self.bill_munshi_name = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
+
         super().save(*args, **kwargs)
 
 
