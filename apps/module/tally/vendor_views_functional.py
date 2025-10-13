@@ -655,7 +655,7 @@ def vendor_bills_list(request, org_id):
 # ✅
 @extend_schema(
     summary="Upload Vendor Bills",
-    description="Upload single or multiple vendor bill files (PDF, JPG, PNG)",
+    description="Upload single or multiple vendor bill files (PDF, JPG, PNG). Supports both single file and multiple file uploads.",
     request=VendorBillUploadSerializer,
     responses={201: TallyVendorBillSerializer(many=True)},
     tags=['Tally Vendor Bills']
@@ -664,8 +664,30 @@ def vendor_bills_list(request, org_id):
 @permission_classes([IsAuthenticated, IsOrgAdmin])
 @parser_classes([MultiPartParser, FormParser])
 def vendor_bills_upload(request, org_id):
-    """Handle vendor bill file uploads with PDF splitting support"""
-    serializer = VendorBillUploadSerializer(data=request.data)
+    """Handle single or multiple vendor bill file uploads with PDF splitting support"""
+    
+    # Handle both single file and multiple files seamlessly
+    files_data = []
+    
+    # Check if files are provided as a list (multiple files)
+    if 'files' in request.data:
+        files_data = request.data.getlist('files') if hasattr(request.data, 'getlist') else request.data.get('files', [])
+        # Ensure files_data is always a list
+        if not isinstance(files_data, list):
+            files_data = [files_data] if files_data else []
+    # Check if a single file is provided
+    elif 'file' in request.data:
+        single_file = request.data.get('file')
+        if single_file:
+            files_data = [single_file]
+    
+    # Prepare data for serializer validation
+    serializer_data = {
+        'files': files_data,
+        'file_type': request.data.get('file_type', TallyVendorBill.BillType.SINGLE)
+    }
+    
+    serializer = VendorBillUploadSerializer(data=serializer_data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -679,6 +701,12 @@ def vendor_bills_upload(request, org_id):
     files = serializer.validated_data['files']
     file_type = serializer.validated_data['file_type']
     created_bills = []
+    
+    if not files:
+        return Response(
+            {'error': 'No files provided for upload'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
     try:
         with transaction.atomic():
@@ -703,8 +731,13 @@ def vendor_bills_upload(request, org_id):
                     )
                     created_bills.append(bill)
 
-        response_serializer = TallyVendorBillSerializer(created_bills, many=True)
-        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+        response_serializer = TallyVendorBillSerializer(created_bills, many=True, context={'request': request})
+        return Response({
+            'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} bill(s)',
+            'files_uploaded': len(files),
+            'bills_created': len(created_bills),
+            'bills': response_serializer.data
+        }, status=status.HTTP_201_CREATED)
 
     except Exception as e:
         logger.error(f"Error uploading vendor bills: {str(e)}")

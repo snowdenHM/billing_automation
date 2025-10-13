@@ -142,14 +142,36 @@ class ZohoExpenseBillDetailSerializer(serializers.Serializer):
 
 
 class ZohoExpenseBillUploadSerializer(serializers.ModelSerializer):
-    """Serializer for uploading Zoho Expense Bill files"""
+    """Serializer for uploading single Zoho Expense Bill file"""
 
-    file = FileUploadField()
+    file = FileUploadField(help_text="Single file to upload (PDF, JPG, PNG)")
+    fileType = serializers.ChoiceField(
+        choices=[
+            ("Single Invoice/File", "Single Invoice/File"),
+            ("Multiple Invoice/File", "Multiple Invoice/File"),
+        ],
+        default="Single Invoice/File",
+        help_text="Type of file upload: Single Invoice/File (file is a separate bill) or Multiple Invoice/File (PDF pages are split into separate bills)"
+    )
 
     class Meta:
         model = ExpenseBill
         fields = ["file", "fileType"]
         ref_name = "ZohoExpenseBillUploadRequest"
+
+    def validate(self, attrs):
+        """Validate the upload data"""
+        file = attrs.get('file')
+        file_type = attrs.get('fileType')
+        
+        # For Multiple Invoice/File type with single file, ensure it's a PDF
+        if file_type == 'Multiple Invoice/File' and file:
+            if not file.name.lower().endswith('.pdf'):
+                raise serializers.ValidationError({
+                    'file': 'Multiple Invoice/File type requires a PDF file for page splitting'
+                })
+        
+        return attrs
 
     def create(self, validated_data):
         return ExpenseBill.objects.create(**validated_data)
@@ -161,18 +183,51 @@ class ZohoExpenseBillMultipleUploadSerializer(serializers.Serializer):
     files = serializers.ListField(
         child=FileUploadField(),
         allow_empty=False,
-        max_length=20  # Limit to 20 files max
+        max_length=20,  # Limit to 20 files max
+        help_text="List of files to upload (PDF, JPG, PNG). Can accept single file or multiple files."
     )
     fileType = serializers.ChoiceField(
         choices=[
             ("Single Invoice/File", "Single Invoice/File"),
             ("Multiple Invoice/File", "Multiple Invoice/File"),
         ],
-        default="Single Invoice/File"
+        default="Single Invoice/File",
+        help_text="Type of file upload: Single Invoice/File (each file is a separate bill) or Multiple Invoice/File (PDF pages are split into separate bills)"
     )
 
     class Meta:
         ref_name = "ZohoExpenseBillMultipleUploadRequest"
+
+    def validate_files(self, value):
+        """Validate uploaded files"""
+        if not value:
+            raise serializers.ValidationError("At least one file is required")
+
+        # Limit total number of files to prevent abuse
+        if len(value) > 20:
+            raise serializers.ValidationError("Maximum 20 files allowed per upload")
+
+        # Additional validation for Multiple Invoice/File type
+        file_type = self.initial_data.get('fileType', 'Single Invoice/File')
+        if file_type == 'Multiple Invoice/File':
+            # For Multiple Invoice/File type, check if any PDFs are included
+            pdf_files = [f for f in value if f.name.lower().endswith('.pdf')]
+            if not pdf_files:
+                raise serializers.ValidationError("Multiple Invoice/File type requires at least one PDF file for page splitting")
+
+        return value
+
+    def validate(self, attrs):
+        """Cross-field validation"""
+        files = attrs.get('files', [])
+        file_type = attrs.get('fileType')
+        
+        # Log the upload attempt
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Zoho expense bill upload validation - Files: {len(files)}, Type: {file_type}")
+        
+        return attrs
 
 
 class ZohoExpenseVerifyProductItemSerializer(serializers.Serializer):

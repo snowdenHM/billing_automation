@@ -503,7 +503,7 @@ def expense_bills_list_view(request, org_id):
 # ✅
 @extend_schema(
     request=ZohoExpenseBillUploadSerializer,
-    responses=ZohoExpenseBillSerializer,
+    responses=ZohoExpenseBillSerializer(many=True),
     tags=["Zoho Expense Bills"],
     methods=["POST"]
 )
@@ -511,66 +511,121 @@ def expense_bills_list_view(request, org_id):
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
 def expense_bill_upload_view(request, org_id):
-    """Upload expense bill files with PDF splitting support for multiple invoices."""
+    """Upload single or multiple expense bill files with PDF splitting support for multiple invoices."""
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    serializer = ZohoExpenseBillUploadSerializer(data=request.data)
-    if serializer.is_valid():
-        bill_data = serializer.validated_data
-        file_type = bill_data.get('fileType', 'Single Invoice/File')
-        uploaded_file = bill_data['file']
+    # Handle both single file and multiple files seamlessly
+    files_data = []
+    
+    # Check if files are provided as a list (multiple files)
+    if 'files' in request.data:
+        files_data = request.data.getlist('files') if hasattr(request.data, 'getlist') else request.data.get('files', [])
+        # Ensure files_data is always a list
+        if not isinstance(files_data, list):
+            files_data = [files_data] if files_data else []
+    # Check if a single file is provided
+    elif 'file' in request.data:
+        single_file = request.data.get('file')
+        if single_file:
+            files_data = [single_file]
+    
+    # Prepare data for serializer validation
+    if len(files_data) > 1:
+        # Use multiple file serializer for validation
+        serializer_data = {
+            'files': files_data,
+            'fileType': request.data.get('fileType', 'Single Invoice/File')
+        }
+        serializer = ZohoExpenseBillMultipleUploadSerializer(data=serializer_data)
+    else:
+        # Use single file serializer for validation
+        serializer_data = {
+            'file': files_data[0] if files_data else None,
+            'fileType': request.data.get('fileType', 'Single Invoice/File')
+        }
+        serializer = ZohoExpenseBillUploadSerializer(data=serializer_data)
+    
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    if not files_data:
+        return Response(
+            {"detail": "No files provided for upload"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
-        # Handle PDF splitting for multiple invoices
-        if file_type == 'Multiple Invoice/File' and uploaded_file.name.endswith('.pdf'):
-            try:
-                uploaded_file.seek(0)
-                pdf_bytes = uploaded_file.read()
-                pdf = PdfReader(BytesIO(pdf_bytes))
+    bill_data = serializer.validated_data
+    file_type = bill_data.get('fileType', 'Single Invoice/File')
+    files_to_process = files_data if len(files_data) > 1 else [bill_data['file']]
+    created_bills = []
 
-                unique_id = datetime.now().strftime("%Y%m%d%H%M%S")
-                created_bills = []
+    try:
+        with transaction.atomic():
+            for uploaded_file in files_to_process:
+                # Handle PDF splitting for multiple invoices
+                if file_type == 'Multiple Invoice/File' and uploaded_file.name.lower().endswith('.pdf'):
+                    try:
+                        uploaded_file.seek(0)
+                        pdf_bytes = uploaded_file.read()
+                        pdf = PdfReader(BytesIO(pdf_bytes))
 
-                for page_num in range(len(pdf.pages)):
-                    # Convert each PDF page to an image
-                    page_images = convert_from_bytes(pdf_bytes, first_page=page_num + 1, last_page=page_num + 1)
+                        unique_id = datetime.now().strftime("%Y%m%d%H%M%S")
 
-                    if page_images:
-                        image_io = BytesIO()
-                        page_images[0].save(image_io, format='JPEG')
-                        image_io.seek(0)
+                        for page_num in range(len(pdf.pages)):
+                            # Convert each PDF page to an image
+                            page_images = convert_from_bytes(pdf_bytes, first_page=page_num + 1, last_page=page_num + 1)
 
-                        # Create separate ExpenseBill for each page with uploaded_by user
-                        bill = ExpenseBill.objects.create(
-                            billmunshiName=f"BM-Page-{page_num + 1}-{unique_id}",
-                            file=ContentFile(image_io.read(), name=f"BM-Page-{page_num + 1}-{unique_id}.jpg"),
-                            fileType=file_type,
-                            status='Draft',
-                            organization=organization,
-                            uploaded_by=request.user
-                        )
-                        created_bills.append(bill)
+                            if page_images:
+                                image_io = BytesIO()
+                                page_images[0].save(image_io, format='JPEG')
+                                image_io.seek(0)
 
-                # Return list of created bills with request context for proper serialization
-                response_serializer = ZohoExpenseBillSerializer(created_bills, many=True, context={'request': request})
-                return Response({
-                    "detail": f"PDF split into {len(created_bills)} bills successfully",
-                    "bills": response_serializer.data
-                }, status=status.HTTP_201_CREATED)
+                                # Create separate ExpenseBill for each page
+                                bill = ExpenseBill.objects.create(
+                                    billmunshiName=f"BM-Expense-Page-{page_num + 1}-{unique_id}",
+                                    file=ContentFile(image_io.read(), name=f"BM-Expense-Page-{page_num + 1}-{unique_id}.jpg"),
+                                    fileType=file_type,
+                                    status='Draft',
+                                    organization=organization,
+                                    uploaded_by=request.user
+                                )
+                                created_bills.append(bill)
 
-            except Exception as e:
-                logger.error(f"Error processing PDF: {str(e)}")
-                return Response({
-                    "detail": f"Error processing PDF: {str(e)}"
-                }, status=status.HTTP_400_BAD_REQUEST)
+                    except Exception as e:
+                        logger.error(f"Error processing PDF {uploaded_file.name}: {str(e)}")
+                        return Response({
+                            "detail": f"Error processing PDF {uploaded_file.name}: {str(e)}"
+                        }, status=status.HTTP_400_BAD_REQUEST)
 
-        # Save regular file upload (including PDFs for single invoices) with uploaded_by user
-        bill = serializer.save(organization=organization, status='Draft', uploaded_by=request.user)
-        response_serializer = ZohoExpenseBillSerializer(bill, context={'request': request})
-        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+                else:
+                    # Create single bill (including PDFs for single invoice type)
+                    unique_id = datetime.now().strftime("%Y%m%d%H%M%S")
+                    bill = ExpenseBill.objects.create(
+                        billmunshiName=f"BM-Expense-{unique_id}",
+                        file=uploaded_file,
+                        fileType=file_type,
+                        status='Draft',
+                        organization=organization,
+                        uploaded_by=request.user
+                    )
+                    created_bills.append(bill)
 
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        # Return response with all created bills
+        response_serializer = ZohoExpenseBillSerializer(created_bills, many=True, context={'request': request})
+        return Response({
+            "message": f"Successfully uploaded {len(files_to_process)} file(s) and created {len(created_bills)} bill(s)",
+            "files_uploaded": len(files_to_process),
+            "bills_created": len(created_bills),
+            "bills": response_serializer.data
+        }, status=status.HTTP_201_CREATED)
+
+    except Exception as e:
+        logger.error(f"Error uploading expense bills: {str(e)}")
+        return Response({
+            "detail": f"Error processing files: {str(e)}"
+        }, status=status.HTTP_400_BAD_REQUEST)
 
 
 @extend_schema(

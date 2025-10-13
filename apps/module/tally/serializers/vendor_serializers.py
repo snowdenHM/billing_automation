@@ -112,20 +112,26 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
 
 
 class VendorBillUploadSerializer(serializers.Serializer):
-    """Serializer for multiple file upload"""
+    """Serializer for single or multiple file upload"""
     files = serializers.ListField(
         child=serializers.FileField(allow_empty_file=False),
-        help_text="List of files to upload (PDF, JPG, PNG)"
+        help_text="List of files to upload (PDF, JPG, PNG). Can accept single file or multiple files.",
+        allow_empty=False
     )
     file_type = serializers.ChoiceField(
         choices=TallyVendorBill.BillType.choices,
-        default=TallyVendorBill.BillType.SINGLE
+        default=TallyVendorBill.BillType.SINGLE,
+        help_text="Type of file upload: SINGLE (each file is a separate bill) or MULTI (PDF pages are split into separate bills)"
     )
 
     def validate_files(self, value):
         """Validate uploaded files"""
         if not value:
             raise serializers.ValidationError("At least one file is required")
+
+        # Limit total number of files to prevent abuse
+        if len(value) > 20:
+            raise serializers.ValidationError("Maximum 20 files allowed per upload")
 
         for file in value:
             # Check file extension
@@ -140,7 +146,27 @@ class VendorBillUploadSerializer(serializers.Serializer):
             if file.size > 10 * 1024 * 1024:
                 raise serializers.ValidationError(f"File {file.name} exceeds 10MB limit")
 
+        # Additional validation for MULTI type
+        file_type = self.initial_data.get('file_type', TallyVendorBill.BillType.SINGLE)
+        if file_type == TallyVendorBill.BillType.MULTI:
+            # For MULTI type, check if any PDFs are included
+            pdf_files = [f for f in value if f.name.lower().endswith('.pdf')]
+            if not pdf_files:
+                raise serializers.ValidationError("MULTI file type requires at least one PDF file for page splitting")
+
         return value
+
+    def validate(self, attrs):
+        """Cross-field validation"""
+        files = attrs.get('files', [])
+        file_type = attrs.get('file_type')
+        
+        # Log the upload attempt
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Vendor bill upload validation - Files: {len(files)}, Type: {file_type}")
+        
+        return attrs
 
 
 class BillAnalysisRequestSerializer(serializers.Serializer):
