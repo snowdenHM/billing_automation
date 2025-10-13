@@ -40,6 +40,7 @@ from .serializers.expense_bills import (
     ZohoExpenseBillDetailSerializer,
     ExpenseZohoBillSerializer,
     ZohoExpenseBillUploadSerializer,
+    ZohoExpenseBillMultipleUploadSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,7 +128,7 @@ def analyze_bill_with_openai(file_content, file_extension):
         # Prepare image data based on file type with enhanced processing
         if file_extension.lower() == 'pdf':
             logger.info(f"Processing PDF file with enhanced settings...")
-            
+
             file_size = len(file_content)
             logger.info(f"PDF loaded: {file_size:,} bytes")
 
@@ -143,7 +144,7 @@ def analyze_bill_with_openai(file_content, file_extension):
             # Convert PDF to image with enhanced settings
             try:
                 from PIL import Image, ImageEnhance
-                
+
                 logger.info("Converting PDF to image with enhanced settings...")
                 images = convert_from_bytes(
                     file_content,
@@ -161,7 +162,7 @@ def analyze_bill_with_openai(file_content, file_extension):
 
                 # Enhanced image optimization for OCR
                 logger.info("Optimizing image for OCR...")
-                
+
                 # Convert to RGB if needed
                 if image.mode != 'RGB':
                     image = image.convert('RGB')
@@ -197,14 +198,14 @@ def analyze_bill_with_openai(file_content, file_extension):
         elif file_extension.lower() in ['jpg', 'jpeg', 'png']:
             # Handle image files with MIME type detection
             logger.info(f"Processing image file: {file_extension}")
-            
+
             if file_extension.lower() in ['jpg', 'jpeg']:
                 mime_type = "image/jpeg"
             elif file_extension.lower() == 'png':
                 mime_type = "image/png"
             else:
                 mime_type = "image/jpeg"  # Default fallback
-                
+
             image_data = base64.b64encode(file_content).decode('utf-8')
             logger.info(f"Successfully processed image with MIME type: {mime_type}")
 
@@ -987,4 +988,7 @@ def expense_bill_delete_view(request, org_id, bill_id):
 
     except ExpenseBill.DoesNotExist:
         return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+
 

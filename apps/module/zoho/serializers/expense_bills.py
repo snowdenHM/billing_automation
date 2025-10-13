@@ -155,6 +155,26 @@ class ZohoExpenseBillUploadSerializer(serializers.ModelSerializer):
         return ExpenseBill.objects.create(**validated_data)
 
 
+class ZohoExpenseBillMultipleUploadSerializer(serializers.Serializer):
+    """Serializer for uploading multiple Zoho Expense Bill files"""
+
+    files = serializers.ListField(
+        child=FileUploadField(),
+        allow_empty=False,
+        max_length=20  # Limit to 20 files max
+    )
+    fileType = serializers.ChoiceField(
+        choices=[
+            ("Single Invoice/File", "Single Invoice/File"),
+            ("Multiple Invoice/File", "Multiple Invoice/File"),
+        ],
+        default="Single Invoice/File"
+    )
+
+    class Meta:
+        ref_name = "ZohoExpenseBillMultipleUploadRequest"
+
+
 class ZohoExpenseVerifyProductItemSerializer(serializers.Serializer):
     """Edits to each product during expense verification - using correct field names"""
 
