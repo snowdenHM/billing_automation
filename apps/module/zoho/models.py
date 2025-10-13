@@ -283,7 +283,7 @@ class VendorBill(BaseTeamModel):
             today = date.today()
             date_prefix = today.strftime("%Y%m%d")
             bill_prefix = f"{date_prefix}ZB"
-
+            
             # Get all existing bills with today's date prefix for this organization
             existing_bills = VendorBill.objects.filter(
                 organization=self.organization,
@@ -427,7 +427,7 @@ class ExpenseBill(BaseTeamModel):
             today = date.today()
             date_prefix = today.strftime("%Y%m%d")
             bill_prefix = f"{date_prefix}ZE"
-
+            
             # Get all existing bills with today's date prefix for this organization
             existing_bills = ExpenseBill.objects.filter(
                 organization=self.organization,

@@ -226,7 +226,7 @@ class TallyVendorBill(BaseOrgModel):
             today = date.today()
             date_prefix = today.strftime("%Y%m%d")
             bill_prefix = f"{date_prefix}TB"
-
+            
             # Get all existing bills with today's date prefix for this organization
             existing_bills = TallyVendorBill.objects.filter(
                 organization=self.organization,
@@ -432,7 +432,7 @@ class TallyExpenseBill(BaseOrgModel):
             today = date.today()
             date_prefix = today.strftime("%Y%m%d")
             bill_prefix = f"{date_prefix}TE"
-
+            
             # Get all existing bills with today's date prefix for this organization
             existing_bills = TallyExpenseBill.objects.filter(
                 organization=self.organization,
