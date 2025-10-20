@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import os
+import random
 from datetime import datetime
 from io import BytesIO
 
@@ -133,7 +134,7 @@ def analyze_bill_with_ai(bill, organization):
         # Read and process file based on type
         if file_name.endswith('.pdf'):
             logger.info(f"Processing PDF file: {file_name}")
-            
+
             # Enhanced PDF processing with validation
             with open(file_path, 'rb') as f:
                 pdf_bytes = f.read()
@@ -153,7 +154,7 @@ def analyze_bill_with_ai(bill, organization):
             # Convert PDF to image with enhanced settings
             try:
                 from PIL import Image, ImageEnhance
-                
+
                 logger.info("Converting PDF to image with enhanced settings...")
                 page_images = convert_from_bytes(
                     pdf_bytes,
@@ -171,7 +172,7 @@ def analyze_bill_with_ai(bill, organization):
 
                 # Enhanced image optimization for OCR
                 logger.info("Optimizing image for OCR...")
-                
+
                 # Convert to RGB if needed
                 if image.mode != 'RGB':
                     image = image.convert('RGB')
@@ -304,7 +305,7 @@ def analyze_bill_with_ai(bill, organization):
                 ]
             }],
             max_tokens=2000,  # Increased token limit
-            temperature=0.1   # Lower temperature for more consistent results
+            temperature=0.1  # Lower temperature for more consistent results
         )
 
         if not response.choices or not response.choices[0].message.content:
@@ -665,13 +666,14 @@ def vendor_bills_list(request, org_id):
 @parser_classes([MultiPartParser, FormParser])
 def vendor_bills_upload(request, org_id):
     """Handle single or multiple vendor bill file uploads with PDF splitting support"""
-    
+
     # Handle both single file and multiple files seamlessly
     files_data = []
-    
+
     # Check if files are provided as a list (multiple files)
     if 'files' in request.data:
-        files_data = request.data.getlist('files') if hasattr(request.data, 'getlist') else request.data.get('files', [])
+        files_data = request.data.getlist('files') if hasattr(request.data, 'getlist') else request.data.get('files',
+                                                                                                             [])
         # Ensure files_data is always a list
         if not isinstance(files_data, list):
             files_data = [files_data] if files_data else []
@@ -680,13 +682,13 @@ def vendor_bills_upload(request, org_id):
         single_file = request.data.get('file')
         if single_file:
             files_data = [single_file]
-    
+
     # Prepare data for serializer validation
     serializer_data = {
         'files': files_data,
         'file_type': request.data.get('file_type', TallyVendorBill.BillType.SINGLE)
     }
-    
+
     serializer = VendorBillUploadSerializer(data=serializer_data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -701,7 +703,7 @@ def vendor_bills_upload(request, org_id):
     files = serializer.validated_data['files']
     file_type = serializer.validated_data['file_type']
     created_bills = []
-    
+
     if not files:
         return Response(
             {'error': 'No files provided for upload'},
@@ -960,8 +962,8 @@ def process_existing_analysis_data(bill, existing_data, organization):
 # Get Vendor Bill Detail
 # ✅
 @extend_schema(
-    summary="Get Bill Detail",
-    description="Get detailed information about a specific vendor bill including analysis data",
+    summary="Get Vendor Bill Details",
+    description="Get vendor bill detail including analysis data and next bill to process",
     responses={200: TallyVendorBillSerializer},
     tags=['Tally Vendor Bills']
 )
@@ -982,6 +984,16 @@ def vendor_bill_detail(request, org_id, bill_id):
             id=bill_id,
             organization=organization
         )
+
+        # Get a random bill with 'Analysed' status
+        next_bill_id = None
+        analysed_bills = TallyVendorBill.objects.filter(
+            organization=organization,
+            status=TallyVendorBill.BillStatus.ANALYSED
+        ).exclude(id=bill_id).values_list('id', flat=True)
+
+        if analysed_bills:
+            next_bill_id = str(random.choice(list(analysed_bills)))
 
         # Get the related TallyVendorAnalyzedBill if it exists
         try:
@@ -1048,7 +1060,8 @@ def vendor_bill_detail(request, org_id, bill_id):
             response_data = {
                 "bill": bill_serializer.data,
                 "analyzed_data": bill_data,
-                "analyzed_bill": analyzed_bill.id
+                "analyzed_bill": analyzed_bill.id,
+                "next_bill": next_bill_id
             }
 
             return Response(response_data)
@@ -1059,7 +1072,8 @@ def vendor_bill_detail(request, org_id, bill_id):
             return Response({
                 "bill": bill_serializer.data,
                 "analyzed_data": None,
-                "message": "Bill has not been analyzed yet"
+                "message": "Bill has not been analyzed yet",
+                "next_bill": next_bill_id
             })
 
     except TallyVendorBill.DoesNotExist:
@@ -1865,4 +1879,3 @@ def vendor_bill_sync_external(request, org_id):
             {'error': f'External sync failed: {str(e)}'},
             status=status.HTTP_400_BAD_REQUEST
         )
-
