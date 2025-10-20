@@ -1056,12 +1056,14 @@ def vendor_bill_detail(request, org_id, bill_id):
 
             # Include the base bill information
             bill_serializer = TallyVendorBillSerializer(bill, context={'request': request})
+            product_sync = TallyConfig.objects.get(organization=org_id)
 
             response_data = {
                 "bill": bill_serializer.data,
                 "analyzed_data": bill_data,
                 "analyzed_bill": analyzed_bill.id,
-                "next_bill": next_bill_id
+                "next_bill": next_bill_id,
+                "product_sync": product_sync.tally_product_allow_sync
             }
 
             return Response(response_data)
