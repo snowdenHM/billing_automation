@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import os
+import random
 from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
@@ -526,15 +527,15 @@ def vendor_bills_list_view(request, org_id):
 @parser_classes([MultiPartParser, FormParser])
 def vendor_bill_upload_view(request, org_id):
     """Handle single or multiple vendor bill file uploads with PDF splitting support"""
-    
+
     # Handle both single file and multiple files seamlessly
     files_data = []
-    
-    # Debug logging
-    logger.info(f"Request data keys: {list(request.data.keys())}")
-    logger.info(f"'files' in request.data: {'files' in request.data}")
-    logger.info(f"'file' in request.data: {'file' in request.data}")
-    
+
+    # Debug logging with prints (will show in gunicorn logs)
+    print(f"[VENDOR DEBUG] Request data keys: {list(request.data.keys())}")
+    print(f"[VENDOR DEBUG] 'files' in request.data: {'files' in request.data}")
+    print(f"[VENDOR DEBUG] 'file' in request.data: {'file' in request.data}")
+
     # Check if files are provided as a list (multiple files)
     if 'files' in request.data:
         files_data = request.data.getlist('files') if hasattr(request.data, 'getlist') else request.data.get('files', [])
@@ -548,15 +549,21 @@ def vendor_bill_upload_view(request, org_id):
         if single_file:
             files_data = [single_file]
         print(f"[VENDOR DEBUG] Found 'file' field with {len(files_data)} file(s)")
-    
+
     print(f"[VENDOR DEBUG] Total files collected: {len(files_data)}")
-    
+
+    # Debug: Print details about each file
+    for i, f in enumerate(files_data):
+        print(f"[VENDOR DEBUG] File {i+1}: {getattr(f, 'name', 'Unknown')} - Size: {getattr(f, 'size', 'Unknown')}")
+
     # Prepare data for serializer validation
     serializer_data = {
         'files': files_data,
         'fileType': request.data.get('fileType', 'Single Invoice/File')
     }
-    
+
+    print(f"[VENDOR DEBUG] Serializer data: files count = {len(serializer_data['files'])}, fileType = {serializer_data['fileType']}")
+
     serializer = ZohoVendorBillMultipleUploadSerializer(data=serializer_data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -571,7 +578,9 @@ def vendor_bill_upload_view(request, org_id):
     files = serializer.validated_data['files']
     file_type = serializer.validated_data['fileType']
     created_bills = []
-    
+
+    print(f"[VENDOR DEBUG] After serializer validation - files count: {len(files)}, fileType: {file_type}")
+
     if not files:
         return Response(
             {'error': 'No files provided for upload'},
@@ -581,24 +590,24 @@ def vendor_bill_upload_view(request, org_id):
     try:
         # Temporarily removing atomic transaction to debug
         # with transaction.atomic():
-        logger.info(f"Starting to process {len(files)} files")
+        print(f"[VENDOR DEBUG] Starting to process {len(files)} files")
         for i, uploaded_file in enumerate(files):
-                logger.info(f"Processing file {i+1}/{len(files)}: {uploaded_file.name}")
+                print(f"[VENDOR DEBUG] Processing file {i+1}/{len(files)}: {uploaded_file.name}")
                 file_extension = uploaded_file.name.lower().split('.')[-1]
 
                 # Handle PDF splitting for multiple invoice files
                 if (file_type == 'Multiple Invoice/File' and
                         file_extension == 'pdf'):
 
-                    logger.info(f"Processing as PDF split for file: {uploaded_file.name}")
+                    print(f"[VENDOR DEBUG] Processing as PDF split for file: {uploaded_file.name}")
                     pdf_bills = process_pdf_splitting_vendor(
                         uploaded_file, organization, file_type, request.user
                     )
-                    logger.info(f"PDF splitting created {len(pdf_bills)} bills")
+                    print(f"[VENDOR DEBUG] PDF splitting created {len(pdf_bills)} bills")
                     created_bills.extend(pdf_bills)
                 else:
                     # Create single bill (including PDFs for single invoice type)
-                    logger.info(f"Creating single bill for file: {uploaded_file.name}")
+                    print(f"[VENDOR DEBUG] Creating single bill for file: {uploaded_file.name}")
                     bill = VendorBill.objects.create(
                         file=uploaded_file,
                         fileType=file_type,
@@ -606,18 +615,22 @@ def vendor_bill_upload_view(request, org_id):
                         uploaded_by=request.user,
                         status='Draft'
                     )
-                    logger.info(f"Created bill: {bill.billmunshiName} (ID: {bill.id})")
+                    print(f"[VENDOR DEBUG] Created bill: {bill.billmunshiName} (ID: {bill.id})")
                     created_bills.append(bill)
+
+        print(f"[VENDOR DEBUG] Completed processing all files. Total bills created: {len(created_bills)}")
         
-        logger.info(f"Completed processing all files. Total bills created: {len(created_bills)}")
+        # Debug: Print all created bills
+        for i, bill in enumerate(created_bills):
+            print(f"[VENDOR DEBUG] Bill {i+1}: {bill.billmunshiName} (ID: {bill.id})")
 
         response_serializer = ZohoVendorBillSerializer(created_bills, many=True, context={'request': request})
-        
+
         # Log the successful result
         logger.info(f"Successfully processed {len(files)} files and created {len(created_bills)} bills")
         for i, bill in enumerate(created_bills):
             logger.info(f"Created bill {i+1}: {bill.billmunshiName} (ID: {bill.id})")
-        
+
         return Response({
             'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} bill(s)',
             'files_uploaded': len(files),
@@ -654,15 +667,21 @@ def vendor_bill_detail_view(request, org_id, bill_id):
         # Fetch the VendorBill without prefetch_related to avoid relationship errors
         bill = VendorBill.objects.get(id=bill_id, organization=organization)
 
-        # Get a random bill with 'Analysed' status
+        # Get the next bill with 'Analysed' status
         next_bill_id = None
         analysed_bills = VendorBill.objects.filter(
             organization=organization,
-            status=VendorBill.BILL_STATUS_CHOICES.Analysed
+            status='Analysed'
         ).exclude(id=bill_id).values_list('id', flat=True)
 
         if analysed_bills:
-            next_bill_id = str(random.choice(list(analysed_bills)))
+            next_bill_id = str(analysed_bills[0])  # Get the first analysed bill
+            logger.info(f"Found next analysed bill: {next_bill_id}")
+        else:
+            logger.info("No analysed bills found for next_bill")
+
+        # Always set next_bill on the bill object
+        bill.next_bill = next_bill_id
 
         # Get the related VendorZohoBill if it exists
         try:
@@ -673,11 +692,9 @@ def vendor_bill_detail_view(request, org_id, bill_id):
 
             # Attach zoho_bill to the bill object for the serializer
             bill.zoho_bill = zoho_bill
-            bill.next_bill_id = next_bill_id
         except VendorZohoBill.DoesNotExist:
             # If no VendorZohoBill exists, set it to None
             bill.zoho_bill = None
-            bill.next_bill_id = None
 
         # Serialize the data with request context for full URLs
         serializer = ZohoVendorBillDetailSerializer(bill, context={'request': request})
@@ -1060,6 +1077,9 @@ def vendor_bill_delete_view(request, org_id, bill_id):
 
     except VendorBill.DoesNotExist:
         return Response({"detail": "Vendor bill not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+
 
 
 
