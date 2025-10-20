@@ -654,6 +654,16 @@ def vendor_bill_detail_view(request, org_id, bill_id):
         # Fetch the VendorBill without prefetch_related to avoid relationship errors
         bill = VendorBill.objects.get(id=bill_id, organization=organization)
 
+        # Get a random bill with 'Analysed' status
+        next_bill_id = None
+        analysed_bills = VendorBill.objects.filter(
+            organization=organization,
+            status=VendorBill.BillStatus.ANALYSED
+        ).exclude(id=bill_id).values_list('id', flat=True)
+
+        if analysed_bills:
+            next_bill_id = str(random.choice(list(analysed_bills)))
+
         # Get the related VendorZohoBill if it exists
         try:
             zoho_bill = VendorZohoBill.objects.select_related('vendor', 'tds_tcs_id').prefetch_related(
@@ -663,9 +673,11 @@ def vendor_bill_detail_view(request, org_id, bill_id):
 
             # Attach zoho_bill to the bill object for the serializer
             bill.zoho_bill = zoho_bill
+            bill.next_bill_id = next_bill_id
         except VendorZohoBill.DoesNotExist:
             # If no VendorZohoBill exists, set it to None
             bill.zoho_bill = None
+            bill.next_bill_id = None
 
         # Serialize the data with request context for full URLs
         serializer = ZohoVendorBillDetailSerializer(bill, context={'request': request})

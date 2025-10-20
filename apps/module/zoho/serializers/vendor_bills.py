@@ -137,6 +137,7 @@ class ZohoVendorBillDetailSerializer(serializers.Serializer):
 
     # VendorZohoBill information
     zoho_bill = VendorZohoBillSerializer(read_only=True)
+    next_bill_id = serializers.CharField(read_only=True, allow_null=True)
 
     class Meta:
         ref_name = "ZohoVendorBillDetail"

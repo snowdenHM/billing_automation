@@ -664,10 +664,10 @@ def expense_bills_list(request, org_id):
 @parser_classes([MultiPartParser, FormParser])
 def expense_bills_upload(request, org_id):
     """Handle single or multiple expense bill file uploads with PDF splitting support"""
-    
+
     # Handle both single file and multiple files seamlessly
     files_data = []
-    
+
     # Check if files are provided as a list (multiple files)
     if 'files' in request.data:
         files_data = request.data.getlist('files') if hasattr(request.data, 'getlist') else request.data.get('files', [])
@@ -679,13 +679,13 @@ def expense_bills_upload(request, org_id):
         single_file = request.data.get('file')
         if single_file:
             files_data = [single_file]
-    
+
     # Prepare data for serializer validation
     serializer_data = {
         'files': files_data,
         'file_type': request.data.get('file_type', TallyExpenseBill.BillType.SINGLE)
     }
-    
+
     serializer = ExpenseBillUploadSerializer(data=serializer_data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -700,7 +700,7 @@ def expense_bills_upload(request, org_id):
     files = serializer.validated_data['files']
     file_type = serializer.validated_data['file_type']
     created_bills = []
-    
+
     if not files:
         return Response(
             {'error': 'No files provided for upload'},
@@ -928,6 +928,15 @@ def expense_bill_detail(request, org_id, bill_id):
             id=bill_id,
             organization=organization
         )
+        # Get a random bill with 'Analysed' status
+        next_bill_id = None
+        analysed_bills = TallyExpenseBill.objects.filter(
+            organization=organization,
+            status=TallyExpenseBill.BillStatus.ANALYSED
+        ).exclude(id=bill_id).values_list('id', flat=True)
+
+        if analysed_bills:
+            next_bill_id = str(random.choice(list(analysed_bills)))
 
         # Get the related TallyExpenseAnalyzedBill if it exists
         try:
@@ -994,7 +1003,8 @@ def expense_bill_detail(request, org_id, bill_id):
             response_data = {
                 "bill": bill_serializer.data,
                 "analyzed_data": bill_data,
-                "analyzed_bill": analyzed_bill.id
+                "analyzed_bill": analyzed_bill.id,
+                "next_bill": next_bill_id
             }
 
             return Response(response_data)
@@ -1842,3 +1852,5 @@ def expense_bill_sync_external(request, org_id):
             {'error': f'External expense sync failed: {str(e)}'},
             status=status.HTTP_400_BAD_REQUEST
         )
+
+
