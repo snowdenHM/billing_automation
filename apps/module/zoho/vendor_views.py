@@ -658,7 +658,7 @@ def vendor_bill_detail_view(request, org_id, bill_id):
         next_bill_id = None
         analysed_bills = VendorBill.objects.filter(
             organization=organization,
-            status=VendorBill.BillStatus.ANALYSED
+            status=VendorBill.BILL_STATUS_CHOICES.Analysed
         ).exclude(id=bill_id).values_list('id', flat=True)
 
         if analysed_bills:
