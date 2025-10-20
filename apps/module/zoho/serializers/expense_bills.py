@@ -136,6 +136,7 @@ class ZohoExpenseBillDetailSerializer(serializers.Serializer):
 
     # ExpenseZohoBill information
     zoho_bill = ExpenseZohoBillSerializer(read_only=True)
+    next_bill = serializers.CharField(read_only=True, allow_null=True)
 
     class Meta:
         ref_name = "ZohoExpenseBillDetail"

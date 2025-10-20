@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import os
+import random
 from datetime import datetime
 from io import BytesIO
 
@@ -694,6 +695,22 @@ def expense_bill_detail_view(request, org_id, bill_id):
     try:
         # Fetch the ExpenseBill
         bill = ExpenseBill.objects.get(id=bill_id, organization=organization)
+
+        # Get the next bill with 'Analysed' status
+        next_bill_id = None
+        analysed_bills = ExpenseBill.objects.filter(
+            organization=organization,
+            status='Analysed'
+        ).exclude(id=bill_id).values_list('id', flat=True)
+
+        if analysed_bills:
+            next_bill_id = str(analysed_bills[0])  # Get the first analysed bill
+            logger.info(f"Found next analysed expense bill: {next_bill_id}")
+        else:
+            logger.info("No analysed expense bills found for next_bill")
+
+        # Always set next_bill on the bill object
+        bill.next_bill = next_bill_id
 
         # Get the related ExpenseZohoBill if it exists
         try:
