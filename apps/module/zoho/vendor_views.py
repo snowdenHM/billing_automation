@@ -809,11 +809,11 @@ def vendor_bill_verify_view(request, org_id, bill_id):
             try:
                 from .models import ZohoVendor
                 vendor_obj = ZohoVendor.objects.get(id=vendor_data, organization=organization)
-                logger.error(f"[DEBUG] vendor_bill_verify_view - Found vendor in database: {vendor_obj.vendor_name} (ID: {vendor_obj.id})")
+                logger.error(f"[DEBUG] vendor_bill_verify_view - Found vendor in database: {vendor_obj.companyName} (ID: {vendor_obj.id})")
             except ZohoVendor.DoesNotExist:
-                logger.error(f"[DEBUG] vendor_bill_verify_view - ERROR: Vendor {vendor_data} does not exist in database")
+                logger.error(f"[DEBUG] vendor_bill_verify_view - ERROR: Vendor {vendor_data} does not exist in organization {organization.name}")
                 return Response(
-                    {"detail": f"Vendor with ID {vendor_data} does not exist. Please sync vendors from Zoho first."},
+                    {"detail": f"Vendor with ID {vendor_data} does not exist in this organization. Please sync vendors from Zoho first."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             except Exception as vendor_check_error:
