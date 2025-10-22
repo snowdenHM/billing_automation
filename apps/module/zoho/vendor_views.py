@@ -808,9 +808,8 @@ def vendor_bill_verify_view(request, org_id, bill_id):
             serializer = VendorZohoBillSerializer(zoho_bill, data=zoho_bill_data, partial=True)
 
             if serializer.is_valid():
-                print(serializer.data)
                 updated_bill = serializer.save()
-
+                print(updated_bill)
                 # Handle products update if provided
                 products_data = zoho_bill_data.get('products')
                 if products_data is not None:
