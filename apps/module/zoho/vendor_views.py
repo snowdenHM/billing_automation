@@ -619,7 +619,7 @@ def vendor_bill_upload_view(request, org_id):
                     created_bills.append(bill)
 
         print(f"[VENDOR DEBUG] Completed processing all files. Total bills created: {len(created_bills)}")
-        
+
         # Debug: Print all created bills
         for i, bill in enumerate(created_bills):
             print(f"[VENDOR DEBUG] Bill {i+1}: {bill.billmunshiName} (ID: {bill.id})")
@@ -804,6 +804,20 @@ def vendor_bill_verify_view(request, org_id, bill_id):
         if vendor_data:
             logger.error(f"[DEBUG] vendor_bill_verify_view - Vendor data in payload: {vendor_data}")
             logger.error(f"[DEBUG] vendor_bill_verify_view - Vendor data type: {type(vendor_data)}")
+
+            # Validate vendor exists before proceeding
+            try:
+                from .models import ZohoVendor
+                vendor_obj = ZohoVendor.objects.get(id=vendor_data, organization=organization)
+                logger.error(f"[DEBUG] vendor_bill_verify_view - Found vendor in database: {vendor_obj.vendor_name} (ID: {vendor_obj.id})")
+            except ZohoVendor.DoesNotExist:
+                logger.error(f"[DEBUG] vendor_bill_verify_view - ERROR: Vendor {vendor_data} does not exist in database")
+                return Response(
+                    {"detail": f"Vendor with ID {vendor_data} does not exist. Please sync vendors from Zoho first."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            except Exception as vendor_check_error:
+                logger.error(f"[DEBUG] vendor_bill_verify_view - Error checking vendor: {vendor_check_error}")
         else:
             logger.error(f"[DEBUG] vendor_bill_verify_view - No vendor data found in payload")
 
@@ -838,7 +852,13 @@ def vendor_bill_verify_view(request, org_id, bill_id):
             logger.error(f"[DEBUG] vendor_bill_verify_view - Creating serializer with partial=True")
             logger.error(f"[DEBUG] vendor_bill_verify_view - Serializer data being passed: {zoho_bill_data}")
 
-            serializer = VendorZohoBillSerializer(zoho_bill, data=zoho_bill_data, partial=True)
+            # Pass organization in context for proper vendor queryset scoping
+            serializer = VendorZohoBillSerializer(
+                zoho_bill, 
+                data=zoho_bill_data, 
+                partial=True,
+                context={'organization': organization}
+            )
 
             if serializer.is_valid():
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Serializer is valid, proceeding to save")
@@ -931,7 +951,10 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Bill status updated successfully to '{bill.status}'")
 
                 # Final verification of vendor data in response
-                response_data = VendorZohoBillSerializer(updated_bill).data
+                response_data = VendorZohoBillSerializer(
+                    updated_bill, 
+                    context={'organization': organization}
+                ).data
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Response vendor data: {response_data.get('vendor')}")
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Verification process completed successfully")
 
@@ -941,9 +964,20 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Serializer validation FAILED")
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Serializer errors: {serializer.errors}")
 
-                # Check if vendor-related errors exist
+                # Check if vendor-related errors exist and provide helpful message
                 if 'vendor' in serializer.errors:
                     logger.error(f"[DEBUG] vendor_bill_verify_view - Vendor-specific errors: {serializer.errors['vendor']}")
+                    vendor_error_detail = serializer.errors['vendor'][0] if serializer.errors['vendor'] else 'Unknown vendor error'
+
+                    # Check if it's a "does not exist" error
+                    if 'does not exist' in str(vendor_error_detail):
+                        vendor_id = zoho_bill_data.get('vendor', 'Unknown')
+                        custom_error = {
+                            "detail": f"Vendor with ID {vendor_id} does not exist in the database. Please sync vendors from Zoho Books first or select a different vendor.",
+                            "vendor_id": vendor_id,
+                            "error_type": "vendor_not_found"
+                        }
+                        return Response(custom_error, status=status.HTTP_400_BAD_REQUEST)
 
                 return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1155,6 +1189,7 @@ def vendor_bill_delete_view(request, org_id, bill_id):
 
     except VendorBill.DoesNotExist:
         return Response({"detail": "Vendor bill not found"}, status=status.HTTP_404_NOT_FOUND)
+
 
 
 

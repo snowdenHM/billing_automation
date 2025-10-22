@@ -60,6 +60,29 @@ class UploadedByUserSerializer(serializers.ModelSerializer):
 # ---------- Zoho Vendor Bill Serializers ----------
 
 class VendorZohoProductSerializer(serializers.ModelSerializer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope foreign key fields to current organization
+        organization = None
+        
+        # Try to get organization from instance
+        if self.instance and hasattr(self.instance, 'organization'):
+            organization = self.instance.organization
+        # Try to get organization from zohoBill
+        elif self.instance and hasattr(self.instance, 'zohoBill') and hasattr(self.instance.zohoBill, 'organization'):
+            organization = self.instance.zohoBill.organization
+        # Try to get organization from context
+        elif hasattr(self, 'context') and 'organization' in self.context:
+            organization = self.context['organization']
+            
+        if organization:
+            self.fields['chart_of_accounts'].queryset = ZohoChartOfAccount.objects.filter(
+                organization=organization
+            )
+            self.fields['taxes'].queryset = ZohoTaxes.objects.filter(
+                organization=organization
+            )
+
     class Meta:
         model = VendorZohoProduct
         fields = [
@@ -72,6 +95,31 @@ class VendorZohoProductSerializer(serializers.ModelSerializer):
 
 class VendorZohoBillSerializer(serializers.ModelSerializer):
     products = VendorZohoProductSerializer(many=True, read_only=True)
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        # Get organization from various sources
+        organization = None
+        if self.instance and hasattr(self.instance, 'organization'):
+            organization = self.instance.organization
+        elif hasattr(self, 'context') and 'organization' in self.context:
+            organization = self.context['organization']
+            
+        # Scope foreign key fields to current organization
+        if organization:
+            self.fields['vendor'].queryset = ZohoVendor.objects.filter(
+                organization=organization
+            )
+            self.fields['tds_tcs_id'].queryset = ZohoTdsTcs.objects.filter(
+                organization=organization
+            )
+            # Also scope the nested products serializer
+            self.fields['products'] = VendorZohoProductSerializer(
+                many=True, 
+                read_only=True, 
+                context={'organization': organization}
+            )
 
     class Meta:
         model = VendorZohoBill
@@ -308,6 +356,18 @@ class VerifyProductItemSerializer(serializers.Serializer):
     itc_eligibility = serializers.ChoiceField(
         choices=("eligible", "ineligible_section17", "ineligible_others"), required=False
     )
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope foreign key fields to current organization
+        if hasattr(self, 'context') and 'organization' in self.context:
+            organization = self.context['organization']
+            self.fields['chart_of_accounts'].queryset = ZohoChartOfAccount.objects.filter(
+                organization=organization
+            )
+            self.fields['taxes'].queryset = ZohoTaxes.objects.filter(
+                organization=organization
+            )
 
 
 class ZohoVerifyProductItemSerializer(serializers.Serializer):
@@ -324,6 +384,18 @@ class ZohoVerifyProductItemSerializer(serializers.Serializer):
     itc_eligibility = serializers.ChoiceField(
         choices=("eligible", "ineligible_section17", "ineligible_others"), required=False
     )
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope foreign key fields to current organization
+        if hasattr(self, 'context') and 'organization' in self.context:
+            organization = self.context['organization']
+            self.fields['chart_of_accounts'].queryset = ZohoChartOfAccount.objects.filter(
+                organization=organization
+            )
+            self.fields['taxes'].queryset = ZohoTaxes.objects.filter(
+                organization=organization
+            )
 
 
 class ZohoVendorBillVerifySerializer(serializers.Serializer):
@@ -343,6 +415,18 @@ class ZohoVendorBillVerifySerializer(serializers.Serializer):
         queryset=ZohoTdsTcs.objects.all(), required=False, allow_null=True
     )
     products = ZohoVerifyProductItemSerializer(many=True, required=False)
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope foreign key fields to current organization
+        if hasattr(self, 'context') and 'organization' in self.context:
+            organization = self.context['organization']
+            self.fields['vendor'].queryset = ZohoVendor.objects.filter(
+                organization=organization
+            )
+            self.fields['tds_tcs_id'].queryset = ZohoTdsTcs.objects.filter(
+                organization=organization
+            )
 
     def validate(self, attrs):
         tax_type = attrs.get("tax_type")
