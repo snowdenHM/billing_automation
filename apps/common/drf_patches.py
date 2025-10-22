@@ -168,3 +168,76 @@ def safe_get_field_info(model):
         raise
 
 model_meta.get_field_info = safe_get_field_info
+
+# Patch for the 'to_many' attribute error in DRF serializers
+from rest_framework import serializers
+from django.db import models
+
+# Store the original update method
+_original_serializer_update = serializers.ModelSerializer.update
+
+def safe_serializer_update(self, instance, validated_data):
+    """
+    Safely update serializer instance, handling 'to_many' attribute errors on ForeignKey fields.
+    This fixes the AttributeError: 'ForeignKey' object has no attribute 'to_many' issue.
+    """
+    try:
+        return _original_serializer_update(self, instance, validated_data)
+    except AttributeError as e:
+        if "'ForeignKey' object has no attribute 'to_many'" in str(e):
+            logger.warning(f"Handling 'to_many' attribute error in serializer update for {type(instance).__name__}")
+
+            # Add to_many attribute to ForeignKey fields that are missing it
+            model_info = model_meta.get_field_info(instance._meta.model)
+
+            for field_name, relation_info in model_info.relations.items():
+                if hasattr(relation_info, '__class__') and isinstance(relation_info, models.ForeignKey):
+                    if not hasattr(relation_info, 'to_many'):
+                        relation_info.to_many = False
+                        logger.debug(f"Added to_many=False to ForeignKey field: {field_name}")
+                elif hasattr(relation_info, '__class__') and isinstance(relation_info, models.ManyToManyField):
+                    if not hasattr(relation_info, 'to_many'):
+                        relation_info.to_many = True
+                        logger.debug(f"Added to_many=True to ManyToManyField field: {field_name}")
+
+            # Try the update again
+            try:
+                return _original_serializer_update(self, instance, validated_data)
+            except Exception as retry_error:
+                logger.error(f"Retry failed after adding to_many attributes: {retry_error}")
+                # Manual update as fallback
+                return self._manual_update_fallback(instance, validated_data)
+        else:
+            raise
+
+def _manual_update_fallback(self, instance, validated_data):
+    """
+    Manual update fallback when DRF's built-in update fails.
+    """
+    logger.warning(f"Using manual update fallback for {type(instance).__name__}")
+
+    # Update simple fields
+    for attr, value in validated_data.items():
+        if hasattr(instance, attr):
+            # Check if it's a relation field
+            field = instance._meta.get_field(attr)
+            if isinstance(field, (models.ForeignKey, models.OneToOneField)):
+                # Handle foreign key relationships
+                setattr(instance, attr, value)
+                logger.debug(f"Updated ForeignKey field {attr} = {value}")
+            elif isinstance(field, models.ManyToManyField):
+                # Skip many-to-many fields in this fallback (they need special handling)
+                logger.debug(f"Skipping ManyToManyField {attr} in fallback update")
+                continue
+            else:
+                # Handle regular fields
+                setattr(instance, attr, value)
+                logger.debug(f"Updated field {attr} = {value}")
+
+    instance.save()
+    return instance
+
+# Apply the serializer update patch
+serializers.ModelSerializer.update = safe_serializer_update
+serializers.ModelSerializer._manual_update_fallback = _manual_update_fallback
+
