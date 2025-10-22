@@ -15,6 +15,26 @@ from apps.module.zoho.models import (
 from apps.organizations.models import Organization
 
 
+class OrganizationScopedPrimaryKeyRelatedField(serializers.PrimaryKeyRelatedField):
+    """Custom field that scopes queryset to organization from context"""
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Get organization from context if available
+        if hasattr(self, 'context') and 'organization' in self.context:
+            organization = self.context['organization']
+            return queryset.filter(organization=organization)
+        
+        # Get organization from parent serializer's instance
+        if hasattr(self, 'parent') and hasattr(self.parent, 'instance'):
+            instance = self.parent.instance
+            if hasattr(instance, 'organization'):
+                return queryset.filter(organization=instance.organization)
+        
+        return queryset
+
+
 class FileUploadField(serializers.FileField):
     """Custom file field with validation for supported file types"""
 
@@ -63,17 +83,7 @@ class VendorZohoProductSerializer(serializers.ModelSerializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Scope foreign key fields to current organization
-        organization = None
-        
-        # Try to get organization from instance
-        if self.instance and hasattr(self.instance, 'organization'):
-            organization = self.instance.organization
-        # Try to get organization from zohoBill
-        elif self.instance and hasattr(self.instance, 'zohoBill') and hasattr(self.instance.zohoBill, 'organization'):
-            organization = self.instance.zohoBill.organization
-        # Try to get organization from context
-        elif hasattr(self, 'context') and 'organization' in self.context:
-            organization = self.context['organization']
+        organization = self._get_organization()
             
         if organization:
             self.fields['chart_of_accounts'].queryset = ZohoChartOfAccount.objects.filter(
@@ -82,6 +92,19 @@ class VendorZohoProductSerializer(serializers.ModelSerializer):
             self.fields['taxes'].queryset = ZohoTaxes.objects.filter(
                 organization=organization
             )
+    
+    def _get_organization(self):
+        """Get organization from various sources"""
+        # Try to get organization from instance
+        if self.instance and hasattr(self.instance, 'organization'):
+            return self.instance.organization
+        # Try to get organization from zohoBill
+        elif self.instance and hasattr(self.instance, 'zohoBill') and hasattr(self.instance.zohoBill, 'organization'):
+            return self.instance.zohoBill.organization
+        # Try to get organization from context
+        elif hasattr(self, 'context') and 'organization' in self.context:
+            return self.context['organization']
+        return None
 
     class Meta:
         model = VendorZohoProduct
@@ -99,13 +122,9 @@ class VendorZohoBillSerializer(serializers.ModelSerializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        # Get organization from various sources
-        organization = None
-        if self.instance and hasattr(self.instance, 'organization'):
-            organization = self.instance.organization
-        elif hasattr(self, 'context') and 'organization' in self.context:
-            organization = self.context['organization']
-            
+        # Get organization for field scoping
+        organization = self._get_organization()
+        
         # Scope foreign key fields to current organization
         if organization:
             self.fields['vendor'].queryset = ZohoVendor.objects.filter(
@@ -114,12 +133,34 @@ class VendorZohoBillSerializer(serializers.ModelSerializer):
             self.fields['tds_tcs_id'].queryset = ZohoTdsTcs.objects.filter(
                 organization=organization
             )
-            # Also scope the nested products serializer
-            self.fields['products'] = VendorZohoProductSerializer(
+    
+    def _get_organization(self):
+        """Get organization from instance or context"""
+        if self.instance and hasattr(self.instance, 'organization'):
+            return self.instance.organization
+        elif hasattr(self, 'context') and 'organization' in self.context:
+            return self.context['organization']
+        return None
+    
+    def to_representation(self, instance):
+        """Override to pass organization context to nested products serializer"""
+        data = super().to_representation(instance)
+        
+        # Get organization for products serialization
+        organization = self._get_organization()
+        if organization and instance:
+            # Re-serialize products with organization context
+            products_context = self.context.copy() if self.context else {}
+            products_context['organization'] = organization
+            
+            products_serializer = VendorZohoProductSerializer(
+                instance.products.all(), 
                 many=True, 
-                read_only=True, 
-                context={'organization': organization}
+                context=products_context
             )
+            data['products'] = products_serializer.data
+        
+        return data
 
     class Meta:
         model = VendorZohoBill

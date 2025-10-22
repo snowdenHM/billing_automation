@@ -878,7 +878,7 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Updated bill vendor after save: {updated_bill.vendor}")
 
                 if updated_bill.vendor:
-                    logger.error(f"[DEBUG] vendor_bill_verify_view - Vendor saved successfully: ID={updated_bill.vendor.id}, Name={updated_bill.vendor.vendor_name}")
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - Vendor saved successfully: ID={updated_bill.vendor.id}, Name={updated_bill.vendor.companyName}")
                 else:
                     logger.error(f"[DEBUG] vendor_bill_verify_view - WARNING: No vendor assigned after save!")
                     # Let's check if vendor data was in the original payload
