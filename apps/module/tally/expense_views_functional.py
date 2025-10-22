@@ -2,9 +2,9 @@
 
 import base64
 import json
-import random
 import logging
 import os
+import random
 from datetime import datetime
 from io import BytesIO
 
@@ -30,7 +30,8 @@ from .models import (
     TallyExpenseAnalyzedProduct,
     Ledger,
     ParentLedger,
-    TallyConfig
+    TallyConfig,
+    TallyVendorBill
 )
 from .serializers import (
     TallyExpenseBillSerializer,
@@ -134,7 +135,7 @@ def analyze_expense_bill_with_ai(bill, organization):
         # Read and process file based on type
         if file_name.endswith('.pdf'):
             logger.info(f"Processing PDF file: {file_name}")
-            
+
             # Enhanced PDF processing with validation
             with open(file_path, 'rb') as f:
                 pdf_bytes = f.read()
@@ -154,7 +155,7 @@ def analyze_expense_bill_with_ai(bill, organization):
             # Convert PDF to image with enhanced settings
             try:
                 from PIL import Image, ImageEnhance
-                
+
                 logger.info("Converting PDF to image with enhanced settings...")
                 page_images = convert_from_bytes(
                     pdf_bytes,
@@ -172,7 +173,7 @@ def analyze_expense_bill_with_ai(bill, organization):
 
                 # Enhanced image optimization for OCR
                 logger.info("Optimizing image for OCR...")
-                
+
                 # Convert to RGB if needed
                 if image.mode != 'RGB':
                     image = image.convert('RGB')
@@ -305,7 +306,7 @@ def analyze_expense_bill_with_ai(bill, organization):
                 ]
             }],
             max_tokens=2000,  # Increased token limit
-            temperature=0.1   # Lower temperature for more consistent results
+            temperature=0.1  # Lower temperature for more consistent results
         )
 
         if not response.choices or not response.choices[0].message.content:
@@ -671,7 +672,8 @@ def expense_bills_upload(request, org_id):
 
     # Check if files are provided as a list (multiple files)
     if 'files' in request.data:
-        files_data = request.data.getlist('files') if hasattr(request.data, 'getlist') else request.data.get('files', [])
+        files_data = request.data.getlist('files') if hasattr(request.data, 'getlist') else request.data.get('files',
+                                                                                                             [])
         # Ensure files_data is always a list
         if not isinstance(files_data, list):
             files_data = [files_data] if files_data else []
@@ -1853,5 +1855,3 @@ def expense_bill_sync_external(request, org_id):
             {'error': f'External expense sync failed: {str(e)}'},
             status=status.HTTP_400_BAD_REQUEST
         )
-
-
