@@ -825,9 +825,9 @@ def vendor_bill_verify_view(request, org_id, bill_id):
         bill = VendorBill.objects.get(id=payload_bill_id, organization=organization)
         logger.error(f"[DEBUG] vendor_bill_verify_view - Found VendorBill: {bill.id}, status: {bill.status}")
 
-        if bill.status in ['Analyzed', 'Verified']:
+        if bill.status not in ['Analyzed', 'Verified']:
             return Response(
-                {"detail": "Bill must be in 'Analysed' or 'Verified' status to save"},
+                {"detail": "Bill must be in 'Analyzed' or 'Verified' status to save"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
