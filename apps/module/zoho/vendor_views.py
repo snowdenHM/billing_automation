@@ -776,11 +776,24 @@ def vendor_bill_analyze_view(request, org_id, bill_id):
 @permission_classes([IsAuthenticated])
 def vendor_bill_verify_view(request, org_id, bill_id):
     """Verify and update Zoho vendor data. Changes status from 'Analyzed' to 'Verified'."""
+    print("="*80)
+    print(f"[DEBUG] vendor_bill_verify_view - FUNCTION CALLED!")
+    print(f"[DEBUG] vendor_bill_verify_view - Request method: {request.method}")
+    print(f"[DEBUG] vendor_bill_verify_view - URL params - org_id: {org_id}, bill_id: {bill_id}")
+    logger.info(f"vendor_bill_verify_view called with org_id={org_id}, bill_id={bill_id}")
+
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
+        print(f"[DEBUG] vendor_bill_verify_view - ERROR: Organization not found for org_id: {org_id}")
+        logger.error(f"Organization not found for org_id: {org_id}")
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
+        print(f"[DEBUG] vendor_bill_verify_view - Inside try block, processing request data")
+        print(f"[DEBUG] vendor_bill_verify_view - request.data type: {type(request.data)}")
+        print(f"[DEBUG] vendor_bill_verify_view - request.data content: {request.data}")
+        logger.info(f"Processing request data: {request.data}")
+
         # Handle the new payload format - extract bill_id and zoho_bill data
         payload_bill_id = request.data.get('bill_id', bill_id)
         zoho_bill_data = request.data.get('zoho_bill', request.data)
@@ -788,6 +801,7 @@ def vendor_bill_verify_view(request, org_id, bill_id):
         print(f"[DEBUG] vendor_bill_verify_view - Starting verification for bill_id: {payload_bill_id}")
         print(f"[DEBUG] vendor_bill_verify_view - Organization: {organization.name if organization else 'None'}")
         print(f"[DEBUG] vendor_bill_verify_view - Received zoho_bill_data keys: {list(zoho_bill_data.keys()) if zoho_bill_data else 'None'}")
+        logger.info(f"Starting verification for bill_id: {payload_bill_id}, org: {organization.name if organization else 'None'}")
 
         # Debug vendor data in the payload
         vendor_data = zoho_bill_data.get('vendor')
