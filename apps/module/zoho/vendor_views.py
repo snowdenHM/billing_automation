@@ -784,7 +784,6 @@ def vendor_bill_verify_view(request, org_id, bill_id):
         # Handle the new payload format - extract bill_id and zoho_bill data
         payload_bill_id = request.data.get('bill_id', bill_id)
         zoho_bill_data = request.data.get('zoho_bill', request.data)
-        print(zoho_bill_data)
 
         # Use the bill_id from payload if provided, otherwise use URL parameter
         bill = VendorBill.objects.get(id=payload_bill_id, organization=organization)
@@ -810,7 +809,6 @@ def vendor_bill_verify_view(request, org_id, bill_id):
 
             if serializer.is_valid():
                 print(serializer.data)
-                return Response(serializer.data, status=status.HTTP_200_OK)
                 updated_bill = serializer.save()
 
                 # Handle products update if provided
