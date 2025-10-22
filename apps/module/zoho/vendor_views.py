@@ -837,7 +837,7 @@ def vendor_bill_verify_view(request, org_id, bill_id):
             logger.error(f"[DEBUG] vendor_bill_verify_view - Found existing VendorZohoBill: {zoho_bill.id}")
             logger.error(f"[DEBUG] vendor_bill_verify_view - Current vendor in zoho_bill: {zoho_bill.vendor}")
             if zoho_bill.vendor:
-                logger.error(f"[DEBUG] vendor_bill_verify_view - Current vendor details: ID={zoho_bill.vendor.id}, Name={zoho_bill.vendor.vendor_name}, ContactID={zoho_bill.vendor.contactId}")
+                logger.error(f"[DEBUG] vendor_bill_verify_view - Current vendor details: ID={zoho_bill.vendor.id}, Name={zoho_bill.vendor.companyName}, ContactID={zoho_bill.vendor.contactId}")
             else:
                 logger.error(f"[DEBUG] vendor_bill_verify_view - No vendor currently assigned to zoho_bill")
         except VendorZohoBill.DoesNotExist:
