@@ -378,7 +378,7 @@ def create_journal_zoho_objects_from_analysis(bill, analyzed_data, organization)
                 'igst': safe_numeric_string(relevant_data.get('igst')),
                 'cgst': safe_numeric_string(relevant_data.get('cgst')),
                 'sgst': safe_numeric_string(relevant_data.get('sgst')),
-                'note': f"Auto-created from analysis for {company_name or 'Unknown Vendor'}"
+                'note': f"Bill from analysis for {company_name or 'Unknown Vendor'} entered via Billmunshi"
             }
         )
 

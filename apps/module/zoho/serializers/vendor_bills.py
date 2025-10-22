@@ -15,26 +15,6 @@ from apps.module.zoho.models import (
 from apps.organizations.models import Organization
 
 
-class OrganizationScopedPrimaryKeyRelatedField(serializers.PrimaryKeyRelatedField):
-    """Custom field that scopes queryset to organization from context"""
-    
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        
-        # Get organization from context if available
-        if hasattr(self, 'context') and 'organization' in self.context:
-            organization = self.context['organization']
-            return queryset.filter(organization=organization)
-        
-        # Get organization from parent serializer's instance
-        if hasattr(self, 'parent') and hasattr(self.parent, 'instance'):
-            instance = self.parent.instance
-            if hasattr(instance, 'organization'):
-                return queryset.filter(organization=instance.organization)
-        
-        return queryset
-
-
 class FileUploadField(serializers.FileField):
     """Custom file field with validation for supported file types"""
 
