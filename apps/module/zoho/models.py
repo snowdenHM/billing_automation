@@ -337,7 +337,7 @@ class VendorZohoBill(BaseTeamModel):
     cgst = models.CharField(max_length=50, null=True, blank=True, default=0)
     sgst = models.CharField(max_length=50, null=True, blank=True, default=0)
     tds_tcs_id = models.ForeignKey("ZohoTdsTcs", on_delete=models.CASCADE, null=True, blank=True)
-    is_tax = models.CharField(choices=TAX_TYPE_CHOICES, max_length=100, null=True, blank=True, default="TDS")
+    is_tax = models.CharField(choices=TAX_TYPE_CHOICES, max_length=100, null=True, blank=True, default="NOT_APPLICABLE")
     note = models.CharField(max_length=100, null=True, blank=True, default="Enter Your Description")
     created_at = models.DateTimeField(auto_now_add=True)
 
