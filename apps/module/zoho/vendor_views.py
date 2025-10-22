@@ -785,8 +785,21 @@ def vendor_bill_verify_view(request, org_id, bill_id):
         payload_bill_id = request.data.get('bill_id', bill_id)
         zoho_bill_data = request.data.get('zoho_bill', request.data)
 
+        print(f"[DEBUG] vendor_bill_verify_view - Starting verification for bill_id: {payload_bill_id}")
+        print(f"[DEBUG] vendor_bill_verify_view - Organization: {organization.name if organization else 'None'}")
+        print(f"[DEBUG] vendor_bill_verify_view - Received zoho_bill_data keys: {list(zoho_bill_data.keys()) if zoho_bill_data else 'None'}")
+
+        # Debug vendor data in the payload
+        vendor_data = zoho_bill_data.get('vendor')
+        if vendor_data:
+            print(f"[DEBUG] vendor_bill_verify_view - Vendor data in payload: {vendor_data}")
+            print(f"[DEBUG] vendor_bill_verify_view - Vendor data type: {type(vendor_data)}")
+        else:
+            print(f"[DEBUG] vendor_bill_verify_view - No vendor data found in payload")
+
         # Use the bill_id from payload if provided, otherwise use URL parameter
         bill = VendorBill.objects.get(id=payload_bill_id, organization=organization)
+        print(f"[DEBUG] vendor_bill_verify_view - Found VendorBill: {bill.id}, status: {bill.status}")
 
         if bill.status not in ['Analyzed', 'Verified']:
             return Response(
@@ -797,7 +810,14 @@ def vendor_bill_verify_view(request, org_id, bill_id):
         # Get existing VendorZohoBill
         try:
             zoho_bill = VendorZohoBill.objects.get(selectBill=bill, organization=organization)
+            print(f"[DEBUG] vendor_bill_verify_view - Found existing VendorZohoBill: {zoho_bill.id}")
+            print(f"[DEBUG] vendor_bill_verify_view - Current vendor in zoho_bill: {zoho_bill.vendor}")
+            if zoho_bill.vendor:
+                print(f"[DEBUG] vendor_bill_verify_view - Current vendor details: ID={zoho_bill.vendor.id}, Name={zoho_bill.vendor.vendor_name}, ContactID={zoho_bill.vendor.contactId}")
+            else:
+                print(f"[DEBUG] vendor_bill_verify_view - No vendor currently assigned to zoho_bill")
         except VendorZohoBill.DoesNotExist:
+            print(f"[DEBUG] vendor_bill_verify_view - VendorZohoBill not found for bill {bill.id}")
             return Response(
                 {"detail": "No analyzed vendor data found. Please analyze the bill first."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -805,11 +825,37 @@ def vendor_bill_verify_view(request, org_id, bill_id):
 
         with transaction.atomic():
             # Use partial=True for POST as we're updating existing data
+            print(f"[DEBUG] vendor_bill_verify_view - Creating serializer with partial=True")
+            print(f"[DEBUG] vendor_bill_verify_view - Serializer data being passed: {zoho_bill_data}")
+
             serializer = VendorZohoBillSerializer(zoho_bill, data=zoho_bill_data, partial=True)
 
             if serializer.is_valid():
+                print(f"[DEBUG] vendor_bill_verify_view - Serializer is valid, proceeding to save")
+                print(f"[DEBUG] vendor_bill_verify_view - Validated data: {serializer.validated_data}")
+
+                # Check vendor in validated data
+                vendor_in_validated = serializer.validated_data.get('vendor')
+                if vendor_in_validated:
+                    print(f"[DEBUG] vendor_bill_verify_view - Vendor in validated_data: {vendor_in_validated} (Type: {type(vendor_in_validated)})")
+                else:
+                    print(f"[DEBUG] vendor_bill_verify_view - No vendor in validated_data")
+
+                # Save the serializer
                 updated_bill = serializer.save()
-                print(updated_bill)
+                print(f"[DEBUG] vendor_bill_verify_view - Serializer saved successfully")
+                print(f"[DEBUG] vendor_bill_verify_view - Updated bill ID: {updated_bill.id}")
+                print(f"[DEBUG] vendor_bill_verify_view - Updated bill vendor after save: {updated_bill.vendor}")
+
+                if updated_bill.vendor:
+                    print(f"[DEBUG] vendor_bill_verify_view - Vendor saved successfully: ID={updated_bill.vendor.id}, Name={updated_bill.vendor.vendor_name}")
+                else:
+                    print(f"[DEBUG] vendor_bill_verify_view - WARNING: No vendor assigned after save!")
+                    # Let's check if vendor data was in the original payload
+                    if 'vendor' in zoho_bill_data:
+                        print(f"[DEBUG] vendor_bill_verify_view - ERROR: Vendor was in payload but not saved: {zoho_bill_data['vendor']}")
+
+                print(f"[DEBUG] vendor_bill_verify_view - Complete updated bill: {updated_bill}")
                 # Handle products update if provided
                 products_data = zoho_bill_data.get('products')
                 if products_data is not None:
@@ -869,15 +915,37 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                         logger.info(f"Deleted {len(products_to_delete)} products not in update")
 
                 # Update bill status
+                print(f"[DEBUG] vendor_bill_verify_view - Updating bill status from '{bill.status}' to 'Verified'")
                 bill.status = 'Verified'
                 bill.save()
+                print(f"[DEBUG] vendor_bill_verify_view - Bill status updated successfully to '{bill.status}'")
 
-                return Response(VendorZohoBillSerializer(updated_bill).data)
+                # Final verification of vendor data in response
+                response_data = VendorZohoBillSerializer(updated_bill).data
+                print(f"[DEBUG] vendor_bill_verify_view - Response vendor data: {response_data.get('vendor')}")
+                print(f"[DEBUG] vendor_bill_verify_view - Verification process completed successfully")
 
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                return Response(response_data)
+
+            else:
+                print(f"[DEBUG] vendor_bill_verify_view - Serializer validation FAILED")
+                print(f"[DEBUG] vendor_bill_verify_view - Serializer errors: {serializer.errors}")
+
+                # Check if vendor-related errors exist
+                if 'vendor' in serializer.errors:
+                    print(f"[DEBUG] vendor_bill_verify_view - Vendor-specific errors: {serializer.errors['vendor']}")
+
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     except VendorBill.DoesNotExist:
+        print(f"[DEBUG] vendor_bill_verify_view - ERROR: VendorBill not found with ID: {payload_bill_id}, org: {organization.id if organization else 'None'}")
         return Response({"detail": "Vendor bill not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        print(f"[DEBUG] vendor_bill_verify_view - UNEXPECTED ERROR: {str(e)}")
+        print(f"[DEBUG] vendor_bill_verify_view - Error type: {type(e).__name__}")
+        import traceback
+        print(f"[DEBUG] vendor_bill_verify_view - Traceback: {traceback.format_exc()}")
+        raise
 
 
 @extend_schema(
