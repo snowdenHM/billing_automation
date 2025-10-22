@@ -1065,9 +1065,9 @@ def expense_bill_verify(request, org_id):
             status=status.HTTP_404_NOT_FOUND
         )
 
-    if bill.status != TallyExpenseBill.BillStatus.ANALYSED:
+    if bill.status not in [TallyVendorBill.BillStatus.ANALYSED, TallyVendorBill.BillStatus.VERIFIED]:
         return Response(
-            {'error': 'Bill is not in analyzed status'},
+            {"detail": "Bill must be in 'Analysed' or 'Verified' status to save"},
             status=status.HTTP_400_BAD_REQUEST
         )
 

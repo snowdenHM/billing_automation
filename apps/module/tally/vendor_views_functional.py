@@ -1139,8 +1139,11 @@ def vendor_bill_verify(request, org_id):
         return Response({'error': 'analyzed_bill does not belong to the provided bill_id'},
                         status=status.HTTP_400_BAD_REQUEST)
 
-    if bill.status != TallyVendorBill.BillStatus.ANALYSED:
-        return Response({'error': 'Bill is not in analyzed status'}, status=status.HTTP_400_BAD_REQUEST)
+    if bill.status not in [TallyVendorBill.BillStatus.ANALYSED, TallyVendorBill.BillStatus.VERIFIED]:
+        return Response(
+            {"detail": "Bill must be in 'Analysed' or 'Verified' status to save"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
     try:
         verified_bill = update_analyzed_bill_data(analyzed_bill, analyzed_data, organization)

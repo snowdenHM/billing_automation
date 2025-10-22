@@ -130,7 +130,7 @@ class ZohoFunnelView(APIView):
                 'synced': vendor_bills.filter(status='Synced').count(),
             }
 
-            # Expense Bills Funnel
+            # Journal Bills Funnel
             expense_bills = JournalBill.objects.filter(organization=organization)
             expense_funnel = {
                 'total_uploaded': expense_bills.count(),
