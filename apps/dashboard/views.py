@@ -66,10 +66,10 @@ class ZohoOverviewView(APIView):
 
             # Financial Summary
             vendor_zoho_bills = VendorZohoBill.objects.filter(organization=organization)
-            expense_zoho_bills = ExpenseZohoBill.objects.filter(organization=organization)
+            journal_zoho_bills = JournalZohoBill.objects.filter(organization=organization)
 
             total_vendor_amount = sum(float(bill.total) for bill in vendor_zoho_bills if bill.total)
-            total_expense_amount = sum(float(bill.total) for bill in expense_zoho_bills if bill.total)
+            total_expense_amount = sum(float(bill.total) for bill in journal_zoho_bills if bill.total)
 
             # Vendor Statistics
             vendor_count = ZohoVendor.objects.filter(organization=organization).count()
