@@ -14,9 +14,9 @@ from .models import (
     VendorBill,
     VendorZohoBill,
     VendorZohoProduct,
-    ExpenseBill,
-    ExpenseZohoBill,
-    ExpenseZohoProduct,
+    JournalBill,
+    JournalZohoBill,
+    JournalZohoProduct,
 )
 
 # -----------------------------
@@ -191,16 +191,16 @@ class VendorZohoBillAdmin(BaseOrgScopedAdmin):
 # Expense Bills & Products
 # -----------------------------
 
-class ExpenseZohoProductInline(admin.TabularInline):
-    model = ExpenseZohoProduct
+class JournalZohoProductInline(admin.TabularInline):
+    model = JournalZohoProduct
     extra = 0
     autocomplete_fields = ("chart_of_accounts", "vendor")
     fields = ("item_details", "chart_of_accounts", "vendor", "amount", "debit_or_credit", "created_at")
     readonly_fields = ("created_at",)
 
 
-@admin.register(ExpenseBill)
-class ExpenseBillAdmin(BaseOrgScopedAdmin):
+@admin.register(JournalBill)
+class JournalBillAdmin(BaseOrgScopedAdmin):
     list_display = ["billmunshiName", "fileType", "status", "process", "uploaded_by", "organization", "created_at"]
     list_filter = ["status", "fileType", "process", "uploaded_by", "organization", "created_at"]
     search_fields = ["billmunshiName", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
@@ -226,13 +226,13 @@ class ExpenseBillAdmin(BaseOrgScopedAdmin):
         return "-"
 
 
-@admin.register(ExpenseZohoBill)
-class ExpenseZohoBillAdmin(BaseOrgScopedAdmin):
+@admin.register(JournalZohoBill)
+class JournalZohoBill(BaseOrgScopedAdmin):
     list_display = ["bill_no", "vendor", "bill_date", "total", "organization"]
     list_filter = ["bill_date", "organization", "vendor"]
     search_fields = ["bill_no", "vendor__companyName"]
     readonly_fields = ("created_at",)
-    inlines = [ExpenseZohoProductInline]
+    inlines = [JournalZohoProductInline]
     autocomplete_fields = ("organization", "vendor", "selectBill")
 
     @admin.display(description="Selected Bill")
@@ -275,8 +275,8 @@ class VendorZohoProductAdmin(BaseOrgScopedAdmin):
     autocomplete_fields = ("organization", "zohoBill", "chart_of_accounts", "taxes")
 
 
-@admin.register(ExpenseZohoProduct)
-class ExpenseZohoProductAdmin(BaseOrgScopedAdmin):
+@admin.register(JournalZohoProduct)
+class JournalZohoProductAdmin(BaseOrgScopedAdmin):
     list_display = (
         "organization",
         "zohoBill",

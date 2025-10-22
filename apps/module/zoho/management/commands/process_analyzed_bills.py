@@ -11,9 +11,9 @@ from apps.module.zoho.models import (
     VendorBill,
     VendorZohoBill,
     VendorZohoProduct,
-    ExpenseBill,
-    ExpenseZohoBill,
-    ExpenseZohoProduct,
+    JournalBill,
+    JournalZohoBill,
+    JournalZohoProduct,
     ZohoCredentials,
     ZohoVendor,
     ZohoChartOfAccount,
@@ -187,7 +187,7 @@ class Command(BaseCommand):
         self.stdout.write(f'\n  💰 Processing Expense Bills...')
 
         # Get analyzed expense bills
-        queryset = ExpenseBill.objects.filter(
+        queryset = JournalBill.objects.filter(
             organization=organization,
             status='Analysed',
             updated_at__gte=cutoff_date
@@ -210,16 +210,16 @@ class Command(BaseCommand):
                     continue
 
                 with transaction.atomic():
-                    # Check if ExpenseZohoBill already exists
+                    # Check if JournalZohoBill already exists
                     try:
-                        zoho_bill = ExpenseZohoBill.objects.get(
+                        zoho_bill = JournalZohoBill.objects.get(
                             selectBill=bill,
                             organization=organization
                         )
                         self.stdout.write(f'    ✓ Expense bill {bill.id} already has Zoho data')
                         processed += 1
                         continue
-                    except ExpenseZohoBill.DoesNotExist:
+                    except JournalZohoBill.DoesNotExist:
                         pass
 
                     # Process analyzed data if available
@@ -328,7 +328,7 @@ class Command(BaseCommand):
         return zoho_bill
 
     def create_expense_zoho_objects(self, bill, analyzed_data, organization):
-        """Create ExpenseZohoBill and ExpenseZohoProduct objects from analyzed data."""
+        """Create JournalZohoBill and JournalZohoProduct objects from analyzed data."""
 
         # Process analyzed data based on schema format
         if "properties" in analyzed_data:
@@ -376,8 +376,8 @@ class Command(BaseCommand):
             except (ValueError, TypeError):
                 return default
 
-        # Create ExpenseZohoBill
-        zoho_bill = ExpenseZohoBill.objects.create(
+        # Create JournalZohoBill
+        zoho_bill = JournalZohoBill.objects.create(
             selectBill=bill,
             organization=organization,
             vendor=vendor,
@@ -390,14 +390,14 @@ class Command(BaseCommand):
             note=f"Processed by command for {company_name or 'Unknown Vendor'}"
         )
 
-        # Create ExpenseZohoProduct objects
+        # Create JournalZohoProduct objects
         items = relevant_data.get('items', [])
         for idx, item in enumerate(items):
             try:
                 amount = item.get('price', 0) * item.get('quantity', 1)
 
-                ExpenseZohoProduct.objects.create(
-                    expenseZohoBill=zoho_bill,
+                JournalZohoProduct.objects.create(
+                    JournalZohoBill=zoho_bill,
                     organization=organization,
                     item_details=item.get('description', f'Item {idx + 1}')[:200],
                     amount=safe_numeric_string(amount)

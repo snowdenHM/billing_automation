@@ -3,12 +3,11 @@
 import os
 import re
 import uuid
-from django.db import models
-from django.db.models import Max
-from django.core.exceptions import ValidationError
-from django.utils import timezone
-from django.contrib.auth.models import User
+
 from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.db import models
+from django.utils import timezone
 
 from apps.organizations.models import Organization
 
@@ -256,7 +255,8 @@ class VendorBill(BaseTeamModel):
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     billmunshiName = models.CharField(max_length=100, null=True, blank=True)
     file = models.FileField(upload_to="bills/", validators=[validate_file_extension])
-    fileType = models.CharField(choices=BILL_TYPE_CHOICES, max_length=100, null=True, blank=True, default="Single Invoice/File")
+    fileType = models.CharField(choices=BILL_TYPE_CHOICES, max_length=100, null=True, blank=True,
+                                default="Single Invoice/File")
     analysed_data = models.JSONField(default=dict, null=True, blank=True)
     status = models.CharField(max_length=10, choices=BILL_STATUS_CHOICES, default="Draft", blank=True)
     process = models.BooleanField(default=False)
@@ -280,12 +280,12 @@ class VendorBill(BaseTeamModel):
     def save(self, *args, **kwargs):
         if not self.billmunshiName and self.file:
             print(f"[MODEL DEBUG] Generating billmunshiName for VendorBill with file: {self.file.name}")
-            
+
             from datetime import date
             today = date.today()
             date_prefix = today.strftime("%Y%m%d")
             bill_prefix = f"{date_prefix}ZB"
-            
+
             # Get all existing bills with today's date prefix for this organization
             existing_bills = VendorBill.objects.filter(
                 organization=self.organization,
@@ -309,7 +309,7 @@ class VendorBill(BaseTeamModel):
             print(f"[MODEL DEBUG] Generated billmunshiName: {self.billmunshiName}")
 
         super().save(*args, **kwargs)
-        
+
         # Log successful save
         import logging
         logger = logging.getLogger(__name__)
@@ -322,6 +322,7 @@ class VendorZohoBill(BaseTeamModel):
     Links to the original VendorBill and contains tax information and vendor details.
     """
     TAX_TYPE_CHOICES = (
+        ("NOT_APPLICABLE", "Not Applicable"),
         ("TCS", "is_tcs_tax"),
         ("TDS", "is_tds_tax"),
     )
@@ -387,7 +388,154 @@ class VendorZohoProduct(BaseTeamModel):
 
 
 # ===============================
-#         Expense Bills
+#         Journal Bills
+# ===============================
+
+class JournalBill(BaseTeamModel):
+    """
+    Represents an expense bill/invoice that has been uploaded to the system.
+    Similar to VendorBill but specifically for expense transactions.
+    Tracks the bill file, analysis status, and processing state.
+    """
+    BILL_STATUS_CHOICES = (
+        ("Draft", "Draft"),
+        ("Analysed", "Analysed"),
+        ("Verified", "Verified"),
+        ("Synced", "Synced"),
+    )
+    BILL_TYPE_CHOICES = (
+        ("Single Invoice/File", "Single Invoice/File"),
+        ("Multiple Invoice/File", "Multiple Invoice/File"),
+    )
+
+    id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
+    billmunshiName = models.CharField(max_length=100, null=True, blank=True)
+    file = models.FileField(upload_to="bills/", validators=[validate_file_extension])
+    fileType = models.CharField(choices=BILL_TYPE_CHOICES, max_length=100, null=True, blank=True,
+                                default="Single Invoice/File")
+    analysed_data = models.JSONField(default=dict, null=True, blank=True)
+    status = models.CharField(max_length=10, choices=BILL_STATUS_CHOICES, default="Draft", blank=True)
+    process = models.BooleanField(default=False)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="uploaded_journal_bills"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    update_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Journal Bill"
+        verbose_name_plural = "Journal Bills"
+
+    def __str__(self):
+        return self.billmunshiName or f"JournalBill:{self.id}"
+
+    def save(self, *args, **kwargs):
+        if not self.billmunshiName and self.file:
+            print(f"[MODEL DEBUG] Generating billmunshiName for JournalBill with file: {self.file.name}")
+
+            from datetime import date
+            today = date.today()
+            date_prefix = today.strftime("%Y%m%d")
+            bill_prefix = f"{date_prefix}ZJ"
+
+            # Get all existing bills with today's date prefix for this organization
+            existing_bills = JournalBill.objects.filter(
+                organization=self.organization,
+                billmunshiName__startswith=bill_prefix
+            ).values_list('billmunshiName', flat=True)
+
+            print(f"[MODEL DEBUG] Found {len(existing_bills)} existing bills with prefix {bill_prefix}")
+
+            # Extract numbers and find the maximum for today
+            max_num = 0
+            pattern = rf"{re.escape(bill_prefix)}(\d+)$"
+            for bill_name in existing_bills:
+                if bill_name:
+                    m = re.match(pattern, bill_name)
+                    if m:
+                        num = int(m.group(1))
+                        max_num = max(max_num, num)
+
+            next_num = max_num + 1
+            self.billmunshiName = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
+            print(f"[MODEL DEBUG] Generated billmunshiName: {self.billmunshiName}")
+
+        super().save(*args, **kwargs)
+
+        # Log successful save
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Successfully saved JournalBill: {self.billmunshiName} (ID: {self.id})")
+
+
+class JournalZohoBill(BaseTeamModel):
+    """
+    Represents an analyzed expense bill with extracted data ready for Zoho Books.
+    Links to the original JournalBill and contains tax information and vendor details.
+    """
+    id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
+    selectBill = models.ForeignKey("JournalBill", on_delete=models.CASCADE, null=True, blank=True)
+    vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
+    bill_no = models.CharField(max_length=50, null=True, blank=True)
+    bill_date = models.DateField(null=True, blank=True)
+    total = models.CharField(max_length=50, null=True, blank=True, default=0)
+    igst = models.CharField(max_length=50, null=True, blank=True, default=0)
+    cgst = models.CharField(max_length=50, null=True, blank=True, default=0)
+    sgst = models.CharField(max_length=50, null=True, blank=True, default=0)
+    note = models.CharField(max_length=100, null=True, blank=True, default="Enter Your Description")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Analysed Journal Bill"
+        verbose_name_plural = "Analysed Journal Bills"
+
+    def __str__(self):
+        return (
+            self.selectBill.billmunshiName
+            if self.selectBill and self.selectBill.billmunshiName
+            else f"JournalZohoBill:{self.id}"
+        )
+
+
+class JournalZohoProduct(BaseTeamModel):
+    """
+    Represents a product line item for an expense bill.
+    Contains details about the expense including the chart of accounts, amount,
+    and whether it's a debit or credit entry.
+    """
+    TRANSACTION_TYPE_CHOICES = (
+        ("credit", "Credit"),
+        ("debit", "Debit"),
+    )
+
+    id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
+    zohoBill = models.ForeignKey("JournalZohoBill", on_delete=models.CASCADE, related_name="products")
+    item_details = models.CharField(max_length=2000, null=True, blank=True)
+    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
+    vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
+    amount = models.CharField(max_length=50, null=True, blank=True)
+    debit_or_credit = models.CharField(choices=TRANSACTION_TYPE_CHOICES, max_length=10, null=True, blank=True,
+                                       default="credit")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Journal Analysed Bill Product"
+        verbose_name_plural = "Journal Analysed Bill Products"
+
+    def __str__(self):
+        return (
+            self.zohoBill.selectBill.billmunshiName
+            if self.zohoBill and self.zohoBill.selectBill and self.zohoBill.selectBill.billmunshiName
+            else f"JournalZohoProduct:{self.id}"
+        )
+
+
+# ===============================
+#         Expense Bills is new
 # ===============================
 
 class ExpenseBill(BaseTeamModel):
@@ -410,7 +558,8 @@ class ExpenseBill(BaseTeamModel):
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     billmunshiName = models.CharField(max_length=100, null=True, blank=True)
     file = models.FileField(upload_to="bills/", validators=[validate_file_extension])
-    fileType = models.CharField(choices=BILL_TYPE_CHOICES, max_length=100, null=True, blank=True, default="Single Invoice/File")
+    fileType = models.CharField(choices=BILL_TYPE_CHOICES, max_length=100, null=True, blank=True,
+                                default="Single Invoice/File")
     analysed_data = models.JSONField(default=dict, null=True, blank=True)
     status = models.CharField(max_length=10, choices=BILL_STATUS_CHOICES, default="Draft", blank=True)
     process = models.BooleanField(default=False)
@@ -434,12 +583,12 @@ class ExpenseBill(BaseTeamModel):
     def save(self, *args, **kwargs):
         if not self.billmunshiName and self.file:
             print(f"[MODEL DEBUG] Generating billmunshiName for ExpenseBill with file: {self.file.name}")
-            
+
             from datetime import date
             today = date.today()
             date_prefix = today.strftime("%Y%m%d")
             bill_prefix = f"{date_prefix}ZE"
-            
+
             # Get all existing bills with today's date prefix for this organization
             existing_bills = ExpenseBill.objects.filter(
                 organization=self.organization,
@@ -463,7 +612,7 @@ class ExpenseBill(BaseTeamModel):
             print(f"[MODEL DEBUG] Generated billmunshiName: {self.billmunshiName}")
 
         super().save(*args, **kwargs)
-        
+
         # Log successful save
         import logging
         logger = logging.getLogger(__name__)
@@ -495,7 +644,7 @@ class ExpenseZohoBill(BaseTeamModel):
         return (
             self.selectBill.billmunshiName
             if self.selectBill and self.selectBill.billmunshiName
-            else f"ExpenseZohoBill:{self.id}"
+            else f"JournalZohoBill:{self.id}"
         )
 
 
@@ -505,18 +654,26 @@ class ExpenseZohoProduct(BaseTeamModel):
     Contains details about the expense including the chart of accounts, amount,
     and whether it's a debit or credit entry.
     """
-    TRANSACTION_TYPE_CHOICES = (
-        ("credit", "Credit"),
-        ("debit", "Debit"),
+    ITC_ELIGIBILITY_CHOICES = (
+        ("eligible", "Eligible"),
+        ("ineligible_section17", "Ineligible Section17"),
+        ("ineligible_others", "Ineligible Others"),
     )
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     zohoBill = models.ForeignKey("ExpenseZohoBill", on_delete=models.CASCADE, related_name="products")
     item_details = models.CharField(max_length=2000, null=True, blank=True)
-    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
-    vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
     amount = models.CharField(max_length=50, null=True, blank=True)
-    debit_or_credit = models.CharField(choices=TRANSACTION_TYPE_CHOICES, max_length=10, null=True, blank=True, default="credit")
+    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
+    taxes = models.ForeignKey("ZohoTaxes", on_delete=models.CASCADE, null=True, blank=True)
+    reverse_charge_tax_id = models.BooleanField(default=False)
+    itc_eligibility = models.CharField(
+        choices=ITC_ELIGIBILITY_CHOICES,
+        max_length=100,
+        null=True,
+        blank=True,
+        default="eligible",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

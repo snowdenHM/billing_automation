@@ -11,7 +11,7 @@ from drf_spectacular.utils import extend_schema
 from apps.organizations.models import Organization
 from apps.module.zoho.models import (
     VendorBill, VendorZohoBill,
-    ExpenseBill, ExpenseZohoBill, ExpenseZohoProduct,
+    JournalBill, JournalZohoBill, JournalZohoProduct,
     ZohoVendor, ZohoCredentials
 )
 from apps.module.tally.models import (
@@ -56,7 +56,7 @@ class ZohoOverviewView(APIView):
             }
 
             # Expense Bills Statistics
-            expense_bills = ExpenseBill.objects.filter(organization=organization)
+            expense_bills = JournalBill.objects.filter(organization=organization)
             expense_bills_stats = {
                 'total_count': expense_bills.count(),
                 'draft_count': expense_bills.filter(status='Draft').count(),
@@ -131,7 +131,7 @@ class ZohoFunnelView(APIView):
             }
 
             # Expense Bills Funnel
-            expense_bills = ExpenseBill.objects.filter(organization=organization)
+            expense_bills = JournalBill.objects.filter(organization=organization)
             expense_funnel = {
                 'total_uploaded': expense_bills.count(),
                 'draft': expense_bills.filter(status='Draft').count(),
@@ -204,7 +204,7 @@ class ZohoUsageView(APIView):
                         organization=organization,
                         created_at__gte=start_date
                     ).count(),
-                    'expense_bills_uploaded': ExpenseBill.objects.filter(
+                    'expense_bills_uploaded': JournalBill.objects.filter(
                         organization=organization,
                         created_at__gte=start_date
                     ).count(),
@@ -214,7 +214,7 @@ class ZohoUsageView(APIView):
                             status__in=['Analysed', 'Verified', 'Synced'],
                             update_at__gte=start_date
                         ).count() +
-                        ExpenseBill.objects.filter(
+                        JournalBill.objects.filter(
                             organization=organization,
                             status__in=['Analysed', 'Verified', 'Synced'],
                             update_at__gte=start_date
@@ -226,7 +226,7 @@ class ZohoUsageView(APIView):
                             status='Synced',
                             update_at__gte=start_date
                         ).count() +
-                        ExpenseBill.objects.filter(
+                        JournalBill.objects.filter(
                             organization=organization,
                             status='Synced',
                             update_at__gte=start_date
@@ -239,7 +239,7 @@ class ZohoUsageView(APIView):
                 organization=organization,
                 file__isnull=False
             )
-            expense_bills_with_files = ExpenseBill.objects.filter(
+            expense_bills_with_files = JournalBill.objects.filter(
                 organization=organization,
                 file__isnull=False
             )
