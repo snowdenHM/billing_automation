@@ -549,7 +549,7 @@ def journal_bills_list_view(request, org_id):
     description="Upload single or multiple journal bill files (PDF, JPG, PNG). Supports both single file and multiple file uploads with PDF splitting for multiple invoices.",
     request=ZohoJournalBillMultipleUploadSerializer,
     responses={201: ZohoJournalBillSerializer(many=True)},
-    tags=["Zoho journal Bills"],
+    tags=["Zoho Journal Bills"],
     methods=["POST"]
 )
 @api_view(['POST'])
@@ -679,7 +679,7 @@ def journal_bill_upload_view(request, org_id):
 
 @extend_schema(
     responses=ZohoJournalBillDetailSerializer,
-    tags=["Zoho journal Bills"],
+    tags=["Zoho Journal Bills"],
     methods=["GET"]
 )
 @api_view(['GET'])
@@ -733,7 +733,7 @@ def journal_bill_detail_view(request, org_id, bill_id):
 # ✅
 @extend_schema(
     responses=AnalysisResponseSerializer,
-    tags=["Zoho journal Bills"],
+    tags=["Zoho Journal Bills"],
     methods=["POST"]
 )
 @api_view(['POST'])
@@ -795,7 +795,7 @@ def journal_bill_analyze_view(request, org_id, bill_id):
 @extend_schema(
     request=JournalZohoBillSerializer,
     responses=JournalZohoBillSerializer,
-    tags=["Zoho journal Bills"],
+    tags=["Zoho Journal Bills"],
     methods=["POST"]
 )
 @api_view(['POST'])
@@ -930,7 +930,7 @@ def journal_bill_verify_view(request, org_id, bill_id):
 
 @extend_schema(
     responses={"200": {"detail": "journal synced to Zoho successfully"}},
-    tags=["Zoho journal Bills"],
+    tags=["Zoho Journal Bills"],
     methods=["POST"]
 )
 @api_view(['POST'])
