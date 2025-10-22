@@ -79,6 +79,14 @@ class Ledger(BaseOrgModel):
     class Meta:
         verbose_name = "Ledger"
         verbose_name_plural = "Ledgers"
+        # Ensure master_id is unique per organization
+        constraints = [
+            models.UniqueConstraint(
+                fields=['master_id', 'organization'],
+                name='unique_master_id_per_organization',
+                condition=models.Q(master_id__isnull=False) & ~models.Q(master_id='')
+            )
+        ]
 
     def __str__(self) -> str:
         return self.name or "Ledger"

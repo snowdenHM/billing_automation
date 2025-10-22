@@ -585,9 +585,31 @@ class LedgerViewSet(viewsets.GenericViewSet):
                         opening_balance_str = str(ledger_entry.get('OpeningBalance', '0')).strip()
                         opening_balance = clean_decimal_value(opening_balance_str)
 
-                        # Create Ledger instance
+                        # Extract master_id for duplicate checking
+                        master_id = ledger_entry.get('Master_Id', '').strip()
+
+                        # Check for duplicate master_id within the same organization
+                        if master_id:
+                            existing_ledger = Ledger.objects.filter(
+                                master_id=master_id,
+                                organization=organization
+                            ).first()
+
+                            if existing_ledger:
+                                print(f"Skipping duplicate ledger: master_id '{master_id}' already exists for organization '{organization.name}' (existing ledger: '{existing_ledger.name}')")
+                                failed_ledgers.append({
+                                    'index': i+1,
+                                    'name': ledger_entry.get('Name', 'Unknown'),
+                                    'master_id': master_id,
+                                    'error': f'Duplicate master_id: {master_id} already exists for organization {organization.name}',
+                                    'existing_ledger': existing_ledger.name,
+                                    'data': ledger_entry
+                                })
+                                continue  # Skip creating this ledger and move to next
+
+                        # Create Ledger instance (only if no duplicate found)
                         ledger_instance = Ledger.objects.create(
-                            master_id=ledger_entry.get('Master_Id', ''),
+                            master_id=master_id,
                             alter_id=ledger_entry.get('Alter_id', '') or ledger_entry.get('Alter_Id', ''),  # Handle both cases
                             name=ledger_entry.get('Name', ''),
                             parent=parent_ledger,
