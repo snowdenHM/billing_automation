@@ -22,6 +22,26 @@ from .vendor_views import (
     vendor_bill_sync_view as vendor_bill_sync_main,
     vendor_bill_delete_view,
 )
+
+# Debug wrapper for vendor_bill_verify_view to catch URL routing issues
+def debug_vendor_bill_verify_main(request, org_id, bill_id):
+    import sys
+    debug_msg = f"[URL_DEBUG] vendor_bill_verify URL matched! org_id={org_id}, bill_id={bill_id}"
+    print(debug_msg)
+    sys.stdout.write(debug_msg + "\n")
+    sys.stdout.flush()
+
+    debug_msg2 = f"[URL_DEBUG] Request method: {request.method}, path: {request.path}"
+    print(debug_msg2)
+    sys.stdout.write(debug_msg2 + "\n")
+    sys.stdout.flush()
+
+    # Also use Django's logger
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.error(f"URL_DEBUG: vendor_bill_verify called with org_id={org_id}, bill_id={bill_id}")
+
+    return vendor_bill_verify_main(request, org_id, bill_id)
 # Import Zoho settings and sync views from main views.py
 from .views import (
     # Zoho Settings/Credentials
@@ -70,7 +90,7 @@ urlpatterns = [
         path('vendor-bills/upload/', vendor_bill_upload_view, name='vendor_bills_upload'),
         path('vendor-bills/<str:bill_id>/details/', vendor_bill_detail_main, name='vendor_bill_detail'),
         path('vendor-bills/<str:bill_id>/analyze/', vendor_bill_analyze_main, name='vendor_bill_analyze'),
-        path('vendor-bills/<str:bill_id>/verify/', vendor_bill_verify_main, name='vendor_bill_verify'),
+        path('vendor-bills/<str:bill_id>/verify/', debug_vendor_bill_verify_main, name='vendor_bill_verify'),
         path('vendor-bills/<str:bill_id>/sync/', vendor_bill_sync_main, name='vendor_bill_sync'),
         path('vendor-bills/<str:bill_id>/delete/', vendor_bill_delete_view, name='vendor_bill_delete'),
 
