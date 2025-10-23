@@ -414,6 +414,8 @@ def create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
                     zohoBill=zoho_bill,
                     organization=organization,
                     item_details=item.get('description', f'Item {idx + 1}')[:200],
+                    quantity=item.get('quantity', 1),
+                    rate=item.get('price', 0),
                     amount=safe_numeric_string(amount)
                 )
                 created_products.append(product)
@@ -712,9 +714,9 @@ def expense_bill_detail_view(request, org_id, bill_id):
 
         # Get the related ExpenseZohoBill if it exists
         try:
-            zoho_bill = ExpenseZohoBill.objects.select_related('expense_bill').prefetch_related(
+            zoho_bill = ExpenseZohoBill.objects.select_related('selectBill').prefetch_related(
                 'products'
-            ).get(expense_bill=bill, organization=organization)
+            ).get(selectBill=bill, organization=organization)
 
             # Attach zoho_bill to the bill object for the serializer
             bill.zoho_bill = zoho_bill

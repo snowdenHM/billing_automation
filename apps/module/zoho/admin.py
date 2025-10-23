@@ -268,31 +268,32 @@ class ExpenseZohoProductInline(admin.TabularInline):
     model = ExpenseZohoProduct
     extra = 0
     fields = (
-        "name",
-        "description",
-        "rate",
-        "quantity",
+        "item_details",
         "amount",
+        "chart_of_accounts",
+        "taxes",
         "created_at",
-        "updated_at",
     )
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = ("created_at",)
 
 
 @admin.register(ExpenseBill)
 class ExpenseBillAdmin(BaseOrgScopedAdmin):
-    list_display = ["id", "status", "uploaded_by", "organization", "created_at"]
-    list_filter = ["status", "uploaded_by", "organization", "created_at"]
-    search_fields = ["id", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
-    readonly_fields = ["analysed_data", "created_at", "updated_at"]
+    list_display = ["billmunshiName", "status", "fileType", "uploaded_by", "organization", "created_at"]
+    list_filter = ["status", "fileType", "uploaded_by", "organization", "created_at"]
+    search_fields = ["billmunshiName", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
+    readonly_fields = ["billmunshiName", "analysed_data", "created_at", "update_at"]
     fields = (
         "organization",
+        "billmunshiName",
         "file",
+        "fileType",
         "analysed_data",
         "status",
+        "process",
         "uploaded_by",
         "created_at",
-        "updated_at",
+        "update_at",
     )
     autocomplete_fields = ("organization", "uploaded_by")
 
@@ -307,23 +308,25 @@ class ExpenseBillAdmin(BaseOrgScopedAdmin):
 class ExpenseZohoBillAdmin(BaseOrgScopedAdmin):
     list_display = [
         "id",
-        "vendor_name",
-        "bill_number",
+        "selectBill_link",
+        "vendor",
+        "bill_no",
         "bill_date",
         "total",
         "organization",
     ]
     list_filter = ["bill_date", "organization", "created_at"]
-    search_fields = ["vendor_name", "bill_number"]
-    readonly_fields = ("created_at", "updated_at")
+    search_fields = ["bill_no", "vendor__companyName", "selectBill__billmunshiName"]
+    readonly_fields = ("created_at",)
     inlines = [ExpenseZohoProductInline]
-    autocomplete_fields = ("organization", "expense_bill")
+    autocomplete_fields = ("organization", "selectBill", "vendor")
 
     @admin.display(description="Expense Bill")
-    def expense_bill_link(self, obj):
-        if obj.expense_bill_id:
-            url = admin_change_url_for_instance(obj.expense_bill)
-            return mark_safe(f'<a href="{url}">{obj.expense_bill_id}</a>')
+    def selectBill_link(self, obj):
+        if obj.selectBill_id:
+            url = admin_change_url_for_instance(obj.selectBill)
+            label = obj.selectBill.billmunshiName or str(obj.selectBill_id)
+            return mark_safe(f'<a href="{url}">{label}</a>')
         return "-"
 
 
@@ -331,20 +334,25 @@ class ExpenseZohoBillAdmin(BaseOrgScopedAdmin):
 class ExpenseZohoProductAdmin(BaseOrgScopedAdmin):
     list_display = (
         "organization",
-        "expense_bill",
-        "name",
-        "rate",
-        "quantity",
+        "zohoBill_link",
+        "item_details",
         "amount",
         "created_at",
     )
     search_fields = (
-        "name",
-        "description",
-        "expense_bill__vendor_name",
-        "expense_bill__bill_number",
+        "item_details",
+        "zohoBill__bill_no",
+        "zohoBill__selectBill__billmunshiName",
         "organization__name",
     )
     list_filter = ("organization", "created_at")
-    readonly_fields = ("created_at", "updated_at")
-    autocomplete_fields = ("organization", "expense_bill")
+    readonly_fields = ("created_at",)
+    autocomplete_fields = ("organization", "zohoBill", "chart_of_accounts", "taxes")
+
+    @admin.display(description="Zoho Bill")
+    def zohoBill_link(self, obj):
+        if obj.zohoBill_id:
+            url = admin_change_url_for_instance(obj.zohoBill)
+            label = obj.zohoBill.bill_no or str(obj.zohoBill_id)
+            return mark_safe(f'<a href="{url}">{label}</a>')
+        return "-"
