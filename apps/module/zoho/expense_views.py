@@ -929,6 +929,34 @@ def expense_bill_verify_view(request, org_id, bill_id):
 
                         product_id = product_data.get('id')
 
+                        # Validate chart_of_accounts for this product
+                        product_chart_id = product_data.get('chart_of_accounts')
+                        if product_chart_id:
+                            try:
+                                from .models import ZohoChartOfAccount
+                                product_chart = ZohoChartOfAccount.objects.get(id=product_chart_id, organization=organization)
+                                logger.info(f"[DEBUG] expense_bill_verify_view - Product chart of accounts validated: {product_chart.accountName}")
+                            except ZohoChartOfAccount.DoesNotExist:
+                                logger.error(f"[DEBUG] expense_bill_verify_view - ERROR: Product chart of accounts {product_chart_id} does not exist")
+                                return Response(
+                                    {"detail": f"Chart of Account with ID {product_chart_id} does not exist in this organization. Please sync chart of accounts from Zoho first."},
+                                    status=status.HTTP_400_BAD_REQUEST
+                                )
+
+                        # Validate taxes for this product
+                        product_tax_id = product_data.get('taxes')
+                        if product_tax_id:
+                            try:
+                                from .models import ZohoTaxes
+                                product_tax = ZohoTaxes.objects.get(id=product_tax_id, organization=organization)
+                                logger.info(f"[DEBUG] expense_bill_verify_view - Product tax validated: {product_tax.taxName}")
+                            except ZohoTaxes.DoesNotExist:
+                                logger.error(f"[DEBUG] expense_bill_verify_view - ERROR: Product tax {product_tax_id} does not exist")
+                                return Response(
+                                    {"detail": f"Tax with ID {product_tax_id} does not exist in this organization. Please sync taxes from Zoho first."},
+                                    status=status.HTTP_400_BAD_REQUEST
+                                )
+
                         # Prepare product data for creation/update - Updated for simplified model
                         product_fields = {
                             'item_details': product_data.get('item_details'),
@@ -999,6 +1027,21 @@ def expense_bill_verify_view(request, org_id, bill_id):
                             "detail": f"Vendor with ID {vendor_id} does not exist in the database. Please sync vendors from Zoho Books first or select a different vendor.",
                             "vendor_id": vendor_id,
                             "error_type": "vendor_not_found"
+                        }
+                        return Response(custom_error, status=status.HTTP_400_BAD_REQUEST)
+
+                # Check if chart_of_accounts-related errors exist and provide helpful message
+                if 'chart_of_accounts' in serializer.errors:
+                    logger.error(f"[DEBUG] expense_bill_verify_view - Chart of Accounts-specific errors: {serializer.errors['chart_of_accounts']}")
+                    chart_error_detail = serializer.errors['chart_of_accounts'][0] if serializer.errors['chart_of_accounts'] else 'Unknown chart of accounts error'
+
+                    # Check if it's a "does not exist" error
+                    if 'does not exist' in str(chart_error_detail):
+                        chart_id = zoho_bill_data.get('chart_of_accounts', 'Unknown')
+                        custom_error = {
+                            "detail": f"Chart of Account with ID {chart_id} does not exist in the database. Please sync chart of accounts from Zoho Books first or select a different account.",
+                            "chart_of_accounts_id": chart_id,
+                            "error_type": "chart_of_accounts_not_found"
                         }
                         return Response(custom_error, status=status.HTTP_400_BAD_REQUEST)
 

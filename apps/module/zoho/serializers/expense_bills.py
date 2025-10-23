@@ -95,11 +95,12 @@ class ExpenseZohoBillSerializer(serializers.ModelSerializer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Scope vendor queryset to organization if context is provided
+        # Scope vendor and chart_of_accounts querysets to organization if context is provided
         if 'context' in kwargs and 'organization' in kwargs['context']:
             organization = kwargs['context']['organization']
-            from ..models import ZohoVendor
+            from ..models import ZohoVendor, ZohoChartOfAccount
             self.fields['vendor'].queryset = ZohoVendor.objects.filter(organization=organization)
+            self.fields['chart_of_accounts'].queryset = ZohoChartOfAccount.objects.filter(organization=organization)
 
 
 class ZohoExpenseBillSerializer(serializers.ModelSerializer):
@@ -266,6 +267,14 @@ class ZohoExpenseVerifyProductItemSerializer(serializers.Serializer):
     item_details = serializers.CharField(required=False, allow_blank=True)
     amount = serializers.CharField(required=False, allow_blank=True)
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope querysets to organization if context is provided
+        organization = self.context.get('organization') if hasattr(self, 'context') else None
+        if organization:
+            self.fields['chart_of_accounts'].queryset = ZohoChartOfAccount.objects.filter(organization=organization)
+            self.fields['taxes'].queryset = ZohoTaxes.objects.filter(organization=organization)
+
 
 class ZohoExpenseBillVerifySerializer(serializers.Serializer):
     """Verification payload for the analysed Expense bill header + products"""
@@ -281,6 +290,13 @@ class ZohoExpenseBillVerifySerializer(serializers.Serializer):
     igst = serializers.CharField(required=False, allow_blank=True)
     total = serializers.CharField(required=False, allow_blank=True)
     products = ZohoExpenseVerifyProductItemSerializer(many=True, required=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope vendor queryset to organization if context is provided
+        organization = self.context.get('organization') if hasattr(self, 'context') else None
+        if organization:
+            self.fields['vendor'].queryset = ZohoVendor.objects.filter(organization=organization)
 
     class Meta:
         ref_name = "ZohoExpenseBillVerify"
