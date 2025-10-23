@@ -1,8 +1,8 @@
 from __future__ import annotations
-from rest_framework import serializers
-from django.contrib.auth.models import User
 
-from apps.organizations.models import Organization
+from django.contrib.auth.models import User
+from rest_framework import serializers
+
 from apps.module.zoho.models import (
     ExpenseBill,
     ExpenseZohoBill,
@@ -10,6 +10,7 @@ from apps.module.zoho.models import (
     ZohoVendor,
     ZohoChartOfAccount,
 )
+from apps.organizations.models import Organization
 
 
 class FileUploadField(serializers.FileField):
@@ -63,8 +64,8 @@ class ExpenseZohoProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExpenseZohoProduct
         fields = [
-            "id", "zohoBill", "item_details", "chart_of_accounts",
-             "amount", "debit_or_credit", "created_at"
+            "id", "zohoBill", "item_details", "amount", "chart_of_accounts", "taxes"
+            , "reverse_charge_tax_id", "itc_eligibility", "created_at"
         ]
         read_only_fields = ["id", "zohoBill", "created_at"]
 
