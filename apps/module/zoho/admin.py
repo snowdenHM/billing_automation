@@ -17,6 +17,9 @@ from .models import (
     JournalBill,
     JournalZohoBill,
     JournalZohoProduct,
+    ExpenseBill,
+    ExpenseZohoBill,
+    ExpenseZohoProduct,
 )
 
 # -----------------------------
@@ -114,6 +117,76 @@ class ZohoTDSTCSAdmin(BaseOrgScopedAdmin):
 
 
 # -----------------------------
+# Journal Bills & Products
+# -----------------------------
+
+class JournalZohoProductInline(admin.TabularInline):
+    model = JournalZohoProduct
+    extra = 0
+    autocomplete_fields = ("chart_of_accounts", "vendor")
+    fields = (
+        "item_details",
+        "chart_of_accounts",
+        "vendor",
+        "amount",
+        "debit_or_credit",
+        "created_at",
+    )
+    readonly_fields = ("created_at",)
+
+
+@admin.register(JournalBill)
+class JournalBillAdmin(BaseOrgScopedAdmin):
+    list_display = ["billmunshiName", "fileType", "status", "process", "uploaded_by", "organization", "created_at"]
+    list_filter = ["status", "fileType", "process", "uploaded_by", "organization", "created_at"]
+    search_fields = ["billmunshiName", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
+    readonly_fields = ["analysed_data", "created_at", "update_at"]
+    fields = (
+        "organization",
+        "billmunshiName",
+        "file",
+        "fileType",
+        "analysed_data",
+        "status",
+        "process",
+        "uploaded_by",
+        "created_at",
+        "update_at",
+    )
+    autocomplete_fields = ("organization", "uploaded_by")
+
+    @admin.display(description="File", ordering="file")
+    def file_link(self, obj):
+        if obj.file:
+            return format_html('<a href="{}" target="_blank">Open</a>', obj.file.url)
+        return "-"
+
+
+@admin.register(JournalZohoBill)
+class JournalZohoBillAdmin(BaseOrgScopedAdmin):
+    list_display = [
+        "bill_no",
+        "vendor",
+        "bill_date",
+        "total",
+        "organization",
+    ]
+    list_filter = ["bill_date", "organization", "vendor"]
+    search_fields = ["bill_no", "vendor__companyName"]
+    readonly_fields = ("created_at",)
+    inlines = [JournalZohoProductInline]
+    autocomplete_fields = ("organization", "vendor", "selectBill")
+
+    @admin.display(description="Selected Bill")
+    def selectBill_link(self, obj):
+        if obj.selectBill_id:
+            url = admin_change_url_for_instance(obj.selectBill)
+            label = obj.selectBill.billmunshiName or str(obj.selectBill_id)
+            return mark_safe(f'<a href="{url}">{label}</a>')
+        return "-"
+
+
+# -----------------------------
 # Vendor Bills & Products
 # -----------------------------
 
@@ -191,31 +264,35 @@ class VendorZohoBillAdmin(BaseOrgScopedAdmin):
 # Expense Bills & Products
 # -----------------------------
 
-class JournalZohoProductInline(admin.TabularInline):
-    model = JournalZohoProduct
+class ExpenseZohoProductInline(admin.TabularInline):
+    model = ExpenseZohoProduct
     extra = 0
-    autocomplete_fields = ("chart_of_accounts", "vendor")
-    fields = ("item_details", "chart_of_accounts", "vendor", "amount", "debit_or_credit", "created_at")
-    readonly_fields = ("created_at",)
+    fields = (
+        "name",
+        "description",
+        "rate",
+        "quantity",
+        "amount",
+        "created_at",
+        "updated_at",
+    )
+    readonly_fields = ("created_at", "updated_at")
 
 
-@admin.register(JournalBill)
-class JournalBillAdmin(BaseOrgScopedAdmin):
-    list_display = ["billmunshiName", "fileType", "status", "process", "uploaded_by", "organization", "created_at"]
-    list_filter = ["status", "fileType", "process", "uploaded_by", "organization", "created_at"]
-    search_fields = ["billmunshiName", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
-    readonly_fields = ["analysed_data", "created_at", "update_at"]
+@admin.register(ExpenseBill)
+class ExpenseBillAdmin(BaseOrgScopedAdmin):
+    list_display = ["id", "status", "uploaded_by", "organization", "created_at"]
+    list_filter = ["status", "uploaded_by", "organization", "created_at"]
+    search_fields = ["id", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
+    readonly_fields = ["analysed_data", "created_at", "updated_at"]
     fields = (
         "organization",
-        "billmunshiName",
         "file",
-        "fileType",
         "analysed_data",
         "status",
-        "process",
         "uploaded_by",
         "created_at",
-        "update_at",
+        "updated_at",
     )
     autocomplete_fields = ("organization", "uploaded_by")
 
@@ -226,74 +303,48 @@ class JournalBillAdmin(BaseOrgScopedAdmin):
         return "-"
 
 
-@admin.register(JournalZohoBill)
-class JournalZohoBill(BaseOrgScopedAdmin):
-    list_display = ["bill_no", "vendor", "bill_date", "total", "organization"]
-    list_filter = ["bill_date", "organization", "vendor"]
-    search_fields = ["bill_no", "vendor__companyName"]
-    readonly_fields = ("created_at",)
-    inlines = [JournalZohoProductInline]
-    autocomplete_fields = ("organization", "vendor", "selectBill")
+@admin.register(ExpenseZohoBill)
+class ExpenseZohoBillAdmin(BaseOrgScopedAdmin):
+    list_display = [
+        "id",
+        "vendor_name",
+        "bill_number",
+        "date",
+        "total",
+        "organization",
+    ]
+    list_filter = ["date", "organization", "created_at"]
+    search_fields = ["vendor_name", "bill_number"]
+    readonly_fields = ("created_at", "updated_at")
+    inlines = [ExpenseZohoProductInline]
+    autocomplete_fields = ("organization", "expense_bill")
 
-    @admin.display(description="Selected Bill")
-    def selectBill_link(self, obj):
-        if obj.selectBill_id:
-            url = admin_change_url_for_instance(obj.selectBill)
-            label = obj.selectBill.billmunshiName or str(obj.selectBill_id)
-            return mark_safe(f'<a href="{url}">{label}</a>')
+    @admin.display(description="Expense Bill")
+    def expense_bill_link(self, obj):
+        if obj.expense_bill_id:
+            url = admin_change_url_for_instance(obj.expense_bill)
+            return mark_safe(f'<a href="{url}">{obj.expense_bill_id}</a>')
         return "-"
 
 
-# -----------------------------
-# Direct product admin views
-# -----------------------------
-
-@admin.register(VendorZohoProduct)
-class VendorZohoProductAdmin(BaseOrgScopedAdmin):
+@admin.register(ExpenseZohoProduct)
+class ExpenseZohoProductAdmin(BaseOrgScopedAdmin):
     list_display = (
         "organization",
-        "zohoBill",
-        "item_name",
-        "chart_of_accounts",
-        "taxes",
-        "reverse_charge_tax_id",
-        "itc_eligibility",
+        "expense_bill",
+        "name",
         "rate",
         "quantity",
         "amount",
         "created_at",
     )
     search_fields = (
-        "item_name",
-        "item_details",
-        "zohoBill__bill_no",
-        "zohoBill__vendor__companyName",
+        "name",
+        "description",
+        "expense_bill__vendor_name",
+        "expense_bill__bill_number",
         "organization__name",
     )
-    list_filter = ("organization", "itc_eligibility", "reverse_charge_tax_id", "created_at")
-    readonly_fields = ("created_at",)
-    autocomplete_fields = ("organization", "zohoBill", "chart_of_accounts", "taxes")
-
-
-@admin.register(JournalZohoProduct)
-class JournalZohoProductAdmin(BaseOrgScopedAdmin):
-    list_display = (
-        "organization",
-        "zohoBill",
-        "item_details",
-        "chart_of_accounts",
-        "vendor",
-        "amount",
-        "debit_or_credit",
-        "created_at",
-    )
-    search_fields = (
-        "item_details",
-        "zohoBill__bill_no",
-        "zohoBill__selectBill__billmunshiName",
-        "vendor__companyName",
-        "organization__name",
-    )
-    list_filter = ("organization", "debit_or_credit", "created_at")
-    readonly_fields = ("created_at",)
-    autocomplete_fields = ("organization", "zohoBill", "chart_of_accounts", "vendor")
+    list_filter = ("organization", "created_at")
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("organization", "expense_bill")
