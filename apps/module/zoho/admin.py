@@ -309,11 +309,11 @@ class ExpenseZohoBillAdmin(BaseOrgScopedAdmin):
         "id",
         "vendor_name",
         "bill_number",
-        "date",
+        "bill_date",
         "total",
         "organization",
     ]
-    list_filter = ["date", "organization", "created_at"]
+    list_filter = ["bill_date", "organization", "created_at"]
     search_fields = ["vendor_name", "bill_number"]
     readonly_fields = ("created_at", "updated_at")
     inlines = [ExpenseZohoProductInline]

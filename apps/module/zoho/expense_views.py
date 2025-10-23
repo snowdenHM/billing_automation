@@ -218,7 +218,7 @@ def analyze_bill_with_openai(file_content, file_extension):
         2. Dates (Bill Date, Receipt Date, Transaction Date - convert to YYYY-MM-DD format)
         3. Vendor/Company details in "from" section (name and address)
         4. Customer details in "to" section (name and address) 
-        5. journal items with descriptions, categories, and amounts
+        5. Expense items with descriptions, categories, and amounts
         6. Tax amounts (IGST, CGST, SGST - look for percentages and amounts)
         7. Total amount (may include terms like "Total", "Grand Total", "Amount Payable", "Net Amount")
 
@@ -309,11 +309,11 @@ def analyze_bill_with_openai(file_content, file_extension):
         }
 
 
-def create_journal_zoho_objects_from_analysis(bill, analyzed_data, organization):
+def create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization):
     """
-    Create JournalZohoBill and JournalZohoProduct objects from analyzed data.
+    Create ExpenseZohoBill and ExpenseZohoProduct objects from analyzed data.
     """
-    logger.info(f"Creating journal Zoho objects for bill {bill.id} with analyzed data: {analyzed_data}")
+    logger.info(f"Creating Expense Zoho objects for bill {bill.id} with analyzed data: {analyzed_data}")
 
     # Process analyzed data based on schema format
     if "properties" in analyzed_data:
@@ -335,7 +335,7 @@ def create_journal_zoho_objects_from_analysis(bill, analyzed_data, organization)
 
     # Try to find vendor by company name (case-insensitive search)
     vendor = None
-    company_name = relevant_data.get('from', {}).get('name', '').strip().lower()
+    company_name = relevant_data.get('to', {}).get('name', '').strip().lower()
     if company_name:
         vendor = ZohoVendor.objects.annotate(lower_name=Lower('companyName')).filter(
             lower_name=company_name).first()
@@ -363,9 +363,9 @@ def create_journal_zoho_objects_from_analysis(bill, analyzed_data, organization)
             logger.warning(f"Invalid numeric value: {value}, using default: {default}")
             return default
 
-    # Create or update JournalZohoBill
+    # Create or update ExpenseZohoBill
     try:
-        zoho_bill, created = JournalZohoBill.objects.get_or_create(
+        zoho_bill, created = ExpenseZohoBill.objects.get_or_create(
             selectBill=bill,
             organization=organization,
             defaults={
@@ -381,9 +381,9 @@ def create_journal_zoho_objects_from_analysis(bill, analyzed_data, organization)
         )
 
         if created:
-            logger.info(f"Created new JournalZohoBill: {zoho_bill.id}")
+            logger.info(f"Created new ExpenseZohoBill: {zoho_bill.id}")
         else:
-            logger.info(f"Found existing JournalZohoBill: {zoho_bill.id}")
+            logger.info(f"Found existing ExpenseZohoBill: {zoho_bill.id}")
             # Update the existing bill with new analyzed data
             zoho_bill.vendor = vendor
             zoho_bill.bill_no = relevant_data.get('invoiceNumber', zoho_bill.bill_no)
@@ -394,7 +394,7 @@ def create_journal_zoho_objects_from_analysis(bill, analyzed_data, organization)
             zoho_bill.sgst = safe_numeric_string(relevant_data.get('sgst'), zoho_bill.sgst)
             zoho_bill.note = f"Updated from analysis for {company_name or 'Unknown Vendor'}"
             zoho_bill.save()
-            logger.info(f"Updated existing JournalZohoBill: {zoho_bill.id}")
+            logger.info(f"Updated existing ExpenseZohoBill: {zoho_bill.id}")
 
         # Delete existing products and recreate them
         existing_products_count = zoho_bill.products.count()
@@ -402,7 +402,7 @@ def create_journal_zoho_objects_from_analysis(bill, analyzed_data, organization)
             zoho_bill.products.all().delete()
             logger.info(f"Deleted {existing_products_count} existing products")
 
-        # Create JournalZohoProduct objects for each item
+        # Create ExpenseZohoProduct objects for each item
         items = relevant_data.get('items', [])
         logger.info(f"Creating {len(items)} product line items")
 
@@ -410,7 +410,7 @@ def create_journal_zoho_objects_from_analysis(bill, analyzed_data, organization)
         for idx, item in enumerate(items):
             try:
                 amount = item.get('price', 0) * item.get('quantity', 1)
-                product = JournalZohoProduct.objects.create(
+                product = ExpenseZohoProduct.objects.create(
                     zohoBill=zoho_bill,
                     organization=organization,
                     item_details=item.get('description', f'Item {idx + 1}')[:200],
@@ -675,3 +675,119 @@ def expense_bill_upload_view(request, org_id):
         return Response({
             'detail': f'Error processing files: {str(e)}'
         }, status=status.HTTP_400_BAD_REQUEST)
+
+
+@extend_schema(
+    responses=ZohoExpenseBillDetailSerializer,
+    tags=["Zoho Expense Bills"],
+    methods=["GET"]
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def expense_bill_detail_view(request, org_id, bill_id):
+    """Get expense bill details including analysis data."""
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        # Fetch the ExpenseBill
+        bill = ExpenseBill.objects.get(id=bill_id, organization=organization)
+
+        # Get the next bill with 'Analysed' status
+        next_bill_id = None
+        analysed_bills = ExpenseBill.objects.filter(
+            organization=organization,
+            status='Analysed'
+        ).exclude(id=bill_id).values_list('id', flat=True)
+
+        if analysed_bills:
+            next_bill_id = str(analysed_bills[0])  # Get the first analysed bill
+            logger.info(f"Found next analysed Expense bill: {next_bill_id}")
+        else:
+            logger.info("No analysed Expense bills found for next_bill")
+
+        # Always set next_bill on the bill object
+        bill.next_bill = next_bill_id
+
+        # Get the related ExpenseZohoBill if it exists
+        try:
+            zoho_bill = ExpenseZohoBill.objects.select_related('vendor').prefetch_related(
+                'products__chart_of_accounts',
+                'products__vendor'
+            ).get(selectBill=bill, organization=organization)
+
+            # Attach zoho_bill to the bill object for the serializer
+            bill.zoho_bill = zoho_bill
+        except ExpenseZohoBill.DoesNotExist:
+            # If no ExpenseZohoBill exists, set it to None
+            bill.zoho_bill = None
+
+        # Serialize the data with request context for full URLs
+        serializer = ZohoExpenseBillDetailSerializer(bill, context={'request': request})
+        return Response(serializer.data)
+
+    except ExpenseBill.DoesNotExist:
+        return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+# ✅
+@extend_schema(
+    responses=AnalysisResponseSerializer,
+    tags=["Zoho Expense Bills"],
+    methods=["POST"]
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def expense_bill_analyze_view(request, org_id, bill_id):
+    """Analyze Expense bill using OpenAI. Changes status from 'Draft' to 'Analyzed'."""
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        bill = ExpenseBill.objects.get(id=bill_id, organization=organization)
+
+        if bill.status != 'Draft':
+            return Response(
+                {"detail": "Bill must be in 'Draft' status to analyze"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Read file content
+        try:
+            bill.file.seek(0)
+            file_content = bill.file.read()
+            file_extension = bill.file.name.split('.')[-1].lower()
+        except Exception as e:
+            logger.error(f"Error reading bill file: {e}")
+            return Response(
+                {"detail": "Error reading the bill file"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Analyze with OpenAI
+        analyzed_data = analyze_bill_with_openai(file_content, file_extension)
+
+        # Update bill with analyzed data
+        bill.analysed_data = analyzed_data
+        bill.status = 'Analysed'
+        bill.process = True
+        bill.save()
+
+        # Create Zoho bill and product objects from analysis
+        create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
+
+        return Response({
+            "detail": "Bill analyzed successfully",
+            "analyzed_data": analyzed_data
+        })
+
+    except ExpenseBill.DoesNotExist:
+        return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Analysis failed: {str(e)}")
+        return Response(
+            {"detail": f"Analysis failed: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
