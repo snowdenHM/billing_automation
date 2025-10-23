@@ -535,7 +535,7 @@ class JournalZohoProduct(BaseTeamModel):
 
 
 # ===============================
-#         Expense Bills is new
+#         Expense Bills
 # ===============================
 
 class ExpenseBill(BaseTeamModel):
@@ -627,6 +627,7 @@ class ExpenseZohoBill(BaseTeamModel):
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     selectBill = models.ForeignKey("ExpenseBill", on_delete=models.CASCADE, null=True, blank=True)
     vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
+    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
     bill_no = models.CharField(max_length=50, null=True, blank=True)
     bill_date = models.DateField(null=True, blank=True)
     total = models.CharField(max_length=50, null=True, blank=True, default=0)
@@ -686,3 +687,4 @@ class ExpenseZohoProduct(BaseTeamModel):
             if self.zohoBill and self.zohoBill.selectBill and self.zohoBill.selectBill.billmunshiName
             else f"ExpenseZohoProduct:{self.id}"
         )
+
