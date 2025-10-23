@@ -712,10 +712,9 @@ def expense_bill_detail_view(request, org_id, bill_id):
 
         # Get the related ExpenseZohoBill if it exists
         try:
-            zoho_bill = ExpenseZohoBill.objects.select_related('vendor').prefetch_related(
-                'products__chart_of_accounts',
-                'products__vendor'
-            ).get(selectBill=bill, organization=organization)
+            zoho_bill = ExpenseZohoBill.objects.select_related('expense_bill').prefetch_related(
+                'products'
+            ).get(expense_bill=bill, organization=organization)
 
             # Attach zoho_bill to the bill object for the serializer
             bill.zoho_bill = zoho_bill
