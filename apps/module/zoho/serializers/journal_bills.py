@@ -67,6 +67,15 @@ class JournalZohoProductSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "zohoBill", "created_at"]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope vendor queryset to organization if context is provided through parent
+        request = self.context.get('request') if hasattr(self, 'context') else None
+        if request and hasattr(request, 'organization'):
+            organization = request.organization
+            from ..models import ZohoVendor
+            self.fields['vendor'].queryset = ZohoVendor.objects.filter(organization=organization)
+
 
 class JournalZohoBillSerializer(serializers.ModelSerializer):
     """Serializer for Journal Zoho bill with corrected product relationship"""
@@ -80,6 +89,14 @@ class JournalZohoBillSerializer(serializers.ModelSerializer):
             "igst", "cgst", "sgst", "note", "created_at", "products"
         ]
         read_only_fields = ["id", "selectBill", "created_at"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope vendor queryset to organization if context is provided
+        if 'context' in kwargs and 'organization' in kwargs['context']:
+            organization = kwargs['context']['organization']
+            from ..models import ZohoVendor
+            self.fields['vendor'].queryset = ZohoVendor.objects.filter(organization=organization)
 
 
 class ZohoJournalBillSerializer(serializers.ModelSerializer):

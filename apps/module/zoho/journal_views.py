@@ -807,12 +807,38 @@ def journal_bill_verify_view(request, org_id, bill_id):
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        # Handle the new payload format - extract bill_id and zoho_bill data
-        payload_bill_id = request.data.get('bill_id', bill_id)
-        zoho_bill_data = request.data.get('zoho_bill', request.data)
+        # Get data from request
+        zoho_bill_data = request.data.get('zoho_bill', {})
+        payload_bill_id = zoho_bill_data.get('id', bill_id)
+
+        logger.info(f"[DEBUG] journal_bill_verify_view - Processing bill ID: {payload_bill_id}")
+        logger.info(f"[DEBUG] journal_bill_verify_view - Received zoho_bill_data keys: {list(zoho_bill_data.keys()) if zoho_bill_data else 'None'}")
+
+        # Debug vendor data in the payload
+        vendor_data = zoho_bill_data.get('vendor')
+        if vendor_data:
+            logger.info(f"[DEBUG] journal_bill_verify_view - Vendor data in payload: {vendor_data}")
+            logger.info(f"[DEBUG] journal_bill_verify_view - Vendor data type: {type(vendor_data)}")
+
+            # Validate vendor exists before proceeding
+            try:
+                from .models import ZohoVendor
+                vendor_obj = ZohoVendor.objects.get(id=vendor_data, organization=organization)
+                logger.info(f"[DEBUG] journal_bill_verify_view - Found vendor in database: {vendor_obj.companyName} (ID: {vendor_obj.id})")
+            except ZohoVendor.DoesNotExist:
+                logger.error(f"[DEBUG] journal_bill_verify_view - ERROR: Vendor {vendor_data} does not exist in organization {organization.name}")
+                return Response(
+                    {"detail": f"Vendor with ID {vendor_data} does not exist in this organization. Please sync vendors from Zoho first."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            except Exception as vendor_check_error:
+                logger.error(f"[DEBUG] journal_bill_verify_view - Error checking vendor: {vendor_check_error}")
+        else:
+            logger.info(f"[DEBUG] journal_bill_verify_view - No vendor data found in payload")
 
         # Use the bill_id from payload if provided, otherwise use URL parameter
         bill = JournalBill.objects.get(id=payload_bill_id, organization=organization)
+        logger.info(f"[DEBUG] journal_bill_verify_view - Found JournalBill: {bill.id}, status: {bill.status}")
 
         if bill.status not in ['Analysed', 'Verified']:
             return Response(
@@ -821,20 +847,68 @@ def journal_bill_verify_view(request, org_id, bill_id):
             )
 
         # Get existing JournalZohoBill
+        logger.info(f"[DEBUG] journal_bill_verify_view - Attempting to find JournalZohoBill for bill: {bill.id}, org: {organization.id}")
         try:
             zoho_bill = JournalZohoBill.objects.get(selectBill=bill, organization=organization)
+            logger.info(f"[DEBUG] journal_bill_verify_view - Found existing JournalZohoBill: {zoho_bill.id}")
+            logger.info(f"[DEBUG] journal_bill_verify_view - Current vendor in zoho_bill: {zoho_bill.vendor}")
+            if zoho_bill.vendor:
+                logger.info(f"[DEBUG] journal_bill_verify_view - Current vendor details: ID={zoho_bill.vendor.id}, Name={zoho_bill.vendor.companyName}, ContactID={zoho_bill.vendor.contactId}")
+            else:
+                logger.info(f"[DEBUG] journal_bill_verify_view - No vendor currently assigned to zoho_bill")
         except JournalZohoBill.DoesNotExist:
+            logger.error(f"[DEBUG] journal_bill_verify_view - JournalZohoBill not found for bill {bill.id}")
             return Response(
                 {"detail": "No analyzed journal data found. Please analyze the bill first."},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        except Exception as zoho_bill_error:
+            logger.error(f"[DEBUG] journal_bill_verify_view - Unexpected error getting JournalZohoBill: {zoho_bill_error}")
+            logger.error(f"[DEBUG] journal_bill_verify_view - Error type: {type(zoho_bill_error).__name__}")
+            import traceback
+            logger.error(f"[DEBUG] journal_bill_verify_view - Traceback: {traceback.format_exc()}")
+            return Response(
+                {"detail": f"Error retrieving journal data: {str(zoho_bill_error)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
         with transaction.atomic():
             # Use partial=True for POST as we're updating existing data
-            serializer = JournalZohoBillSerializer(zoho_bill, data=zoho_bill_data, partial=True)
+            logger.info(f"[DEBUG] journal_bill_verify_view - Creating serializer with partial=True")
+            logger.info(f"[DEBUG] journal_bill_verify_view - Serializer data being passed: {zoho_bill_data}")
+
+            # Pass organization in context for proper vendor queryset scoping
+            serializer = JournalZohoBillSerializer(
+                zoho_bill, 
+                data=zoho_bill_data, 
+                partial=True,
+                context={'organization': organization}
+            )
 
             if serializer.is_valid():
+                logger.info(f"[DEBUG] journal_bill_verify_view - Serializer is valid, proceeding to save")
+                logger.info(f"[DEBUG] journal_bill_verify_view - Validated data: {serializer.validated_data}")
+
+                # Check vendor in validated data
+                vendor_in_validated = serializer.validated_data.get('vendor')
+                if vendor_in_validated:
+                    logger.info(f"[DEBUG] journal_bill_verify_view - Vendor in validated_data: {vendor_in_validated} (Type: {type(vendor_in_validated)})")
+                else:
+                    logger.info(f"[DEBUG] journal_bill_verify_view - No vendor in validated_data")
+
+                # Save the serializer
                 updated_bill = serializer.save()
+                logger.info(f"[DEBUG] journal_bill_verify_view - Serializer saved successfully")
+                logger.info(f"[DEBUG] journal_bill_verify_view - Updated bill ID: {updated_bill.id}")
+                logger.info(f"[DEBUG] journal_bill_verify_view - Updated bill vendor after save: {updated_bill.vendor}")
+
+                if updated_bill.vendor:
+                    logger.info(f"[DEBUG] journal_bill_verify_view - Vendor saved successfully: ID={updated_bill.vendor.id}, Name={updated_bill.vendor.companyName}")
+                else:
+                    logger.info(f"[DEBUG] journal_bill_verify_view - WARNING: No vendor assigned after save!")
+                    # Let's check if vendor data was in the original payload
+                    if 'vendor' in zoho_bill_data:
+                        logger.error(f"[DEBUG] journal_bill_verify_view - ERROR: Vendor was in payload but not saved: {zoho_bill_data['vendor']}")
 
                 # Handle products update if provided
                 products_data = zoho_bill_data.get('products')
@@ -850,6 +924,20 @@ def journal_bill_verify_view(request, org_id, bill_id):
                             continue
 
                         product_id = product_data.get('id')
+
+                        # Validate vendor for this product
+                        product_vendor_id = product_data.get('vendor')
+                        if product_vendor_id:
+                            try:
+                                from .models import ZohoVendor
+                                product_vendor = ZohoVendor.objects.get(id=product_vendor_id, organization=organization)
+                                logger.info(f"[DEBUG] journal_bill_verify_view - Product vendor validated: {product_vendor.companyName}")
+                            except ZohoVendor.DoesNotExist:
+                                logger.error(f"[DEBUG] journal_bill_verify_view - ERROR: Product vendor {product_vendor_id} does not exist")
+                                return Response(
+                                    {"detail": f"Product vendor with ID {product_vendor_id} does not exist in this organization. Please sync vendors from Zoho first."},
+                                    status=status.HTTP_400_BAD_REQUEST
+                                )
 
                         # Prepare product data for creation/update
                         product_fields = {
@@ -917,15 +1005,54 @@ def journal_bill_verify_view(request, org_id, bill_id):
                     }, status=status.HTTP_400_BAD_REQUEST)
 
                 # Update bill status only if debit/credit validation passes
+                logger.info(f"[DEBUG] journal_bill_verify_view - Updating bill status from '{bill.status}' to 'Verified'")
                 bill.status = 'Verified'
                 bill.save()
+                logger.info(f"[DEBUG] journal_bill_verify_view - Bill status updated successfully to '{bill.status}'")
 
-                return Response(JournalZohoBillSerializer(updated_bill).data)
+                # Final verification of vendor data in response
+                response_data = JournalZohoBillSerializer(
+                    updated_bill, 
+                    context={'organization': organization}
+                ).data
+                logger.info(f"[DEBUG] journal_bill_verify_view - Response vendor data: {response_data.get('vendor')}")
+                logger.info(f"[DEBUG] journal_bill_verify_view - Verification process completed successfully")
 
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                return Response(response_data)
+
+            else:
+                logger.error(f"[DEBUG] journal_bill_verify_view - Serializer validation FAILED")
+                logger.error(f"[DEBUG] journal_bill_verify_view - Serializer errors: {serializer.errors}")
+
+                # Check if vendor-related errors exist and provide helpful message
+                if 'vendor' in serializer.errors:
+                    logger.error(f"[DEBUG] journal_bill_verify_view - Vendor-specific errors: {serializer.errors['vendor']}")
+                    vendor_error_detail = serializer.errors['vendor'][0] if serializer.errors['vendor'] else 'Unknown vendor error'
+
+                    # Check if it's a "does not exist" error
+                    if 'does not exist' in str(vendor_error_detail):
+                        vendor_id = zoho_bill_data.get('vendor', 'Unknown')
+                        custom_error = {
+                            "detail": f"Vendor with ID {vendor_id} does not exist in the database. Please sync vendors from Zoho Books first or select a different vendor.",
+                            "vendor_id": vendor_id,
+                            "error_type": "vendor_not_found"
+                        }
+                        return Response(custom_error, status=status.HTTP_400_BAD_REQUEST)
+
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     except JournalBill.DoesNotExist:
-        return Response({"detail": "journal bill not found"}, status=status.HTTP_404_NOT_FOUND)
+        logger.error(f"[DEBUG] journal_bill_verify_view - ERROR: JournalBill not found with ID: {payload_bill_id}, org: {organization.id if organization else 'None'}")
+        return Response({"detail": "Journal bill not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"[DEBUG] journal_bill_verify_view - UNEXPECTED ERROR: {str(e)}")
+        logger.error(f"[DEBUG] journal_bill_verify_view - Error type: {type(e).__name__}")
+        import traceback
+        logger.error(f"[DEBUG] journal_bill_verify_view - Traceback: {traceback.format_exc()}")
+        return Response(
+            {"detail": f"Verification failed: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 @extend_schema(
@@ -961,10 +1088,10 @@ def journal_bill_sync_view(request, org_id, bill_id):
 
         # Get Zoho credentials
         try:
-            current_token = ZohoCredentials.objects.get(organization=organization)
-        except ZohoCredentials.DoesNotExist:
+            current_token = get_zoho_credentials(organization)
+        except ValueError as e:
             return Response(
-                {"detail": "Zoho credentials not found"},
+                {"detail": str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
 

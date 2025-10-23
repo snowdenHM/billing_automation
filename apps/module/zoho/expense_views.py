@@ -792,3 +792,412 @@ def expense_bill_analyze_view(request, org_id, bill_id):
             {"detail": f"Analysis failed: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# ✅
+@extend_schema(
+    request=ExpenseZohoBillSerializer,
+    responses=ExpenseZohoBillSerializer,
+    tags=["Zoho Expense Bills"],
+    methods=["POST"]
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def expense_bill_verify_view(request, org_id, bill_id):
+    """Verify and update expense bill data after analysis."""
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        # Get data from request
+        zoho_bill_data = request.data.get('zoho_bill', {})
+        payload_bill_id = zoho_bill_data.get('id', bill_id)
+
+        logger.info(f"[DEBUG] expense_bill_verify_view - Processing bill ID: {payload_bill_id}")
+        logger.info(f"[DEBUG] expense_bill_verify_view - Received zoho_bill_data keys: {list(zoho_bill_data.keys()) if zoho_bill_data else 'None'}")
+
+        # Debug vendor data in the payload
+        vendor_data = zoho_bill_data.get('vendor')
+        if vendor_data:
+            logger.info(f"[DEBUG] expense_bill_verify_view - Vendor data in payload: {vendor_data}")
+            logger.info(f"[DEBUG] expense_bill_verify_view - Vendor data type: {type(vendor_data)}")
+
+            # Validate vendor exists before proceeding
+            try:
+                from .models import ZohoVendor
+                vendor_obj = ZohoVendor.objects.get(id=vendor_data, organization=organization)
+                logger.info(f"[DEBUG] expense_bill_verify_view - Found vendor in database: {vendor_obj.companyName} (ID: {vendor_obj.id})")
+            except ZohoVendor.DoesNotExist:
+                logger.error(f"[DEBUG] expense_bill_verify_view - ERROR: Vendor {vendor_data} does not exist in organization {organization.name}")
+                return Response(
+                    {"detail": f"Vendor with ID {vendor_data} does not exist in this organization. Please sync vendors from Zoho first."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            except Exception as vendor_check_error:
+                logger.error(f"[DEBUG] expense_bill_verify_view - Error checking vendor: {vendor_check_error}")
+        else:
+            logger.info(f"[DEBUG] expense_bill_verify_view - No vendor data found in payload")
+
+        # Use the bill_id from payload if provided, otherwise use URL parameter
+        bill = ExpenseBill.objects.get(id=payload_bill_id, organization=organization)
+        logger.info(f"[DEBUG] expense_bill_verify_view - Found ExpenseBill: {bill.id}, status: {bill.status}")
+
+        if bill.status not in ['Analysed', 'Verified']:
+            return Response(
+                {"detail": "Bill must be in 'Analysed' or 'Verified' status to save"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get existing ExpenseZohoBill
+        logger.info(f"[DEBUG] expense_bill_verify_view - Attempting to find ExpenseZohoBill for bill: {bill.id}, org: {organization.id}")
+        try:
+            zoho_bill = ExpenseZohoBill.objects.get(selectBill=bill, organization=organization)
+            logger.info(f"[DEBUG] expense_bill_verify_view - Found existing ExpenseZohoBill: {zoho_bill.id}")
+            logger.info(f"[DEBUG] expense_bill_verify_view - Current vendor in zoho_bill: {zoho_bill.vendor}")
+            if zoho_bill.vendor:
+                logger.info(f"[DEBUG] expense_bill_verify_view - Current vendor details: ID={zoho_bill.vendor.id}, Name={zoho_bill.vendor.companyName}, ContactID={zoho_bill.vendor.contactId}")
+            else:
+                logger.info(f"[DEBUG] expense_bill_verify_view - No vendor currently assigned to zoho_bill")
+        except ExpenseZohoBill.DoesNotExist:
+            logger.error(f"[DEBUG] expense_bill_verify_view - ExpenseZohoBill not found for bill {bill.id}")
+            return Response(
+                {"detail": "No analyzed expense data found. Please analyze the bill first."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as zoho_bill_error:
+            logger.error(f"[DEBUG] expense_bill_verify_view - Unexpected error getting ExpenseZohoBill: {zoho_bill_error}")
+            logger.error(f"[DEBUG] expense_bill_verify_view - Error type: {type(zoho_bill_error).__name__}")
+            import traceback
+            logger.error(f"[DEBUG] expense_bill_verify_view - Traceback: {traceback.format_exc()}")
+            return Response(
+                {"detail": f"Error retrieving expense data: {str(zoho_bill_error)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        with transaction.atomic():
+            # Use partial=True for POST as we're updating existing data
+            logger.info(f"[DEBUG] expense_bill_verify_view - Creating serializer with partial=True")
+            logger.info(f"[DEBUG] expense_bill_verify_view - Serializer data being passed: {zoho_bill_data}")
+
+            # Pass organization in context for proper vendor queryset scoping
+            serializer = ExpenseZohoBillSerializer(
+                zoho_bill, 
+                data=zoho_bill_data, 
+                partial=True,
+                context={'organization': organization}
+            )
+
+            if serializer.is_valid():
+                logger.info(f"[DEBUG] expense_bill_verify_view - Serializer is valid, proceeding to save")
+                logger.info(f"[DEBUG] expense_bill_verify_view - Validated data: {serializer.validated_data}")
+
+                # Check vendor in validated data
+                vendor_in_validated = serializer.validated_data.get('vendor')
+                if vendor_in_validated:
+                    logger.info(f"[DEBUG] expense_bill_verify_view - Vendor in validated_data: {vendor_in_validated} (Type: {type(vendor_in_validated)})")
+                else:
+                    logger.info(f"[DEBUG] expense_bill_verify_view - No vendor in validated_data")
+
+                # Save the serializer
+                updated_bill = serializer.save()
+                logger.info(f"[DEBUG] expense_bill_verify_view - Serializer saved successfully")
+                logger.info(f"[DEBUG] expense_bill_verify_view - Updated bill ID: {updated_bill.id}")
+                logger.info(f"[DEBUG] expense_bill_verify_view - Updated bill vendor after save: {updated_bill.vendor}")
+
+                if updated_bill.vendor:
+                    logger.info(f"[DEBUG] expense_bill_verify_view - Vendor saved successfully: ID={updated_bill.vendor.id}, Name={updated_bill.vendor.companyName}")
+                else:
+                    logger.info(f"[DEBUG] expense_bill_verify_view - WARNING: No vendor assigned after save!")
+                    # Let's check if vendor data was in the original payload
+                    if 'vendor' in zoho_bill_data:
+                        logger.error(f"[DEBUG] expense_bill_verify_view - ERROR: Vendor was in payload but not saved: {zoho_bill_data['vendor']}")
+
+                # Handle products update if provided
+                products_data = zoho_bill_data.get('products')
+                if products_data is not None:
+                    # Get existing product IDs
+                    existing_products = {str(product.id): product for product in updated_bill.products.all()}
+
+                    # Track which products to keep
+                    processed_product_ids = set()
+
+                    for product_data in products_data:
+                        if not product_data.get('item_details'):  # Skip if no item_details
+                            continue
+
+                        product_id = product_data.get('id')
+
+                        # Prepare product data for creation/update
+                        product_fields = {
+                            'item_details': product_data.get('item_details'),
+                            'chart_of_accounts_id': product_data.get('chart_of_accounts'),
+                            'taxes_id': product_data.get('taxes'),
+                            'reverse_charge_tax_id': product_data.get('reverse_charge_tax_id', False),
+                            'itc_eligibility': product_data.get('itc_eligibility', 'eligible'),
+                            'amount': product_data.get('amount'),
+                        }
+
+                        # Remove None values
+                        product_fields = {k: v for k, v in product_fields.items() if v is not None}
+
+                        if product_id and str(product_id) in existing_products:
+                            # Update existing product
+                            existing_product = existing_products[str(product_id)]
+                            for field, value in product_fields.items():
+                                setattr(existing_product, field, value)
+                            existing_product.save()
+                            processed_product_ids.add(str(product_id))
+                            logger.info(f"Updated existing product {product_id}")
+                        else:
+                            # Create new product
+                            new_product = ExpenseZohoProduct.objects.create(
+                                zohoBill=updated_bill,
+                                organization=organization,
+                                **product_fields
+                            )
+                            processed_product_ids.add(str(new_product.id))
+                            logger.info(f"Created new product {new_product.id}")
+
+                    # Delete products that were not in the update data
+                    products_to_delete = set(existing_products.keys()) - processed_product_ids
+                    if products_to_delete:
+                        ExpenseZohoProduct.objects.filter(
+                            id__in=products_to_delete,
+                            zohoBill=updated_bill
+                        ).delete()
+                        logger.info(f"Deleted {len(products_to_delete)} products not in update")
+
+                # Update bill status
+                logger.info(f"[DEBUG] expense_bill_verify_view - Updating bill status from '{bill.status}' to 'Verified'")
+                bill.status = 'Verified'
+                bill.save()
+                logger.info(f"[DEBUG] expense_bill_verify_view - Bill status updated successfully to '{bill.status}'")
+
+                # Final verification of vendor data in response
+                response_data = ExpenseZohoBillSerializer(
+                    updated_bill, 
+                    context={'organization': organization}
+                ).data
+                logger.info(f"[DEBUG] expense_bill_verify_view - Response vendor data: {response_data.get('vendor')}")
+                logger.info(f"[DEBUG] expense_bill_verify_view - Verification process completed successfully")
+
+                return Response(response_data)
+
+            else:
+                logger.error(f"[DEBUG] expense_bill_verify_view - Serializer validation FAILED")
+                logger.error(f"[DEBUG] expense_bill_verify_view - Serializer errors: {serializer.errors}")
+
+                # Check if vendor-related errors exist and provide helpful message
+                if 'vendor' in serializer.errors:
+                    logger.error(f"[DEBUG] expense_bill_verify_view - Vendor-specific errors: {serializer.errors['vendor']}")
+                    vendor_error_detail = serializer.errors['vendor'][0] if serializer.errors['vendor'] else 'Unknown vendor error'
+
+                    # Check if it's a "does not exist" error
+                    if 'does not exist' in str(vendor_error_detail):
+                        vendor_id = zoho_bill_data.get('vendor', 'Unknown')
+                        custom_error = {
+                            "detail": f"Vendor with ID {vendor_id} does not exist in the database. Please sync vendors from Zoho Books first or select a different vendor.",
+                            "vendor_id": vendor_id,
+                            "error_type": "vendor_not_found"
+                        }
+                        return Response(custom_error, status=status.HTTP_400_BAD_REQUEST)
+
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except ExpenseBill.DoesNotExist:
+        logger.error(f"[DEBUG] expense_bill_verify_view - ERROR: ExpenseBill not found with ID: {payload_bill_id}, org: {organization.id if organization else 'None'}")
+        return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"[DEBUG] expense_bill_verify_view - UNEXPECTED ERROR: {str(e)}")
+        logger.error(f"[DEBUG] expense_bill_verify_view - Error type: {type(e).__name__}")
+        import traceback
+        logger.error(f"[DEBUG] expense_bill_verify_view - Traceback: {traceback.format_exc()}")
+        return Response(
+            {"detail": f"Verification failed: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# ✅
+@extend_schema(
+    responses={"200": {"detail": "Expense bill synced to Zoho successfully"}},
+    tags=["Zoho Expense Bills"],
+    methods=["POST"]
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def expense_bill_sync_view(request, org_id, bill_id):
+    """Sync verified expense bill to Zoho Books as an expense entry."""
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        bill = ExpenseBill.objects.get(id=bill_id, organization=organization)
+        
+        if bill.status != 'Verified':
+            return Response(
+                {"detail": "Bill must be in 'Verified' status to sync"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get Zoho credentials
+        try:
+            current_token = get_zoho_credentials(organization)
+        except ValueError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get ExpenseZohoBill and products
+        try:
+            zoho_bill = ExpenseZohoBill.objects.get(selectBill=bill, organization=organization)
+            zoho_products = ExpenseZohoProduct.objects.filter(zohoBill=zoho_bill)
+        except ExpenseZohoBill.DoesNotExist:
+            return Response(
+                {"detail": "No analyzed expense data found"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not zoho_products.exists():
+            return Response(
+                {"detail": "No expense items found to sync"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Prepare data for Zoho API (Expense)
+        expense_date_str = zoho_bill.bill_date.strftime('%Y-%m-%d') if zoho_bill.bill_date else None
+
+        expense_data = {
+            "date": expense_date_str,
+            "description": zoho_bill.note or f"Expense from {zoho_bill.vendor.companyName if zoho_bill.vendor else 'Unknown Vendor'}",
+            "line_items": []
+        }
+
+        # Add line items from products
+        for item in zoho_products:
+            try:
+                # Get chart of account
+                if not item.chart_of_accounts:
+                    logger.warning(f"No chart of account found for product {item.id}")
+                    continue
+
+                line_item = {
+                    "account_id": str(item.chart_of_accounts.accountId),
+                    "amount": float(item.amount) if item.amount else 0,
+                    "description": item.item_details or "Expense Item"
+                }
+
+                # Add tax information if available
+                if item.taxes:
+                    line_item['tax_id'] = item.taxes.taxId
+
+                expense_data["line_items"].append(line_item)
+
+            except Exception as e:
+                logger.error(f"Error processing expense product {item.id}: {str(e)}")
+                continue
+
+        if not expense_data["line_items"]:
+            return Response(
+                {"detail": "No valid expense items found for syncing"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Sync to Zoho Books as expense
+        url = f"https://www.zohoapis.in/books/v3/expenses?organization_id={current_token.organisationId}"
+        payload = json.dumps(expense_data)
+        headers = {
+            'Authorization': f'Zoho-oauthtoken {current_token.accessToken}',
+            'Content-Type': 'application/json'
+        }
+
+        try:
+            response = requests.post(url, headers=headers, data=payload)
+
+            # Handle token refresh if needed
+            if response.status_code == 401:
+                new_access_token = refresh_zoho_access_token(current_token)
+                if new_access_token:
+                    headers['Authorization'] = f'Zoho-oauthtoken {new_access_token}'
+                    response = requests.post(url, headers=headers, data=payload)
+
+            if response.status_code == 201:
+                # Update bill status
+                bill.status = 'Synced'
+                bill.save()
+
+                response_data = response.json()
+                return Response({
+                    "detail": "Expense bill synced to Zoho successfully",
+                    "zoho_expense_id": response_data.get('expense', {}).get('expense_id')
+                })
+            else:
+                response_json = response.json() if response.content else {}
+                error_message = response_json.get("message", "Failed to send expense to Zoho")
+                logger.error(f"Zoho expense sync failed: {response.status_code} - {error_message}")
+                return Response(
+                    {"detail": error_message},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        except requests.RequestException as e:
+            logger.error(f"Network error during Zoho expense sync: {str(e)}")
+            return Response(
+                {"detail": f"Network error: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    except ExpenseBill.DoesNotExist:
+        return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Expense sync failed: {str(e)}")
+        return Response(
+            {"detail": f"Expense sync failed: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# ✅
+@extend_schema(
+    responses={"200": {"detail": "Expense bill deleted successfully"}},
+    tags=["Zoho Expense Bills"],
+    methods=["DELETE"]
+)
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def expense_bill_delete_view(request, org_id, bill_id):
+    """Delete an expense bill and its associated file."""
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        bill = ExpenseBill.objects.get(id=bill_id, organization=organization)
+
+        # Delete the file from storage if it exists
+        if bill.file:
+            try:
+                file_path = os.path.join(settings.MEDIA_ROOT, str(bill.file))
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except Exception as e:
+                logger.warning(f"Could not delete file {bill.file}: {str(e)}")
+
+        # Delete the bill record from the database
+        bill.delete()
+
+        return Response({
+            "detail": "Expense bill and associated file deleted successfully"
+        })
+
+    except ExpenseBill.DoesNotExist:
+        return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error deleting expense bill: {str(e)}")
+        return Response(
+            {"detail": f"Failed to delete expense bill: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

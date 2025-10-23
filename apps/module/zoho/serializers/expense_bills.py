@@ -69,6 +69,16 @@ class ExpenseZohoProductSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "zohoBill", "created_at"]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope related fields to organization if context is provided through parent
+        request = self.context.get('request') if hasattr(self, 'context') else None
+        if request and hasattr(request, 'organization'):
+            organization = request.organization
+            from ..models import ZohoChartOfAccount, ZohoTaxes
+            self.fields['chart_of_accounts'].queryset = ZohoChartOfAccount.objects.filter(organization=organization)
+            self.fields['taxes'].queryset = ZohoTaxes.objects.filter(organization=organization)
+
 
 class ExpenseZohoBillSerializer(serializers.ModelSerializer):
     """Serializer for Expense Zoho bill with corrected product relationship"""
@@ -82,6 +92,14 @@ class ExpenseZohoBillSerializer(serializers.ModelSerializer):
             "igst", "cgst", "sgst", "note", "created_at", "products"
         ]
         read_only_fields = ["id", "selectBill", "created_at"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope vendor queryset to organization if context is provided
+        if 'context' in kwargs and 'organization' in kwargs['context']:
+            organization = kwargs['context']['organization']
+            from ..models import ZohoVendor
+            self.fields['vendor'].queryset = ZohoVendor.objects.filter(organization=organization)
 
 
 class ZohoExpenseBillSerializer(serializers.ModelSerializer):
