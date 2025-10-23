@@ -810,12 +810,15 @@ def expense_bill_verify_view(request, org_id, bill_id):
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        # Get data from request
-        zoho_bill_data = request.data.get('zoho_bill', {})
-        payload_bill_id = zoho_bill_data.get('id', bill_id)
+        # Get data from request - following the exact same pattern as vendor_views.py
+        payload_bill_id = request.data.get('bill_id', bill_id)
+        zoho_bill_data = request.data.get('zoho_bill', request.data)
 
         logger.info(f"[DEBUG] expense_bill_verify_view - Processing bill ID: {payload_bill_id}")
+        logger.info(f"[DEBUG] expense_bill_verify_view - URL bill_id: {bill_id}")
+        logger.info(f"[DEBUG] expense_bill_verify_view - request.data bill_id: {request.data.get('bill_id', 'Not found')}")
         logger.info(f"[DEBUG] expense_bill_verify_view - Received zoho_bill_data keys: {list(zoho_bill_data.keys()) if zoho_bill_data else 'None'}")
+        logger.info(f"[DEBUG] expense_bill_verify_view - Full request.data: {request.data}")
 
         # Debug vendor data in the payload
         vendor_data = zoho_bill_data.get('vendor')
