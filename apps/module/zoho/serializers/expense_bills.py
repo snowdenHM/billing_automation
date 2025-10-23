@@ -64,7 +64,7 @@ class ExpenseZohoProductSerializer(serializers.ModelSerializer):
         model = ExpenseZohoProduct
         fields = [
             "id", "zohoBill", "item_details", "chart_of_accounts",
-            "vendor", "amount", "debit_or_credit", "created_at"
+             "amount", "debit_or_credit", "created_at"
         ]
         read_only_fields = ["id", "zohoBill", "created_at"]
 
