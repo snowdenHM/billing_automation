@@ -414,8 +414,6 @@ def create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
                     zohoBill=zoho_bill,
                     organization=organization,
                     item_details=item.get('description', f'Item {idx + 1}')[:200],
-                    quantity=item.get('quantity', 1),
-                    rate=item.get('price', 0),
                     amount=safe_numeric_string(amount)
                 )
                 created_products.append(product)
@@ -931,13 +929,11 @@ def expense_bill_verify_view(request, org_id, bill_id):
 
                         product_id = product_data.get('id')
 
-                        # Prepare product data for creation/update
+                        # Prepare product data for creation/update - Updated for simplified model
                         product_fields = {
                             'item_details': product_data.get('item_details'),
                             'chart_of_accounts_id': product_data.get('chart_of_accounts'),
                             'taxes_id': product_data.get('taxes'),
-                            'reverse_charge_tax_id': product_data.get('reverse_charge_tax_id', False),
-                            'itc_eligibility': product_data.get('itc_eligibility', 'eligible'),
                             'amount': product_data.get('amount'),
                         }
 
@@ -1070,16 +1066,15 @@ def expense_bill_sync_view(request, org_id, bill_id):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Prepare data for Zoho API (Expense)
+        # Prepare data for Zoho API (Expense) - Updated payload structure
         expense_date_str = zoho_bill.bill_date.strftime('%Y-%m-%d') if zoho_bill.bill_date else None
+        
+        # Calculate total amount from all products
+        total_amount = 0
+        line_items = []
+        item_order = 1
 
-        expense_data = {
-            "date": expense_date_str,
-            "description": zoho_bill.note or f"Expense from {zoho_bill.vendor.companyName if zoho_bill.vendor else 'Unknown Vendor'}",
-            "line_items": []
-        }
-
-        # Add line items from products
+        # Process line items first to calculate total
         for item in zoho_products:
             try:
                 # Get chart of account
@@ -1087,21 +1082,47 @@ def expense_bill_sync_view(request, org_id, bill_id):
                     logger.warning(f"No chart of account found for product {item.id}")
                     continue
 
+                item_amount = float(item.amount) if item.amount else 0
+                total_amount += item_amount
+
                 line_item = {
                     "account_id": str(item.chart_of_accounts.accountId),
-                    "amount": float(item.amount) if item.amount else 0,
-                    "description": item.item_details or "Expense Item"
+                    "description": item.item_details or "Expense Item",
+                    "amount": str(item_amount),
+                    "item_order": str(item_order)
                 }
 
                 # Add tax information if available
                 if item.taxes:
-                    line_item['tax_id'] = item.taxes.taxId
+                    line_item['tax_id'] = str(item.taxes.taxId)
 
-                expense_data["line_items"].append(line_item)
+                line_items.append(line_item)
+                item_order += 1
 
             except Exception as e:
                 logger.error(f"Error processing expense product {item.id}: {str(e)}")
                 continue
+
+        # Use the first line item's account_id as the main account_id, or chart_of_accounts from zoho_bill
+        main_account_id = None
+        if line_items:
+            main_account_id = line_items[0]["account_id"]
+        elif zoho_bill.chart_of_accounts:
+            main_account_id = str(zoho_bill.chart_of_accounts.accountId)
+        else:
+            return Response(
+                {"detail": "No chart of account found for the expense. Please verify the bill first."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        expense_data = {
+            "account_id": main_account_id,
+            "date": expense_date_str,
+            "amount": str(total_amount),
+            "description": zoho_bill.note or f"Expense from {zoho_bill.vendor.companyName if zoho_bill.vendor else 'Unknown Vendor'}",
+            "vendor_id": str(zoho_bill.vendor.contactId) if zoho_bill.vendor else "",
+            "line_items": line_items
+        }
 
         if not expense_data["line_items"]:
             return Response(

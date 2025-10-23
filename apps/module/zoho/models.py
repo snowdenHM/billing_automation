@@ -655,26 +655,12 @@ class ExpenseZohoProduct(BaseTeamModel):
     Contains details about the expense including the chart of accounts, amount,
     and whether it's a debit or credit entry.
     """
-    ITC_ELIGIBILITY_CHOICES = (
-        ("eligible", "Eligible"),
-        ("ineligible_section17", "Ineligible Section17"),
-        ("ineligible_others", "Ineligible Others"),
-    )
-
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     zohoBill = models.ForeignKey("ExpenseZohoBill", on_delete=models.CASCADE, related_name="products")
     item_details = models.CharField(max_length=2000, null=True, blank=True)
     amount = models.CharField(max_length=50, null=True, blank=True)
     chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
     taxes = models.ForeignKey("ZohoTaxes", on_delete=models.CASCADE, null=True, blank=True)
-    reverse_charge_tax_id = models.BooleanField(default=False)
-    itc_eligibility = models.CharField(
-        choices=ITC_ELIGIBILITY_CHOICES,
-        max_length=100,
-        null=True,
-        blank=True,
-        default="eligible",
-    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

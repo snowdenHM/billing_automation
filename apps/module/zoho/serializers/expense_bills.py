@@ -9,6 +9,7 @@ from apps.module.zoho.models import (
     ExpenseZohoProduct,
     ZohoVendor,
     ZohoChartOfAccount,
+    ZohoTaxes,
 )
 from apps.organizations.models import Organization
 
@@ -64,8 +65,7 @@ class ExpenseZohoProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExpenseZohoProduct
         fields = [
-            "id", "zohoBill", "item_details", "amount", "chart_of_accounts", "taxes"
-            , "reverse_charge_tax_id", "itc_eligibility", "created_at"
+            "id", "zohoBill", "item_details", "amount", "chart_of_accounts", "taxes", "created_at"
         ]
         read_only_fields = ["id", "zohoBill", "created_at"]
 
@@ -260,16 +260,11 @@ class ZohoExpenseVerifyProductItemSerializer(serializers.Serializer):
     chart_of_accounts = serializers.PrimaryKeyRelatedField(
         queryset=ZohoChartOfAccount.objects.all(), required=False, allow_null=True
     )
-    vendor = serializers.PrimaryKeyRelatedField(
-        queryset=ZohoVendor.objects.all(), required=False, allow_null=True
+    taxes = serializers.PrimaryKeyRelatedField(
+        queryset=ZohoTaxes.objects.all(), required=False, allow_null=True
     )
     item_details = serializers.CharField(required=False, allow_blank=True)
     amount = serializers.CharField(required=False, allow_blank=True)
-    debit_or_credit = serializers.ChoiceField(
-        choices=[("credit", "Credit"), ("debit", "Debit")],
-        required=False,
-        default="credit"
-    )
 
 
 class ZohoExpenseBillVerifySerializer(serializers.Serializer):
