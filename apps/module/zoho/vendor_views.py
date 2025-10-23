@@ -825,13 +825,14 @@ def vendor_bill_verify_view(request, org_id, bill_id):
         bill = VendorBill.objects.get(id=payload_bill_id, organization=organization)
         logger.error(f"[DEBUG] vendor_bill_verify_view - Found VendorBill: {bill.id}, status: {bill.status}")
 
-        if bill.status not in ['Analyzed', 'Verified']:
+        if bill.status not in ['Analysed', 'Verified']:
             return Response(
-                {"detail": "Bill must be in 'Analyzed' or 'Verified' status to save"},
+                {"detail": "Bill must be in 'Analysed' or 'Verified' status to save"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         # Get existing VendorZohoBill
+        logger.error(f"[DEBUG] vendor_bill_verify_view - Attempting to find VendorZohoBill for bill: {bill.id}, org: {organization.id}")
         try:
             zoho_bill = VendorZohoBill.objects.get(selectBill=bill, organization=organization)
             logger.error(f"[DEBUG] vendor_bill_verify_view - Found existing VendorZohoBill: {zoho_bill.id}")
@@ -845,6 +846,15 @@ def vendor_bill_verify_view(request, org_id, bill_id):
             return Response(
                 {"detail": "No analyzed vendor data found. Please analyze the bill first."},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as zoho_bill_error:
+            logger.error(f"[DEBUG] vendor_bill_verify_view - Unexpected error getting VendorZohoBill: {zoho_bill_error}")
+            logger.error(f"[DEBUG] vendor_bill_verify_view - Error type: {type(zoho_bill_error).__name__}")
+            import traceback
+            logger.error(f"[DEBUG] vendor_bill_verify_view - Traceback: {traceback.format_exc()}")
+            return Response(
+                {"detail": f"Error retrieving vendor data: {str(zoho_bill_error)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
         with transaction.atomic():

@@ -814,7 +814,7 @@ def journal_bill_verify_view(request, org_id, bill_id):
         # Use the bill_id from payload if provided, otherwise use URL parameter
         bill = JournalBill.objects.get(id=payload_bill_id, organization=organization)
 
-        if bill.status not in ['Analyzed', 'Verified']:
+        if bill.status not in ['Analysed', 'Verified']:
             return Response(
                 {"detail": "Bill must be in 'Analysed' or 'Verified' status to save"},
                 status=status.HTTP_400_BAD_REQUEST
