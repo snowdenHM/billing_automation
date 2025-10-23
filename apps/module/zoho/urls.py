@@ -42,7 +42,7 @@ from .views import (
 # Import expense bill views from expense_views.py
 from .expense_views import (
     expense_bills_list_view,
-    # expense_bill_upload_view,
+    expense_bill_upload_view,
     # expense_bill_detail_view,
     # expense_bill_analyze_view,
     # expense_bill_verify_view,
@@ -100,7 +100,7 @@ urlpatterns = [
         # Expense Bills API Endpoints
         # ============================================================================
         path('expense-bills/', expense_bills_list_view, name='expense_bills_list'),
-        # path('expense-bills/upload/', expense_bill_upload_view, name='expense_bills_upload'),
+        path('expense-bills/upload/', expense_bill_upload_view, name='expense_bills_upload'),
         # path('expense-bills/<str:bill_id>/details/', expense_bill_detail_view, name='expense_bill_detail'),
         # path('expense-bills/<str:bill_id>/analyze/', expense_bill_analyze_view, name='expense_bill_analyze'),
         # path('expense-bills/<str:bill_id>/verify/', expense_bill_verify_view, name='expense_bill_verify'),

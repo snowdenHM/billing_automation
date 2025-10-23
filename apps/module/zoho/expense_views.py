@@ -430,8 +430,8 @@ def create_journal_zoho_objects_from_analysis(bill, analyzed_data, organization)
         raise
 
 
-def process_pdf_splitting_journal(pdf_file, organization, file_type, uploaded_by):
-    """Split PDF into individual pages and create separate journal bills"""
+def process_pdf_splitting_expense(pdf_file, organization, file_type, uploaded_by):
+    """Split PDF into individual pages and create separate expense bills"""
     created_bills = []
 
     try:
@@ -455,10 +455,10 @@ def process_pdf_splitting_journal(pdf_file, organization, file_type, uploaded_by
 
                 # Create bill for this page with uploaded_by user
                 # Let the model generate billmunshiName automatically
-                bill = JournalBill.objects.create(
+                bill = ExpenseBill.objects.create(
                     file=ContentFile(
                         image_io.read(),
-                        name=f"BM-journal-Page-{page_num + 1}-{unique_id}.jpg"
+                        name=f"BM-Expense-Page-{page_num + 1}-{unique_id}.jpg"
                     ),
                     fileType=file_type,
                     status='Draft',
@@ -468,8 +468,8 @@ def process_pdf_splitting_journal(pdf_file, organization, file_type, uploaded_by
                 created_bills.append(bill)
 
     except Exception as e:
-        logger.error(f"Error splitting journal PDF: {str(e)}")
-        raise Exception(f"journal PDF processing failed: {str(e)}")
+        logger.error(f"Error splitting Expense PDF: {str(e)}")
+        raise Exception(f"Expense PDF processing failed: {str(e)}")
 
     return created_bills
 
@@ -498,7 +498,7 @@ def refresh_zoho_access_token(current_token):
 
 
 # ============================================================================
-# journal Bills API Views
+# Expense Bills API Views
 # ============================================================================
 # ✅
 @extend_schema(
@@ -539,3 +539,139 @@ def expense_bills_list_view(request, org_id):
     # Fallback if pagination fails
     serializer = ZohoExpenseBillSerializer(bills, many=True)
     return Response({"results": serializer.data})
+
+
+# ✅
+@extend_schema(
+    summary="Upload journal Bills",
+    description="Upload single or multiple journal bill files (PDF, JPG, PNG). Supports both single file and multiple file uploads with PDF splitting for multiple invoices.",
+    request=ZohoExpenseBillMultipleUploadSerializer,
+    responses={201: ZohoExpenseBillSerializer(many=True)},
+    tags=["Zoho Expense Bills"],
+    methods=["POST"]
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+def expense_bill_upload_view(request, org_id):
+    """Handle single or multiple expense bill file uploads with PDF splitting support"""
+
+    # Handle both single file and multiple files seamlessly
+    files_data = []
+
+    # Debug logging with prints (will show in gunicorn logs)
+    print(f"[Expense DEBUG] Request data keys: {list(request.data.keys())}")
+    print(f"[Expense DEBUG] 'files' in request.data: {'files' in request.data}")
+    print(f"[Expense DEBUG] 'file' in request.data: {'file' in request.data}")
+
+    # Check if files are provided as a list (multiple files)
+    if 'files' in request.data:
+        files_data = request.data.getlist('files') if hasattr(request.data, 'getlist') else request.data.get('files',
+                                                                                                             [])
+        # Ensure files_data is always a list
+        if not isinstance(files_data, list):
+            files_data = [files_data] if files_data else []
+        print(f"[Expense DEBUG] Found 'files' field with {len(files_data)} file(s)")
+    # Check if a single file is provided
+    elif 'file' in request.data:
+        single_file = request.data.get('file')
+        if single_file:
+            files_data = [single_file]
+        print(f"[Expense DEBUG] Found 'file' field with {len(files_data)} file(s)")
+
+    print(f"[Expense DEBUG] Total files collected: {len(files_data)}")
+
+    # Debug: Print details about each file
+    for i, f in enumerate(files_data):
+        print(f"[journal DEBUG] File {i + 1}: {getattr(f, 'name', 'Unknown')} - Size: {getattr(f, 'size', 'Unknown')}")
+
+    # Prepare data for serializer validation
+    serializer_data = {
+        'files': files_data,
+        'fileType': request.data.get('fileType', 'Single Invoice/File')
+    }
+
+    print(
+        f"[Expense DEBUG] Serializer data: files count = {len(serializer_data['files'])}, fileType = {serializer_data['fileType']}")
+
+    serializer = ZohoExpenseBillMultipleUploadSerializer(data=serializer_data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response(
+            {'error': 'Organization not found'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    files = serializer.validated_data['files']
+    file_type = serializer.validated_data['fileType']
+    created_bills = []
+
+    print(f"[Expense DEBUG] After serializer validation - files count: {len(files)}, fileType: {file_type}")
+
+    if not files:
+        return Response(
+            {'error': 'No files provided for upload'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        # Temporarily removing atomic transaction to debug
+        # with transaction.atomic():
+        print(f"[Expense DEBUG] Starting to process {len(files)} files")
+        for i, uploaded_file in enumerate(files):
+            print(f"[Expense DEBUG] Processing file {i + 1}/{len(files)}: {uploaded_file.name}")
+            file_extension = uploaded_file.name.lower().split('.')[-1]
+
+            # Handle PDF splitting for multiple invoice files
+            if file_type == 'Multiple Invoice/File' and file_extension == 'pdf':
+                print(f"[Expense DEBUG] Processing as PDF split for file: {uploaded_file.name}")
+                pdf_bills = process_pdf_splitting_expense(
+                    uploaded_file, organization, file_type, request.user
+                )
+                print(f"[Expense DEBUG] PDF splitting created {len(pdf_bills)} bills")
+                created_bills.extend(pdf_bills)
+            else:
+                # Create single bill (including PDFs for single invoice type)
+                # Let the model generate billmunshiName automatically
+                print(f"[Expense DEBUG] Creating single bill for file: {uploaded_file.name}")
+                bill = ExpenseBill.objects.create(
+                    file=uploaded_file,
+                    fileType=file_type,
+                    status='Draft',
+                    organization=organization,
+                    uploaded_by=request.user
+                )
+                print(f"[Expense DEBUG] Created bill: {bill.billmunshiName} (ID: {bill.id})")
+                created_bills.append(bill)
+
+        print(f"[Expense DEBUG] Completed processing all files. Total bills created: {len(created_bills)}")
+
+        # Debug: Print all created bills
+        for i, bill in enumerate(created_bills):
+            print(f"[Expense DEBUG] Bill {i + 1}: {bill.billmunshiName} (ID: {bill.id})")
+
+        response_serializer = ZohoExpenseBillSerializer(created_bills, many=True, context={'request': request})
+
+        # Log the successful result
+        logger.info(f"Successfully processed {len(files)} files and created {len(created_bills)} bills")
+        for i, bill in enumerate(created_bills):
+            logger.info(f"Created bill {i + 1}: {bill.billmunshiName} (ID: {bill.id})")
+
+        return Response({
+            'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} bill(s)',
+            'files_uploaded': len(files),
+            'bills_created': len(created_bills),
+            'bills': response_serializer.data
+        }, status=status.HTTP_201_CREATED)
+
+    except Exception as e:
+        logger.error(f"Error uploading Expense bills: {str(e)}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return Response({
+            'detail': f'Error processing files: {str(e)}'
+        }, status=status.HTTP_400_BAD_REQUEST)
