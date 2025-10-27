@@ -939,25 +939,10 @@ def journal_bill_verify_view(request, org_id, bill_id):
 
                         product_id = product_data.get('id')
 
-                        # Validate taxes for this product
-                        product_taxes_id = product_data.get('taxes')
-                        if product_taxes_id:
-                            try:
-                                from .models import ZohoTaxes
-                                product_taxes = ZohoTaxes.objects.get(id=product_taxes_id, organization=organization)
-                                logger.info(f"[DEBUG] journal_bill_verify_view - Product taxes validated: {product_taxes.taxName}")
-                            except ZohoTaxes.DoesNotExist:
-                                logger.error(f"[DEBUG] journal_bill_verify_view - ERROR: Product taxes {product_taxes_id} does not exist")
-                                return Response(
-                                    {"detail": f"Product taxes with ID {product_taxes_id} does not exist in this organization. Please sync taxes from Zoho first."},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-
                         # Prepare product data for creation/update
                         product_fields = {
                             'item_details': product_data.get('item_details'),
                             'chart_of_accounts_id': product_data.get('chart_of_accounts'),
-                            'taxes_id': product_data.get('taxes'),
                             'amount': product_data.get('amount'),
                             'debit_or_credit': product_data.get('debit_or_credit', 'credit'),
                         }
