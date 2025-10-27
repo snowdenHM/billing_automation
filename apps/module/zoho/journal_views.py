@@ -729,8 +729,8 @@ def journal_bill_detail_view(request, org_id, bill_id):
             # If no JournalZohoBill exists, set it to None
             bill.zoho_bill = None
 
-        # Serialize the data with request context for full URLs
-        serializer = ZohoJournalBillDetailSerializer(bill, context={'request': request})
+        # Serialize the data with request and organization context for full URLs
+        serializer = ZohoJournalBillDetailSerializer(bill, context={'request': request, 'organization': organization})
         logger.info(f"[DEBUG] journal_bill_detail_view - Successfully serialized bill data")
         return Response(serializer.data)
 
@@ -939,10 +939,34 @@ def journal_bill_verify_view(request, org_id, bill_id):
 
                         product_id = product_data.get('id')
 
+                        # Validate chart of accounts ID belongs to organization
+                        chart_of_accounts_id = product_data.get('chart_of_accounts')
+                        chart_of_accounts_obj = None
+                        if chart_of_accounts_id:
+                            try:
+                                from .models import ZohoChartOfAccount
+                                chart_of_accounts_obj = ZohoChartOfAccount.objects.get(
+                                    id=chart_of_accounts_id,
+                                    organization=organization
+                                )
+                                logger.info(f"[DEBUG] Validated chart of accounts: {chart_of_accounts_obj.accountName} (ID: {chart_of_accounts_obj.id})")
+                            except ZohoChartOfAccount.DoesNotExist:
+                                logger.error(f"[DEBUG] Chart of accounts {chart_of_accounts_id} does not exist in organization {organization.name}")
+                                return Response(
+                                    {"detail": f"Chart of Account with ID {chart_of_accounts_id} does not exist in this organization. Please sync chart of accounts from Zoho first."},
+                                    status=status.HTTP_400_BAD_REQUEST
+                                )
+                            except Exception as coa_error:
+                                logger.error(f"[DEBUG] Error validating chart of accounts: {coa_error}")
+                                return Response(
+                                    {"detail": f"Error validating chart of accounts: {str(coa_error)}"},
+                                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                                )
+
                         # Prepare product data for creation/update
                         product_fields = {
                             'item_details': product_data.get('item_details'),
-                            'chart_of_accounts_id': product_data.get('chart_of_accounts'),
+                            'chart_of_accounts': chart_of_accounts_obj,
                             'amount': product_data.get('amount'),
                             'debit_or_credit': product_data.get('debit_or_credit', 'credit'),
                         }

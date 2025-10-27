@@ -68,6 +68,14 @@ class JournalZohoProductSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "zohoBill", "created_at"]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope chart_of_accounts queryset to organization if context is provided
+        if 'context' in kwargs and 'organization' in kwargs['context']:
+            organization = kwargs['context']['organization']
+            from ..models import ZohoChartOfAccount
+            self.fields['chart_of_accounts'].queryset = ZohoChartOfAccount.objects.filter(organization=organization)
+
 
 class JournalZohoBillSerializer(serializers.ModelSerializer):
     """Serializer for Journal Zoho bill with corrected product relationship"""
@@ -88,11 +96,50 @@ class JournalZohoBillSerializer(serializers.ModelSerializer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Scope vendor queryset to organization if context is provided
+        # Scope vendor and chart of account querysets to organization if context is provided
         if 'context' in kwargs and 'organization' in kwargs['context']:
             organization = kwargs['context']['organization']
-            from ..models import ZohoVendor
+            from ..models import ZohoVendor, ZohoChartOfAccount
+            
+            # Scope vendor queryset
             self.fields['vendor'].queryset = ZohoVendor.objects.filter(organization=organization)
+            
+            # Scope all chart of account fields to organization
+            chart_account_fields = ['vendor_coa', 'igst_coa', 'cgst_coa', 'sgst_coa']
+            for field_name in chart_account_fields:
+                if field_name in self.fields:
+                    self.fields[field_name].queryset = ZohoChartOfAccount.objects.filter(organization=organization)
+
+    def validate(self, attrs):
+        """Custom validation for chart of account fields"""
+        # Get organization from context
+        organization = self.context.get('organization')
+        if not organization:
+            return attrs
+
+        # Validate chart of account fields belong to the organization
+        chart_account_fields = {
+            'vendor_coa': 'vendor chart of account',
+            'igst_coa': 'IGST chart of account', 
+            'cgst_coa': 'CGST chart of account',
+            'sgst_coa': 'SGST chart of account'
+        }
+        
+        from ..models import ZohoChartOfAccount
+        
+        for field_name, field_display in chart_account_fields.items():
+            field_value = attrs.get(field_name)
+            if field_value:
+                # Check if the chart of account belongs to the organization
+                if not ZohoChartOfAccount.objects.filter(
+                    id=field_value.id, 
+                    organization=organization
+                ).exists():
+                    raise serializers.ValidationError({
+                        field_name: f"The selected {field_display} does not belong to this organization. Please sync chart of accounts from Zoho Books first."
+                    })
+        
+        return attrs
 
 
 class ZohoJournalBillSerializer(serializers.ModelSerializer):
@@ -153,6 +200,20 @@ class ZohoJournalBillDetailSerializer(serializers.Serializer):
 
     class Meta:
         ref_name = "ZohoJournalBillDetail"
+
+    def to_representation(self, instance):
+        """Override to pass organization context to nested serializers"""
+        data = super().to_representation(instance)
+        
+        # If zoho_bill exists and we have organization context, re-serialize with organization
+        if hasattr(instance, 'zoho_bill') and instance.zoho_bill and instance.organization:
+            zoho_bill_serializer = JournalZohoBillSerializer(
+                instance.zoho_bill, 
+                context={'organization': instance.organization, 'request': self.context.get('request')}
+            )
+            data['zoho_bill'] = zoho_bill_serializer.data
+            
+        return data
 
 
 class ZohoJournalBillUploadSerializer(serializers.ModelSerializer):
