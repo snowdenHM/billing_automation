@@ -686,13 +686,17 @@ def expense_bill_upload_view(request, org_id):
 @permission_classes([IsAuthenticated])
 def expense_bill_detail_view(request, org_id, bill_id):
     """Get expense bill details including analysis data."""
+    logger.info(f"[DEBUG] expense_bill_detail_view - Starting request for org_id: {org_id}, bill_id: {bill_id}")
+
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
+        logger.error(f"[DEBUG] expense_bill_detail_view - Organization not found: {org_id}")
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
         # Fetch the ExpenseBill
         bill = ExpenseBill.objects.get(id=bill_id, organization=organization)
+        logger.info(f"[DEBUG] expense_bill_detail_view - Found ExpenseBill: {bill.id}, status: {bill.status}")
 
         # Get the next bill with 'Analysed' status
         next_bill_id = None
@@ -703,9 +707,9 @@ def expense_bill_detail_view(request, org_id, bill_id):
 
         if analysed_bills:
             next_bill_id = str(analysed_bills[0])  # Get the first analysed bill
-            logger.info(f"Found next analysed Expense bill: {next_bill_id}")
+            logger.info(f"[DEBUG] expense_bill_detail_view - Found next analysed Expense bill: {next_bill_id}")
         else:
-            logger.info("No analysed Expense bills found for next_bill")
+            logger.info("[DEBUG] expense_bill_detail_view - No analysed Expense bills found for next_bill")
 
         # Always set next_bill on the bill object
         bill.next_bill = next_bill_id
@@ -713,21 +717,31 @@ def expense_bill_detail_view(request, org_id, bill_id):
         # Get the related ExpenseZohoBill if it exists
         try:
             zoho_bill = ExpenseZohoBill.objects.select_related('selectBill').prefetch_related(
-                'products'
+                'products__chart_of_accounts',
+                'products__taxes'
             ).get(selectBill=bill, organization=organization)
 
+            logger.info(f"[DEBUG] expense_bill_detail_view - Found ExpenseZohoBill: {zoho_bill.id}")
             # Attach zoho_bill to the bill object for the serializer
             bill.zoho_bill = zoho_bill
         except ExpenseZohoBill.DoesNotExist:
+            logger.info(f"[DEBUG] expense_bill_detail_view - No ExpenseZohoBill found for bill: {bill_id}")
             # If no ExpenseZohoBill exists, set it to None
             bill.zoho_bill = None
 
         # Serialize the data with request context for full URLs
         serializer = ZohoExpenseBillDetailSerializer(bill, context={'request': request})
+        logger.info(f"[DEBUG] expense_bill_detail_view - Successfully serialized bill data")
         return Response(serializer.data)
 
     except ExpenseBill.DoesNotExist:
+        logger.error(f"[DEBUG] expense_bill_detail_view - ExpenseBill not found: {bill_id}")
         return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"[DEBUG] expense_bill_detail_view - Unexpected error: {str(e)}")
+        import traceback
+        logger.error(f"[DEBUG] expense_bill_detail_view - Traceback: {traceback.format_exc()}")
+        return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ✅

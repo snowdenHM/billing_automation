@@ -9,6 +9,7 @@ from apps.module.zoho.models import (
     JournalZohoProduct,
     ZohoVendor,
     ZohoChartOfAccount,
+    ZohoTaxes,
 )
 
 
@@ -63,18 +64,18 @@ class JournalZohoProductSerializer(serializers.ModelSerializer):
         model = JournalZohoProduct
         fields = [
             "id", "zohoBill", "item_details", "chart_of_accounts",
-            "vendor", "amount", "debit_or_credit", "created_at"
+            "taxes", "amount", "debit_or_credit", "created_at"
         ]
         read_only_fields = ["id", "zohoBill", "created_at"]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Scope vendor queryset to organization if context is provided through parent
+        # Scope taxes queryset to organization if context is provided through parent
         request = self.context.get('request') if hasattr(self, 'context') else None
         if request and hasattr(request, 'organization'):
             organization = request.organization
-            from ..models import ZohoVendor
-            self.fields['vendor'].queryset = ZohoVendor.objects.filter(organization=organization)
+            from ..models import ZohoTaxes
+            self.fields['taxes'].queryset = ZohoTaxes.objects.filter(organization=organization)
 
 
 class JournalZohoBillSerializer(serializers.ModelSerializer):
@@ -255,8 +256,8 @@ class ZohoJournalVerifyProductItemSerializer(serializers.Serializer):
     chart_of_accounts = serializers.PrimaryKeyRelatedField(
         queryset=ZohoChartOfAccount.objects.all(), required=False, allow_null=True
     )
-    vendor = serializers.PrimaryKeyRelatedField(
-        queryset=ZohoVendor.objects.all(), required=False, allow_null=True
+    taxes = serializers.PrimaryKeyRelatedField(
+        queryset=ZohoTaxes.objects.all(), required=False, allow_null=True
     )
     item_details = serializers.CharField(required=False, allow_blank=True)
     amount = serializers.CharField(required=False, allow_blank=True)
@@ -265,6 +266,14 @@ class ZohoJournalVerifyProductItemSerializer(serializers.Serializer):
         required=False,
         default="credit"
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope querysets to organization if context is provided
+        organization = self.context.get('organization') if hasattr(self, 'context') else None
+        if organization:
+            self.fields['chart_of_accounts'].queryset = ZohoChartOfAccount.objects.filter(organization=organization)
+            self.fields['taxes'].queryset = ZohoTaxes.objects.filter(organization=organization)
 
 
 class ZohoJournalBillVerifySerializer(serializers.Serializer):

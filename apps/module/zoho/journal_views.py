@@ -686,8 +686,11 @@ def journal_bill_upload_view(request, org_id):
 @permission_classes([IsAuthenticated])
 def journal_bill_detail_view(request, org_id, bill_id):
     """Get journal bill details including analysis data."""
+    logger.info(f"[DEBUG] journal_bill_detail_view - Starting request for org_id: {org_id}, bill_id: {bill_id}")
+
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
+        logger.error(f"[DEBUG] journal_bill_detail_view - Organization not found: {org_id}")
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
@@ -710,25 +713,34 @@ def journal_bill_detail_view(request, org_id, bill_id):
         # Always set next_bill on the bill object
         bill.next_bill = next_bill_id
 
+        logger.info(f"[DEBUG] journal_bill_detail_view - Processing bill ID: {bill_id} for organization: {organization.name}")
+
         # Get the related JournalZohoBill if it exists
         try:
             zoho_bill = JournalZohoBill.objects.select_related('vendor').prefetch_related(
                 'products__chart_of_accounts',
-                'products__vendor'
+                'products__taxes'
             ).get(selectBill=bill, organization=organization)
 
+            logger.info(f"[DEBUG] journal_bill_detail_view - Found JournalZohoBill: {zoho_bill.id}")
             # Attach zoho_bill to the bill object for the serializer
             bill.zoho_bill = zoho_bill
         except JournalZohoBill.DoesNotExist:
+            logger.info(f"[DEBUG] journal_bill_detail_view - No JournalZohoBill found for bill: {bill_id}")
             # If no JournalZohoBill exists, set it to None
             bill.zoho_bill = None
 
         # Serialize the data with request context for full URLs
         serializer = ZohoJournalBillDetailSerializer(bill, context={'request': request})
+        logger.info(f"[DEBUG] journal_bill_detail_view - Successfully serialized bill data")
         return Response(serializer.data)
 
     except JournalBill.DoesNotExist:
+        logger.error(f"[DEBUG] journal_bill_detail_view - JournalBill not found: {bill_id}")
         return Response({"detail": "journal bill not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"[DEBUG] journal_bill_detail_view - Unexpected error: {str(e)}")
+        return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # ✅
 @extend_schema(
@@ -928,17 +940,17 @@ def journal_bill_verify_view(request, org_id, bill_id):
 
                         product_id = product_data.get('id')
 
-                        # Validate vendor for this product
-                        product_vendor_id = product_data.get('vendor')
-                        if product_vendor_id:
+                        # Validate taxes for this product
+                        product_taxes_id = product_data.get('taxes')
+                        if product_taxes_id:
                             try:
-                                from .models import ZohoVendor
-                                product_vendor = ZohoVendor.objects.get(id=product_vendor_id, organization=organization)
-                                logger.info(f"[DEBUG] journal_bill_verify_view - Product vendor validated: {product_vendor.companyName}")
-                            except ZohoVendor.DoesNotExist:
-                                logger.error(f"[DEBUG] journal_bill_verify_view - ERROR: Product vendor {product_vendor_id} does not exist")
+                                from .models import ZohoTaxes
+                                product_taxes = ZohoTaxes.objects.get(id=product_taxes_id, organization=organization)
+                                logger.info(f"[DEBUG] journal_bill_verify_view - Product taxes validated: {product_taxes.taxName}")
+                            except ZohoTaxes.DoesNotExist:
+                                logger.error(f"[DEBUG] journal_bill_verify_view - ERROR: Product taxes {product_taxes_id} does not exist")
                                 return Response(
-                                    {"detail": f"Product vendor with ID {product_vendor_id} does not exist in this organization. Please sync vendors from Zoho first."},
+                                    {"detail": f"Product taxes with ID {product_taxes_id} does not exist in this organization. Please sync taxes from Zoho first."},
                                     status=status.HTTP_400_BAD_REQUEST
                                 )
 
@@ -946,7 +958,7 @@ def journal_bill_verify_view(request, org_id, bill_id):
                         product_fields = {
                             'item_details': product_data.get('item_details'),
                             'chart_of_accounts_id': product_data.get('chart_of_accounts'),
-                            'vendor_id': product_data.get('vendor'),
+                            'taxes_id': product_data.get('taxes'),
                             'amount': product_data.get('amount'),
                             'debit_or_credit': product_data.get('debit_or_credit', 'credit'),
                         }
@@ -1067,14 +1079,19 @@ def journal_bill_verify_view(request, org_id, bill_id):
 @permission_classes([IsAuthenticated])
 def journal_bill_sync_view(request, org_id, bill_id):
     """Sync verified journal bill to Zoho Books. Changes status to 'Synced'."""
+    logger.info(f"[DEBUG] journal_bill_sync_view - Starting sync for org_id: {org_id}, bill_id: {bill_id}")
+
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
+        logger.error(f"[DEBUG] journal_bill_sync_view - Organization not found: {org_id}")
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
         bill = JournalBill.objects.get(id=bill_id, organization=organization)
+        logger.info(f"[DEBUG] journal_bill_sync_view - Found JournalBill: {bill.id}, status: {bill.status}")
 
         if bill.status != 'Verified':
+            logger.error(f"[DEBUG] journal_bill_sync_view - Invalid status for sync: {bill.status}")
             return Response(
                 {"detail": "Bill must be in 'Verified' status to sync"},
                 status=status.HTTP_400_BAD_REQUEST
@@ -1083,7 +1100,9 @@ def journal_bill_sync_view(request, org_id, bill_id):
         # Get Zoho journal data
         try:
             zoho_bill = JournalZohoBill.objects.get(selectBill=bill, organization=organization)
+            logger.info(f"[DEBUG] journal_bill_sync_view - Found JournalZohoBill: {zoho_bill.id}")
         except JournalZohoBill.DoesNotExist:
+            logger.error(f"[DEBUG] journal_bill_sync_view - JournalZohoBill not found for bill: {bill_id}")
             return Response(
                 {"detail": "Zoho journal data not found. Please verify the bill first."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -1119,22 +1138,22 @@ def journal_bill_sync_view(request, org_id, bill_id):
         # Add line items from products
         for item in zoho_products:
             try:
-                # Get chart of account and vendor for the line item
+                # Get chart of account and taxes for the line item
                 chart_of_account = item.chart_of_accounts
-                vendor = item.vendor if hasattr(item, 'vendor') and item.vendor else zoho_bill.vendor
+                taxes = item.taxes
 
                 if not chart_of_account:
                     logger.warning(f"No chart of account found for product {item.id}")
                     continue
 
-                if not vendor:
-                    logger.warning(f"No vendor found for product {item.id}")
+                if not taxes:
+                    logger.warning(f"No taxes found for product {item.id}")
                     continue
 
                 line_item = {
                     "description": item.item_details,
                     "account_id": str(chart_of_account.accountId),
-                    "tax_id": str(item.taxes.taxId),
+                    "tax_id": str(taxes.taxId),
                     "amount": float(item.amount) if item.amount else 0,
                     "debit_or_credit": getattr(item, 'debit_or_credit', 'debit')
                 }
@@ -1145,10 +1164,13 @@ def journal_bill_sync_view(request, org_id, bill_id):
                 continue
 
         if not bill_data["line_items"]:
+            logger.error(f"[DEBUG] journal_bill_sync_view - No valid line items found for syncing")
             return Response(
                 {"detail": "No valid line items found for syncing"},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        logger.info(f"[DEBUG] journal_bill_sync_view - Prepared {len(bill_data['line_items'])} line items for sync")
 
         # Sync to Zoho Books
         url = f"https://www.zohoapis.in/books/v3/journals?organization_id={current_token.organisationId}"
@@ -1157,6 +1179,8 @@ def journal_bill_sync_view(request, org_id, bill_id):
             'Authorization': f'Zoho-oauthtoken {current_token.accessToken}',
             'Content-Type': 'application/json'
         }
+
+        logger.info(f"[DEBUG] journal_bill_sync_view - Making API call to Zoho: {url}")
 
         try:
             response = requests.post(url, headers=headers, data=payload)
@@ -1169,19 +1193,24 @@ def journal_bill_sync_view(request, org_id, bill_id):
                     response = requests.post(url, headers=headers, data=payload)
 
             if response.status_code == 201:
+                logger.info(f"[DEBUG] journal_bill_sync_view - Zoho sync successful")
                 # Update bill status
                 bill.status = 'Synced'
                 bill.save()
+                logger.info(f"[DEBUG] journal_bill_sync_view - Bill status updated to Synced")
 
                 response_data = response.json()
+                zoho_journal_id = response_data.get('journal', {}).get('journal_id')
+                logger.info(f"[DEBUG] journal_bill_sync_view - Zoho journal ID: {zoho_journal_id}")
                 return Response({
                     "detail": "journal synced to Zoho successfully",
-                    "zoho_journal_id": response_data.get('journal', {}).get('journal_id')
+                    "zoho_journal_id": zoho_journal_id
                 })
             else:
                 response_json = response.json() if response.content else {}
                 error_message = response_json.get("message", "Failed to send data to Zoho")
-                logger.error(f"Zoho sync failed: {response.status_code} - {error_message}")
+                logger.error(f"[DEBUG] journal_bill_sync_view - Zoho sync failed: {response.status_code} - {error_message}")
+                logger.error(f"[DEBUG] journal_bill_sync_view - Response content: {response.text}")
                 return Response(
                     {"detail": error_message},
                     status=status.HTTP_400_BAD_REQUEST
@@ -1195,9 +1224,12 @@ def journal_bill_sync_view(request, org_id, bill_id):
             )
 
     except JournalBill.DoesNotExist:
+        logger.error(f"[DEBUG] journal_bill_sync_view - JournalBill not found: {bill_id}")
         return Response({"detail": "journal bill not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
-        logger.error(f"Sync failed: {str(e)}")
+        logger.error(f"[DEBUG] journal_bill_sync_view - Unexpected error: {str(e)}")
+        import traceback
+        logger.error(f"[DEBUG] journal_bill_sync_view - Traceback: {traceback.format_exc()}")
         return Response(
             {"detail": f"Sync failed: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

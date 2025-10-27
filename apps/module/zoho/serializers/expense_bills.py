@@ -88,7 +88,7 @@ class ExpenseZohoBillSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExpenseZohoBill
         fields = [
-            "id", "selectBill", "vendor", "bill_no", "bill_date", "total","chart_of_accounts",
+            "id", "selectBill", "vendor", "bill_no", "bill_date", "total", "chart_of_accounts",
             "igst", "cgst", "sgst", "note", "created_at", "products"
         ]
         read_only_fields = ["id", "selectBill", "created_at"]
