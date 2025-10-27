@@ -36,7 +36,7 @@ class ZohoVendorSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ZohoVendor
-        fields = ["id", "organization", "contactId", "companyName", "gstNo", "created_at"]
+        fields = ["id", "organization", "contactId", "companyName", "gstNo", "gst_treatment", "created_at"]
         read_only_fields = ["id", "created_at"]
 
 

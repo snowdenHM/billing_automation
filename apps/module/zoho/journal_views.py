@@ -1134,7 +1134,7 @@ def journal_bill_sync_view(request, org_id, bill_id):
                 line_item = {
                     "description": item.item_details,
                     "account_id": str(chart_of_account.accountId),
-                    "customer_id": str(vendor.contactId),
+                    "tax_id": str(item.taxes.taxId),
                     "amount": float(item.amount) if item.amount else 0,
                     "debit_or_credit": getattr(item, 'debit_or_credit', 'debit')
                 }

@@ -125,6 +125,7 @@ class ZohoVendor(BaseTeamModel):
     contactId = models.CharField(max_length=100, unique=True)
     companyName = models.CharField(max_length=100)
     gstNo = models.CharField(max_length=30)
+    gst_treatment = models.CharField(max_length=100, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -516,7 +517,7 @@ class JournalZohoProduct(BaseTeamModel):
     zohoBill = models.ForeignKey("JournalZohoBill", on_delete=models.CASCADE, related_name="products")
     item_details = models.CharField(max_length=2000, null=True, blank=True)
     chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
-    vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
+    taxes = models.ForeignKey("ZohoTaxes", on_delete=models.CASCADE, null=True, blank=True)
     amount = models.CharField(max_length=50, null=True, blank=True)
     debit_or_credit = models.CharField(choices=TRANSACTION_TYPE_CHOICES, max_length=10, null=True, blank=True,
                                        default="credit")

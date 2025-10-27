@@ -123,11 +123,11 @@ class ZohoTDSTCSAdmin(BaseOrgScopedAdmin):
 class JournalZohoProductInline(admin.TabularInline):
     model = JournalZohoProduct
     extra = 0
-    autocomplete_fields = ("chart_of_accounts", "vendor")
+    autocomplete_fields = ("chart_of_accounts", "taxes")
     fields = (
         "item_details",
         "chart_of_accounts",
-        "vendor",
+        "taxes",
         "amount",
         "debit_or_credit",
         "created_at",

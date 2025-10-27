@@ -297,7 +297,8 @@ def vendors_sync_view(request, org_id):
                     contactId=contact['contact_id'],
                     defaults={
                         'companyName': contact.get('company_name', ''),
-                        'gstNo': contact.get('gst_no', '')
+                        'gstNo': contact.get('gst_no', ''),
+                        'gst_treatment': contact.get('gst_treatment', '')
                     }
                 )
                 if created:
