@@ -1249,6 +1249,10 @@ def journal_bill_sync_view(request, org_id, bill_id):
 
         logger.info(f"[DEBUG] journal_bill_sync_view - Prepared {len(bill_data['line_items'])} line items for sync")
 
+        # Print complete payload for debugging
+        logger.info(f"[DEBUG] journal_bill_sync_view - Complete bill_data payload:")
+        logger.info(f"[DEBUG] {json.dumps(bill_data, indent=2, default=str)}")
+
         # Sync to Zoho Books
         url = f"https://www.zohoapis.in/books/v3/journals?organization_id={current_token.organisationId}"
         payload = json.dumps(bill_data)
@@ -1258,6 +1262,7 @@ def journal_bill_sync_view(request, org_id, bill_id):
         }
 
         logger.info(f"[DEBUG] journal_bill_sync_view - Making API call to Zoho: {url}")
+        logger.info(f"[DEBUG] journal_bill_sync_view - JSON payload being sent: {payload}")
 
         try:
             response = requests.post(url, headers=headers, data=payload)
