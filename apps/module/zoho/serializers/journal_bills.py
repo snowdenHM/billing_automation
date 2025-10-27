@@ -77,8 +77,12 @@ class JournalZohoBillSerializer(serializers.ModelSerializer):
     class Meta:
         model = JournalZohoBill
         fields = [
-            "id", "selectBill", "vendor", "bill_no", "bill_date", "total",
-            "igst", "cgst", "sgst", "note", "created_at", "products"
+            "id", "selectBill", "vendor", "bill_no", "bill_date", 
+            "vendor_coa", "vendor_debit_or_credit", "vendor_amount",
+            "total", "igst", "igst_coa", "igst_debit_or_credit", 
+            "cgst", "cgst_coa", "cgst_debit_or_credit", 
+            "sgst", "sgst_coa", "sgst_debit_or_credit", 
+            "note", "created_at", "products"
         ]
         read_only_fields = ["id", "selectBill", "created_at"]
 
