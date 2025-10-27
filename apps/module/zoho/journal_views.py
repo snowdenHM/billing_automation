@@ -1194,6 +1194,7 @@ def journal_bill_sync_view(request, org_id, bill_id):
         # Add mandatory vendor line item
         if zoho_bill.vendor_coa and zoho_bill.vendor_amount:
             vendor_line_item = {
+                "customer_id": str(zoho_bill.vendor.contactId),
                 "description": f"Vendor - {zoho_bill.vendor.companyName if zoho_bill.vendor else 'Unknown Vendor'}",
                 "account_id": str(zoho_bill.vendor_coa.accountId),
                 "amount": float(zoho_bill.vendor_amount),
