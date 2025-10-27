@@ -718,8 +718,7 @@ def journal_bill_detail_view(request, org_id, bill_id):
         # Get the related JournalZohoBill if it exists
         try:
             zoho_bill = JournalZohoBill.objects.select_related('vendor').prefetch_related(
-                'products__chart_of_accounts',
-                'products__taxes'
+                'products__chart_of_accounts'
             ).get(selectBill=bill, organization=organization)
 
             logger.info(f"[DEBUG] journal_bill_detail_view - Found JournalZohoBill: {zoho_bill.id}")
