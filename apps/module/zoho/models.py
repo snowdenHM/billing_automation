@@ -4,6 +4,8 @@ import os
 import re
 import uuid
 
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -478,15 +480,47 @@ class JournalZohoBill(BaseTeamModel):
     Represents an analyzed expense bill with extracted data ready for Zoho Books.
     Links to the original JournalBill and contains tax information and vendor details.
     """
+    TRANSACTION_TYPE_CHOICES = (
+        ("credit", "Credit"),
+        ("debit", "Debit"),
+    )
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     selectBill = models.ForeignKey("JournalBill", on_delete=models.CASCADE, null=True, blank=True)
     vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
     bill_no = models.CharField(max_length=50, null=True, blank=True)
     bill_date = models.DateField(null=True, blank=True)
+    vendor_coa = models.ForeignKey(
+        ZohoChartOfAccount, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="vendor_tally_expense_analysed_bills"
+    )
+    vendor_debit_or_credit = models.CharField(
+        choices=TRANSACTION_TYPE_CHOICES, max_length=10, blank=True, null=True, default="credit"
+    )
+    vendor_amount = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     total = models.CharField(max_length=50, null=True, blank=True, default=0)
     igst = models.CharField(max_length=50, null=True, blank=True, default=0)
+    igst_coa = models.ForeignKey(
+        ZohoChartOfAccount, on_delete=models.CASCADE, blank=True, null=True, related_name="igst_tally_expense_analysed_bills"
+    )
+    igst_debit_or_credit = models.CharField(
+        choices=TRANSACTION_TYPE_CHOICES, max_length=10, blank=True, null=True, default="debit"
+    )
     cgst = models.CharField(max_length=50, null=True, blank=True, default=0)
+    cgst_coa = models.ForeignKey(
+        ZohoChartOfAccount, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="cgst_tally_expense_analysed_bills"
+    )
+    cgst_debit_or_credit = models.CharField(
+        choices=TRANSACTION_TYPE_CHOICES, max_length=10, blank=True, null=True, default="debit"
+    )
     sgst = models.CharField(max_length=50, null=True, blank=True, default=0)
+    sgst_coa = models.ForeignKey(
+        ZohoChartOfAccount, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="sgst_tally_expense_analysed_bills"
+    )
+    sgst_debit_or_credit = models.CharField(
+        choices=TRANSACTION_TYPE_CHOICES, max_length=10, blank=True, null=True, default="debit"
+    )
     note = models.CharField(max_length=100, null=True, blank=True, default="Enter Your Description")
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -517,10 +551,9 @@ class JournalZohoProduct(BaseTeamModel):
     zohoBill = models.ForeignKey("JournalZohoBill", on_delete=models.CASCADE, related_name="products")
     item_details = models.CharField(max_length=2000, null=True, blank=True)
     chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
-    taxes = models.ForeignKey("ZohoTaxes", on_delete=models.CASCADE, null=True, blank=True)
     amount = models.CharField(max_length=50, null=True, blank=True)
     debit_or_credit = models.CharField(choices=TRANSACTION_TYPE_CHOICES, max_length=10, null=True, blank=True,
-                                       default="credit")
+                                       default="debit")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

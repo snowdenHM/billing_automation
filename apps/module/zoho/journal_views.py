@@ -998,6 +998,54 @@ def journal_bill_verify_view(request, org_id, bill_id):
                 total_debit = 0
                 total_credit = 0
 
+                # Add vendor amount to balance calculation
+                if updated_bill.vendor_amount:
+                    try:
+                        vendor_amount = float(updated_bill.vendor_amount)
+                        if updated_bill.vendor_debit_or_credit == 'debit':
+                            total_debit += vendor_amount
+                        elif updated_bill.vendor_debit_or_credit == 'credit':
+                            total_credit += vendor_amount
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid vendor amount: {updated_bill.vendor_amount}")
+
+                # Add IGST amount to balance calculation
+                if updated_bill.igst:
+                    try:
+                        igst_amount = float(updated_bill.igst)
+                        if igst_amount > 0:
+                            if updated_bill.igst_debit_or_credit == 'debit':
+                                total_debit += igst_amount
+                            elif updated_bill.igst_debit_or_credit == 'credit':
+                                total_credit += igst_amount
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid IGST amount: {updated_bill.igst}")
+
+                # Add CGST amount to balance calculation
+                if updated_bill.cgst:
+                    try:
+                        cgst_amount = float(updated_bill.cgst)
+                        if cgst_amount > 0:
+                            if updated_bill.cgst_debit_or_credit == 'debit':
+                                total_debit += cgst_amount
+                            elif updated_bill.cgst_debit_or_credit == 'credit':
+                                total_credit += cgst_amount
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid CGST amount: {updated_bill.cgst}")
+
+                # Add SGST amount to balance calculation
+                if updated_bill.sgst:
+                    try:
+                        sgst_amount = float(updated_bill.sgst)
+                        if sgst_amount > 0:
+                            if updated_bill.sgst_debit_or_credit == 'debit':
+                                total_debit += sgst_amount
+                            elif updated_bill.sgst_debit_or_credit == 'credit':
+                                total_credit += sgst_amount
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid SGST amount: {updated_bill.sgst}")
+
+                # Add product amounts to balance calculation
                 for product in all_products:
                     try:
                         amount = float(product.amount) if product.amount else 0
@@ -1135,29 +1183,74 @@ def journal_bill_sync_view(request, org_id, bill_id):
             "line_items": []
         }
 
+        # Add mandatory vendor line item
+        if zoho_bill.vendor_coa and zoho_bill.vendor_amount:
+            vendor_line_item = {
+                "description": f"Vendor - {zoho_bill.vendor.companyName if zoho_bill.vendor else 'Unknown Vendor'}",
+                "account_id": str(zoho_bill.vendor_coa.accountId),
+                "amount": float(zoho_bill.vendor_amount),
+                "debit_or_credit": zoho_bill.vendor_debit_or_credit or "credit"
+            }
+            bill_data["line_items"].append(vendor_line_item)
+            logger.info(f"[DEBUG] Added vendor line item: {vendor_line_item}")
+        else:
+            logger.error(f"[DEBUG] Vendor line item is mandatory but missing vendor_coa or vendor_amount")
+            return Response(
+                {"detail": "Vendor chart of account and amount are mandatory for journal entry"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Add IGST line item if available
+        if zoho_bill.igst and float(zoho_bill.igst or 0) > 0 and zoho_bill.igst_coa:
+            igst_line_item = {
+                "description": "IGST",
+                "account_id": str(zoho_bill.igst_coa.accountId),
+                "amount": float(zoho_bill.igst),
+                "debit_or_credit": zoho_bill.igst_debit_or_credit or "debit"
+            }
+            bill_data["line_items"].append(igst_line_item)
+            logger.info(f"[DEBUG] Added IGST line item: {igst_line_item}")
+
+        # Add CGST line item if available
+        if zoho_bill.cgst and float(zoho_bill.cgst or 0) > 0 and zoho_bill.cgst_coa:
+            cgst_line_item = {
+                "description": "CGST",
+                "account_id": str(zoho_bill.cgst_coa.accountId),
+                "amount": float(zoho_bill.cgst),
+                "debit_or_credit": zoho_bill.cgst_debit_or_credit or "debit"
+            }
+            bill_data["line_items"].append(cgst_line_item)
+            logger.info(f"[DEBUG] Added CGST line item: {cgst_line_item}")
+
+        # Add SGST line item if available
+        if zoho_bill.sgst and float(zoho_bill.sgst or 0) > 0 and zoho_bill.sgst_coa:
+            sgst_line_item = {
+                "description": "SGST",
+                "account_id": str(zoho_bill.sgst_coa.accountId),
+                "amount": float(zoho_bill.sgst),
+                "debit_or_credit": zoho_bill.sgst_debit_or_credit or "debit"
+            }
+            bill_data["line_items"].append(sgst_line_item)
+            logger.info(f"[DEBUG] Added SGST line item: {sgst_line_item}")
+
         # Add line items from products
         for item in zoho_products:
             try:
-                # Get chart of account and taxes for the line item
+                # Get chart of account for the line item
                 chart_of_account = item.chart_of_accounts
-                taxes = item.taxes
 
                 if not chart_of_account:
                     logger.warning(f"No chart of account found for product {item.id}")
                     continue
 
-                if not taxes:
-                    logger.warning(f"No taxes found for product {item.id}")
-                    continue
-
                 line_item = {
-                    "description": item.item_details,
+                    "description": item.item_details or f"Product Item {item.id}",
                     "account_id": str(chart_of_account.accountId),
-                    "tax_id": str(taxes.taxId),
                     "amount": float(item.amount) if item.amount else 0,
                     "debit_or_credit": getattr(item, 'debit_or_credit', 'debit')
                 }
                 bill_data["line_items"].append(line_item)
+                logger.info(f"[DEBUG] Added product line item: {line_item}")
 
             except Exception as e:
                 logger.error(f"Error processing product {item.id}: {str(e)}")
