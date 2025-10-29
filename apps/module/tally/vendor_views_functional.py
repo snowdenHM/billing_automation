@@ -1783,6 +1783,7 @@ def prepare_sync_data(analyzed_bill, organization):
         "bill_date": bill_date_str,
         "total_amount": float(analyzed_bill.total or 0),
         "company_id": team_slug,
+        "notes": analyzed_bill.note,
         "taxes": {
             "igst": {
                 "amount": float(analyzed_bill.igst or 0),

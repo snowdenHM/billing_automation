@@ -687,7 +687,7 @@ def expense_bill_upload_view(request, org_id):
 def expense_bill_detail_view(request, org_id, bill_id):
     """Get expense bill details including analysis data."""
     logger.info(f"[DEBUG] expense_bill_detail_view - Starting request for org_id: {org_id}, bill_id: {bill_id}")
-
+    
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
         logger.error(f"[DEBUG] expense_bill_detail_view - Organization not found: {org_id}")

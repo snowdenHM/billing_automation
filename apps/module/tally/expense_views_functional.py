@@ -1798,7 +1798,7 @@ def prepare_expense_sync_data(analyzed_bill, organization):
         "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
         "DR_LEDGER": dr_ledger,
         "CR_LEDGER": cr_ledger,
-        "note": analyzed_bill.note or "AI Analyzed Expense Bill",
+        "notes": analyzed_bill.note or "AI Analyzed Expense Bill",
         "created_at": analyzed_bill.created_at
     }
 
