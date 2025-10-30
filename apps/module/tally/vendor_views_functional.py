@@ -1211,7 +1211,7 @@ def vendor_bill_verify(request, org_id):
         logger.error(f"Bill verification failed: {str(e)}")
         return Response({
             'error': 'Bill Verification Failed',
-            'message': 'The bill verification process encountered an error. This could be due to invalid data, system constraints, or database issues.',
+            'message': 'The bill verification process encountered an error. This could be due to invalid data or system issues. Please check your entries and try again.',
             'details': str(e),
             'error_code': 'VERIFICATION_FAILED'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1703,7 +1703,7 @@ def vendor_bill_sync(request, org_id):
         logger.error(f"Bill sync failed: {str(e)}")
         return Response({
             'error': 'Bill Sync Failed',
-            'message': 'The bill sync process encountered an error. This could be due to Tally system connectivity issues or data validation problems.',
+            'message': 'The bill sync process encountered an error. This could be due to Tally system connectivity issues or invalid bill data. Please verify your data and try again.',
             'details': str(e),
             'error_code': 'SYNC_FAILED'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

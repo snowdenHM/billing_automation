@@ -1144,7 +1144,7 @@ def expense_bill_verify(request, org_id):
         logger.error(f"Expense bill verification failed: {str(e)}")
         return Response({
             'error': 'Expense Bill Verification Failed',
-            'message': 'The expense bill verification process encountered an error. This could be due to invalid data, debit/credit imbalance, or database issues.',
+            'message': 'The expense bill verification process encountered an error. This could be due to invalid data or debit/credit imbalance. Please check your entries and try again.',
             'details': str(e),
             'error_code': 'EXPENSE_VERIFICATION_FAILED'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1618,7 +1618,7 @@ def expense_bill_sync(request, org_id):
         logger.error(f"Expense bill sync failed: {str(e)}")
         return Response({
             'error': 'Expense Bill Sync Failed',
-            'message': 'The expense bill sync process encountered an error. This could be due to Tally system connectivity issues or data validation problems.',
+            'message': 'The expense bill sync process encountered an error. This could be due to Tally system connectivity issues or invalid expense data. Please verify your data and try again.',
             'details': str(e),
             'error_code': 'EXPENSE_SYNC_FAILED'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
