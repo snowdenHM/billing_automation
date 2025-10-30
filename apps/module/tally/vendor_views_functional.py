@@ -624,8 +624,12 @@ def vendor_bills_list(request, org_id):
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Organization Access Denied',
+                'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.',
+                'error_code': 'ORG_NOT_FOUND'
+            },
+            status=status.HTTP_404_NOT_FOUND
         )
 
     bills = TallyVendorBill.objects.filter(organization=organization)
@@ -691,13 +695,22 @@ def vendor_bills_upload(request, org_id):
 
     serializer = VendorBillUploadSerializer(data=serializer_data)
     if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Invalid Upload Data',
+            'message': 'The uploaded file data is invalid. Please check file format and size requirements.',
+            'details': serializer.errors,
+            'error_code': 'INVALID_UPLOAD_DATA'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Organization Access Denied',
+                'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.',
+                'error_code': 'ORG_NOT_FOUND'
+            },
+            status=status.HTTP_404_NOT_FOUND
         )
 
     files = serializer.validated_data['files']
@@ -706,8 +719,12 @@ def vendor_bills_upload(request, org_id):
 
     if not files:
         return Response(
-            {'error': 'No files provided for upload'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'No Files Provided',
+                'message': 'At least one file must be provided for upload. Please select files to upload.',
+                'error_code': 'NO_FILES_PROVIDED'
+            },
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY
         )
 
     try:
@@ -743,10 +760,12 @@ def vendor_bills_upload(request, org_id):
 
     except Exception as e:
         logger.error(f"Error uploading vendor bills: {str(e)}")
-        return Response(
-            {'error': f'Error processing files: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'File Upload Processing Failed',
+            'message': 'There was an error processing the uploaded files. This could be due to file corruption, unsupported format, or server issues.',
+            'details': str(e),
+            'error_code': 'UPLOAD_PROCESSING_FAILED'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ✅
@@ -766,7 +785,12 @@ def vendor_bill_analyze(request, org_id):
     """Analyze vendor bill using OpenAI"""
     serializer = BillAnalysisRequestSerializer(data=request.data)
     if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Invalid Analysis Request',
+            'message': 'The analysis request data is invalid. Please ensure the bill_id is provided and valid.',
+            'details': serializer.errors,
+            'error_code': 'INVALID_ANALYSIS_REQUEST'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     bill_id = serializer.validated_data['bill_id']
     organization = get_organization_from_request(request, org_id)
@@ -783,10 +807,11 @@ def vendor_bill_analyze(request, org_id):
         )
 
     if bill.process:
-        return Response(
-            {'data': 'Bill is already Processed'},
-            status=status.HTTP_200_OK
-        )
+        return Response({
+            'message': 'Bill Already Analyzed',
+            'data': 'This bill has already been processed and analyzed. Use the verification endpoint to modify the analyzed data.',
+            'error_code': 'BILL_ALREADY_PROCESSED'
+        }, status=status.HTTP_200_OK)
 
     try:
         # Check if bill already has analyzed data
@@ -802,10 +827,12 @@ def vendor_bill_analyze(request, org_id):
 
     except Exception as e:
         logger.error(f"Bill analysis failed: {str(e)}")
-        return Response(
-            {'error': f'Analysis failed: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'Bill Analysis Failed',
+            'message': 'The bill analysis could not be completed. This might be due to poor image quality, unsupported file format, or AI service issues.',
+            'details': str(e),
+            'error_code': 'ANALYSIS_FAILED'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 def process_existing_analysis_data(bill, existing_data, organization):
@@ -974,8 +1001,12 @@ def vendor_bill_detail(request, org_id, bill_id):
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Organization Access Denied',
+                'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.',
+                'error_code': 'ORG_NOT_FOUND'
+            },
+            status=status.HTTP_404_NOT_FOUND
         )
 
     try:
@@ -1123,27 +1154,45 @@ def vendor_bill_verify(request, org_id):
 
     organization = get_organization_from_request(request, org_id)
     if not organization:
-        return Response({'error': 'Organization not found'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Organization Access Denied',
+            'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.',
+            'error_code': 'ORG_NOT_FOUND'
+        }, status=status.HTTP_404_NOT_FOUND)
 
     if not bill_id:
-        return Response({'error': 'bill_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Missing Bill ID',
+            'message': 'The bill_id parameter is required for verification. Please provide a valid bill ID.',
+            'error_code': 'BILL_ID_REQUIRED'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     try:
         bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
         analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill, organization=organization)
     except (TallyVendorBill.DoesNotExist, TallyVendorAnalyzedBill.DoesNotExist):
-        return Response({'error': 'Bill or analyzed data not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({
+            'error': 'Bill or Analysis Data Not Found',
+            'message': f'Bill with ID {bill_id} or its analyzed data not found. Please ensure the bill exists and has been analyzed.',
+            'error_code': 'BILL_OR_ANALYSIS_NOT_FOUND'
+        }, status=status.HTTP_404_NOT_FOUND)
 
     # Optional: ensure client-sent analyzed_bill matches what we resolved from bill
     if analyzed_bill_id and str(analyzed_bill.id) != str(analyzed_bill_id):
-        return Response({'error': 'analyzed_bill does not belong to the provided bill_id'},
-                        status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Mismatched Analysis Data',
+            'message': 'The provided analyzed_bill ID does not match the bill_id. Please ensure the correct analyzed bill data is being referenced.',
+            'error_code': 'ANALYSIS_MISMATCH'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     if bill.status not in [TallyVendorBill.BillStatus.ANALYSED, TallyVendorBill.BillStatus.VERIFIED]:
-        return Response(
-            {"detail": "Bill must be in 'Analysed' or 'Verified' status to save"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'Invalid Bill Status',
+            'message': f'Bill must be in "Analysed" or "Verified" status to perform verification. Current status: {bill.status}',
+            'current_status': bill.status,
+            'required_status': ['Analysed', 'Verified'],
+            'error_code': 'INVALID_BILL_STATUS'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     try:
         verified_bill = update_analyzed_bill_data(analyzed_bill, analyzed_data, organization)
@@ -1159,7 +1208,12 @@ def vendor_bill_verify(request, org_id):
 
     except Exception as e:
         logger.error(f"Bill verification failed: {str(e)}")
-        return Response({'error': f'Verification failed: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Bill Verification Failed',
+            'message': 'The bill verification process encountered an error. This could be due to invalid data, system constraints, or database issues.',
+            'details': str(e),
+            'error_code': 'VERIFICATION_FAILED'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
@@ -1565,7 +1619,12 @@ def vendor_bill_sync(request, org_id):
     """Sync verified vendor bill with Tally"""
     serializer = BillSyncRequestSerializer(data=request.data)
     if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Invalid Sync Request',
+            'message': 'The sync request data is invalid. Please ensure the bill_id is provided and valid.',
+            'details': serializer.errors,
+            'error_code': 'INVALID_SYNC_REQUEST'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     bill_id = serializer.validated_data['bill_id']
     organization = get_organization_from_request(request, org_id)
@@ -1574,16 +1633,20 @@ def vendor_bill_sync(request, org_id):
         bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
         analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill)
     except (TallyVendorBill.DoesNotExist, TallyVendorAnalyzedBill.DoesNotExist):
-        return Response(
-            {'error': 'Bill or analyzed data not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
+        return Response({
+            'error': 'Bill or Analysis Data Not Found',
+            'message': f'Bill with ID {bill_id} or its analyzed data not found. Please ensure the bill exists and has been analyzed.',
+            'error_code': 'BILL_OR_ANALYSIS_NOT_FOUND'
+        }, status=status.HTTP_404_NOT_FOUND)
 
     if bill.status != TallyVendorBill.BillStatus.VERIFIED:
-        return Response(
-            {'error': 'Bill is not verified'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'Bill Not Ready for Sync',
+            'message': f'Bill must be in "Verified" status to sync with Tally. Current status: {bill.status}. Please verify the bill first.',
+            'current_status': bill.status,
+            'required_status': 'Verified',
+            'error_code': 'BILL_NOT_VERIFIED'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     try:
         # Get structured bill data in the same format as verify view
@@ -1617,10 +1680,12 @@ def vendor_bill_sync(request, org_id):
 
     except Exception as e:
         logger.error(f"Bill sync failed: {str(e)}")
-        return Response(
-            {'error': f'Sync failed: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'Bill Sync Failed',
+            'message': 'The bill sync process encountered an error. This could be due to Tally system connectivity issues or data validation problems.',
+            'details': str(e),
+            'error_code': 'SYNC_FAILED'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 def vendor_bill_sync_external_handler(sync_data, org_id, organization):
@@ -1655,8 +1720,12 @@ def vendor_bill_delete(request, org_id, bill_id):
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Organization Access Denied',
+                'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.',
+                'error_code': 'ORG_NOT_FOUND'
+            },
+            status=status.HTTP_404_NOT_FOUND
         )
 
     try:
@@ -1724,7 +1793,11 @@ def vendor_bills_sync_list(request, org_id):
 
     if not organization:
         logger.error("Organization not found")
-        return Response({'error': 'Organization not found'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Organization Access Denied',
+            'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your API key permissions.',
+            'error_code': 'ORG_NOT_FOUND'
+        }, status=status.HTTP_404_NOT_FOUND)
 
     # Modified organization validation for API Key authentication
     # Always trust the organization from API Key or token auth and skip validation
@@ -1851,8 +1924,12 @@ def vendor_bill_sync_external(request, org_id):
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Organization Access Denied',
+                'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.',
+                'error_code': 'ORG_NOT_FOUND'
+            },
+            status=status.HTTP_404_NOT_FOUND
         )
 
     # Get the payload from request data
@@ -1860,8 +1937,12 @@ def vendor_bill_sync_external(request, org_id):
 
     if not payload:
         return Response(
-            {'error': 'No payload provided'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Missing Payload',
+                'message': 'No payload data provided for external sync. Please provide the bill data to be processed.',
+                'error_code': 'NO_PAYLOAD_PROVIDED'
+            },
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY
         )
 
     try:
@@ -1881,7 +1962,9 @@ def vendor_bill_sync_external(request, org_id):
 
     except Exception as e:
         logger.error(f"External sync failed: {str(e)}")
-        return Response(
-            {'error': f'External sync failed: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'External Sync Processing Failed',
+            'message': 'There was an error processing the external sync payload. This could be due to invalid data format or system issues.',
+            'details': str(e),
+            'error_code': 'EXTERNAL_SYNC_FAILED'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

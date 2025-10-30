@@ -624,8 +624,12 @@ def expense_bills_list(request, org_id):
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Organization Access Denied',
+                'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.',
+                'error_code': 'ORG_NOT_FOUND'
+            },
+            status=status.HTTP_404_NOT_FOUND
         )
 
     bills = TallyExpenseBill.objects.filter(organization=organization)
@@ -691,13 +695,22 @@ def expense_bills_upload(request, org_id):
 
     serializer = ExpenseBillUploadSerializer(data=serializer_data)
     if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Invalid Upload Data',
+            'message': 'The uploaded expense file data is invalid. Please check file format and size requirements.',
+            'details': serializer.errors,
+            'error_code': 'INVALID_UPLOAD_DATA'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Organization Access Denied',
+                'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.',
+                'error_code': 'ORG_NOT_FOUND'
+            },
+            status=status.HTTP_404_NOT_FOUND
         )
 
     files = serializer.validated_data['files']
@@ -706,8 +719,12 @@ def expense_bills_upload(request, org_id):
 
     if not files:
         return Response(
-            {'error': 'No files provided for upload'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'No Files Provided',
+                'message': 'At least one expense file must be provided for upload. Please select files to upload.',
+                'error_code': 'NO_FILES_PROVIDED'
+            },
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY
         )
 
     try:
@@ -743,10 +760,12 @@ def expense_bills_upload(request, org_id):
 
     except Exception as e:
         logger.error(f"Error uploading expense bills: {str(e)}")
-        return Response(
-            {'error': f'Error processing files: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'Expense File Upload Processing Failed',
+            'message': 'There was an error processing the uploaded expense files. This could be due to file corruption, unsupported format, or server issues.',
+            'details': str(e),
+            'error_code': 'UPLOAD_PROCESSING_FAILED'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ✅
@@ -766,7 +785,12 @@ def expense_bill_analyze(request, org_id):
     """Analyze expense bill using OpenAI"""
     serializer = ExpenseBillAnalysisRequestSerializer(data=request.data)
     if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Invalid Analysis Request',
+            'message': 'The expense bill analysis request data is invalid. Please ensure the bill_id is provided and valid.',
+            'details': serializer.errors,
+            'error_code': 'INVALID_ANALYSIS_REQUEST'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     bill_id = serializer.validated_data['bill_id']
     organization = get_organization_from_request(request, org_id)
@@ -783,10 +807,11 @@ def expense_bill_analyze(request, org_id):
         )
 
     if bill.process:
-        return Response(
-            {'data': 'Bill is already Processed'},
-            status=status.HTTP_200_OK
-        )
+        return Response({
+            'message': 'Expense Bill Already Analyzed',
+            'data': 'This expense bill has already been processed and analyzed. Use the verification endpoint to modify the analyzed data.',
+            'error_code': 'EXPENSE_BILL_ALREADY_PROCESSED'
+        }, status=status.HTTP_200_OK)
 
     try:
         # Check if bill already has analyzed data
@@ -802,10 +827,12 @@ def expense_bill_analyze(request, org_id):
 
     except Exception as e:
         logger.error(f"Expense bill analysis failed: {str(e)}")
-        return Response(
-            {'error': f'Analysis failed: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'Expense Bill Analysis Failed',
+            'message': 'The expense bill analysis could not be completed. This might be due to poor image quality, unsupported file format, or AI service issues.',
+            'details': str(e),
+            'error_code': 'EXPENSE_ANALYSIS_FAILED'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 def process_existing_expense_analysis_data(bill, existing_data, organization):
@@ -921,8 +948,12 @@ def expense_bill_detail(request, org_id, bill_id):
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Organization Access Denied',
+                'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.',
+                'error_code': 'ORG_NOT_FOUND'
+            },
+            status=status.HTTP_404_NOT_FOUND
         )
 
     try:
@@ -1049,14 +1080,22 @@ def expense_bill_verify(request, org_id):
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Organization Access Denied',
+                'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.',
+                'error_code': 'ORG_NOT_FOUND'
+            },
+            status=status.HTTP_404_NOT_FOUND
         )
 
     if not bill_id or not analyzed_bill_id:
         return Response(
-            {'error': 'bill_id and analyzed_bill are required'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Missing Required Parameters',
+                'message': 'Both bill_id and analyzed_bill parameters are required for expense bill verification. Please provide both values.',
+                'error_code': 'REQUIRED_PARAMS_MISSING'
+            },
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY
         )
 
     try:
@@ -1064,14 +1103,24 @@ def expense_bill_verify(request, org_id):
         analyzed_bill = TallyExpenseAnalyzedBill.objects.get(id=analyzed_bill_id, organization=organization)
     except (TallyExpenseBill.DoesNotExist, TallyExpenseAnalyzedBill.DoesNotExist):
         return Response(
-            {'error': 'Bill or analyzed data not found'},
+            {
+                'error': 'Expense Bill or Analysis Data Not Found',
+                'message': f'Expense bill with ID {bill_id} or its analyzed data not found. Please ensure the expense bill exists and has been analyzed.',
+                'error_code': 'EXPENSE_BILL_OR_ANALYSIS_NOT_FOUND'
+            },
             status=status.HTTP_404_NOT_FOUND
         )
 
-    if bill.status not in [TallyVendorBill.BillStatus.ANALYSED, TallyVendorBill.BillStatus.VERIFIED]:
+    if bill.status not in [TallyExpenseBill.BillStatus.ANALYSED, TallyExpenseBill.BillStatus.VERIFIED]:
         return Response(
-            {"detail": "Bill must be in 'Analysed' or 'Verified' status to save"},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Invalid Expense Bill Status',
+                'message': f'Expense bill must be in "Analysed" or "Verified" status to perform verification. Current status: {bill.status}',
+                'current_status': bill.status,
+                'required_status': ['Analysed', 'Verified'],
+                'error_code': 'INVALID_EXPENSE_BILL_STATUS'
+            },
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY
         )
 
     try:
@@ -1092,10 +1141,12 @@ def expense_bill_verify(request, org_id):
 
     except Exception as e:
         logger.error(f"Expense bill verification failed: {str(e)}")
-        return Response(
-            {'error': f'Verification failed: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'Expense Bill Verification Failed',
+            'message': 'The expense bill verification process encountered an error. This could be due to invalid data, debit/credit imbalance, or database issues.',
+            'details': str(e),
+            'error_code': 'EXPENSE_VERIFICATION_FAILED'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization):
@@ -1486,7 +1537,12 @@ def expense_bill_sync(request, org_id):
     """Sync verified expense bill with Tally"""
     serializer = ExpenseBillSyncRequestSerializer(data=request.data)
     if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Invalid Sync Request',
+            'message': 'The expense bill sync request data is invalid. Please ensure the bill_id is provided and valid.',
+            'details': serializer.errors,
+            'error_code': 'INVALID_EXPENSE_SYNC_REQUEST'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     bill_id = serializer.validated_data['bill_id']
     organization = get_organization_from_request(request, org_id)
@@ -1495,16 +1551,20 @@ def expense_bill_sync(request, org_id):
         bill = TallyExpenseBill.objects.get(id=bill_id, organization=organization)
         analyzed_bill = TallyExpenseAnalyzedBill.objects.get(selected_bill=bill)
     except (TallyExpenseBill.DoesNotExist, TallyExpenseAnalyzedBill.DoesNotExist):
-        return Response(
-            {'error': 'Bill or analyzed data not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
+        return Response({
+            'error': 'Expense Bill or Analysis Data Not Found',
+            'message': f'Expense bill with ID {bill_id} or its analyzed data not found. Please ensure the expense bill exists and has been analyzed.',
+            'error_code': 'EXPENSE_BILL_OR_ANALYSIS_NOT_FOUND'
+        }, status=status.HTTP_404_NOT_FOUND)
 
     if bill.status != TallyExpenseBill.BillStatus.VERIFIED:
-        return Response(
-            {'error': 'Bill is not verified'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'Expense Bill Not Ready for Sync',
+            'message': f'Expense bill must be in "Verified" status to sync with Tally. Current status: {bill.status}. Please verify the expense bill first.',
+            'current_status': bill.status,
+            'required_status': 'Verified',
+            'error_code': 'EXPENSE_BILL_NOT_VERIFIED'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     try:
         # Get structured bill data in the same format as verify view
@@ -1539,10 +1599,12 @@ def expense_bill_sync(request, org_id):
 
     except Exception as e:
         logger.error(f"Expense bill sync failed: {str(e)}")
-        return Response(
-            {'error': f'Sync failed: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'Expense Bill Sync Failed',
+            'message': 'The expense bill sync process encountered an error. This could be due to Tally system connectivity issues or data validation problems.',
+            'details': str(e),
+            'error_code': 'EXPENSE_SYNC_FAILED'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 def expense_bill_sync_external_handler(sync_data, org_id, organization):
@@ -1581,8 +1643,12 @@ def expense_bill_delete(request, org_id, bill_id):
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Organization Access Denied',
+                'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.',
+                'error_code': 'ORG_NOT_FOUND'
+            },
+            status=status.HTTP_404_NOT_FOUND
         )
 
     try:
@@ -1624,16 +1690,24 @@ def expense_bills_by_status(request, org_id):
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Organization Access Denied',
+                'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.',
+                'error_code': 'ORG_NOT_FOUND'
+            },
+            status=status.HTTP_404_NOT_FOUND
         )
 
     status_filter = request.query_params.get('status')
 
     if not status_filter:
         return Response(
-            {'error': 'Status parameter is required'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Missing Status Parameter',
+                'message': 'Status parameter is required to filter expense bills. Please provide a valid status (Draft, Analysed, Verified, Synced).',
+                'error_code': 'STATUS_PARAM_REQUIRED'
+            },
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY
         )
 
     bills = TallyExpenseBill.objects.filter(
@@ -1662,8 +1736,12 @@ def expense_bills_sync_list(request, org_id):
 
     if not organization:
         return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Organization Access Denied',
+                'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your API key permissions.',
+                'error_code': 'ORG_NOT_FOUND'
+            },
+            status=status.HTTP_404_NOT_FOUND
         )
 
     # Get all analyzed bills where the main bill status is "Synced"
@@ -1821,8 +1899,12 @@ def expense_bill_sync_external(request, org_id):
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Organization Access Denied',
+                'message': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.',
+                'error_code': 'ORG_NOT_FOUND'
+            },
+            status=status.HTTP_404_NOT_FOUND
         )
 
     # Get the payload from request data
@@ -1830,8 +1912,12 @@ def expense_bill_sync_external(request, org_id):
 
     if not payload:
         return Response(
-            {'error': 'No payload provided'},
-            status=status.HTTP_400_BAD_REQUEST
+            {
+                'error': 'Missing Payload',
+                'message': 'No payload data provided for external expense sync. Please provide the expense bill data to be processed.',
+                'error_code': 'NO_EXPENSE_PAYLOAD_PROVIDED'
+            },
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY
         )
 
     try:
@@ -1851,7 +1937,9 @@ def expense_bill_sync_external(request, org_id):
 
     except Exception as e:
         logger.error(f"External expense sync failed: {str(e)}")
-        return Response(
-            {'error': f'External expense sync failed: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'External Expense Sync Processing Failed',
+            'message': 'There was an error processing the external expense sync payload. This could be due to invalid data format or system issues.',
+            'details': str(e),
+            'error_code': 'EXTERNAL_EXPENSE_SYNC_FAILED'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
