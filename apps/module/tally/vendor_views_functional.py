@@ -1532,7 +1532,7 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 price=_to_decimal(item.get('price'), "0"),
                 quantity=_to_int(item.get('quantity'), 0),
                 amount=_to_decimal(item.get('amount'), "0"),
-                product_gst=item.get('gst'),
+                product_gst=item.get('product_gst'),
                 igst=_to_decimal(item.get('igst'), "0"),
                 cgst=_to_decimal(item.get('cgst'), "0"),
                 sgst=_to_decimal(item.get('sgst'), "0"),
