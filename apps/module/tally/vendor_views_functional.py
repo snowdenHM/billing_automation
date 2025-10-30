@@ -1545,9 +1545,23 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
             logger.info(
                 f"Created new product (client item_id: {item.get('item_id')}) name={item.get('item_name') or 'Unknown'}")
 
+    # Delete products that are no longer in the frontend payload
+    products_to_delete = []
+    for existing_id, product in existing.items():
+        if existing_id not in updated_ids:
+            products_to_delete.append(product)
+    
+    if products_to_delete:
+        deleted_count = len(products_to_delete)
+        for product in products_to_delete:
+            logger.info(f"Deleting product {product.id}: {product.item_name or 'Unknown'}")
+            product.delete()
+        logger.info(f"Deleted {deleted_count} products not present in frontend payload")
+    
     logger.info(
         f"Product update summary: {len(updated_ids)} updated, "
-        f"{len(line_items or []) - len(updated_ids)} created"
+        f"{len(line_items or []) - len(updated_ids)} created, "
+        f"{len(products_to_delete) if products_to_delete else 0} deleted"
     )
 
 
