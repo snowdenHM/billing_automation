@@ -1051,6 +1051,7 @@ def vendor_bill_detail(request, org_id, bill_id):
                 "vendor_name": vendor_ledger.name if vendor_ledger else "No Ledger",
                 "bill_no": analyzed_bill.bill_no,
                 "bill_date": bill_date_str,
+                "due_date": analyzed_bill.due_date.strftime('%d-%m-%Y') if analyzed_bill.due_date else None,
                 "total_amount": float(analyzed_bill.total or 0),
                 "company_id": team_slug,
                 "taxes": {
@@ -1253,6 +1254,11 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
             bill_date = parse_bill_date(analyzed_data['bill_date'])
             if bill_date:
                 analyzed_bill.bill_date = bill_date
+        if 'due_date' in analyzed_data:
+            # Parse due date string (format: "08-03-2021")
+            due_date = parse_bill_date(analyzed_data['due_date'])
+            if due_date:
+                analyzed_bill.due_date = due_date
         if 'total_amount' in analyzed_data:
             analyzed_bill.total = round(float(analyzed_data['total_amount']), 2)
 
@@ -1581,6 +1587,7 @@ def get_structured_bill_data(analyzed_bill, organization):
         "bill_details": {
             "bill_number": analyzed_bill.bill_no,
             "date": bill_date_str,
+            "due_date": analyzed_bill.due_date.strftime('%d-%m-%Y') if analyzed_bill.due_date else None,
             "total_amount": float(analyzed_bill.total or 0),
             "company_id": team_slug,
         },

@@ -277,6 +277,7 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
 
     bill_no = models.CharField(max_length=50, blank=True, null=True)
     bill_date = models.DateField(blank=True, null=True)
+    due_date = models.DateField(blank=True, null=True)
 
     total = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     igst = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
@@ -488,6 +489,7 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
     voucher = models.CharField(max_length=255, blank=True, null=True)
     bill_no = models.CharField(max_length=50, blank=True, null=True)
     bill_date = models.DateField(blank=True, null=True)
+    due_date = models.DateField(blank=True, null=True)
     gst_type = models.CharField(max_length=20, choices=GSTType.choices, default=GSTType.UNKNOWN)
 
     total = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))

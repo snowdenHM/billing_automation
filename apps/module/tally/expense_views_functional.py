@@ -998,6 +998,7 @@ def expense_bill_detail(request, org_id, bill_id):
                 "voucher": analyzed_bill.voucher or "",
                 "bill_no": analyzed_bill.bill_no,
                 "bill_date": bill_date_str,
+                "due_date": analyzed_bill.due_date.strftime('%d-%m-%Y') if analyzed_bill.due_date else None,
                 "total": float(analyzed_bill.total or 0),
                 "vendor_debit_or_credit": analyzed_bill.vendor_debit_or_credit,
                 "vendor_amount": float(analyzed_bill.vendor_amount or 0),
@@ -1182,6 +1183,11 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
             bill_date = parse_expense_bill_date(analyzed_data['bill_date'])
             if bill_date:
                 analyzed_bill.bill_date = bill_date
+        if 'due_date' in analyzed_data:
+            # Parse due date string (format: "31-12-2023")
+            due_date = parse_expense_bill_date(analyzed_data['due_date'])
+            if due_date:
+                analyzed_bill.due_date = due_date
         if 'total' in analyzed_data:
             analyzed_bill.total = round(float(analyzed_data['total']), 2)
 
@@ -1501,6 +1507,7 @@ def get_structured_expense_bill_data(analyzed_bill, organization):
             "voucher": analyzed_bill.voucher or "",
             "bill_number": analyzed_bill.bill_no,
             "date": bill_date_str,
+            "due_date": analyzed_bill.due_date.strftime('%d-%m-%Y') if analyzed_bill.due_date else None,
             "total_amount": float(analyzed_bill.total or 0),
             "company_id": team_slug,
         },
