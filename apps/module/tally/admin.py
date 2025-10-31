@@ -216,12 +216,12 @@ class TallyConfigAdmin(admin.ModelAdmin):
 class TallyVendorAnalyzedProductInline(admin.TabularInline):
     model = TallyVendorAnalyzedProduct
     extra = 0
-    fields = ('item_name', 'item_details', 'taxes', 'price', 'quantity', 'amount', 'product_gst')
-    readonly_fields = ('created_at',)
+    fields = ('item_name', 'item_details', 'taxes', 'price', 'quantity', 'amount', 'product_gst', 'igst', 'cgst', 'sgst')
+    readonly_fields = ('created_at', 'igst', 'cgst', 'sgst')
 
 
 class TallyVendorAnalyzedBillAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'vendor', 'bill_no', 'bill_date', 'total', 'gst_type', 'organization')
+    list_display = ('__str__', 'vendor', 'bill_no', 'bill_date', 'due_date', 'total', 'gst_type', 'organization')
     list_filter = ('organization', 'gst_type', 'created_at')
     search_fields = ('bill_no', 'vendor__name', 'selected_bill__bill_munshi_name')
     readonly_fields = ('created_at',)
@@ -230,7 +230,7 @@ class TallyVendorAnalyzedBillAdmin(admin.ModelAdmin):
 
     fieldsets = (
         (None, {
-            'fields': ('selected_bill', 'vendor', 'bill_no', 'bill_date', 'note')
+            'fields': ('selected_bill', 'vendor', 'bill_no', 'bill_date', 'due_date', 'note')
         }),
         ('GST Details', {
             'fields': ('gst_type', 'total', 'igst', 'igst_taxes', 'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes')
@@ -292,12 +292,12 @@ class TallyExpenseBillAdmin(admin.ModelAdmin):
 class TallyExpenseAnalyzedProductInline(admin.TabularInline):
     model = TallyExpenseAnalyzedProduct
     extra = 0
-    fields = ('item_details', 'chart_of_accounts', 'amount', 'debit_or_credit')
-    readonly_fields = ('created_at',)
+    fields = ('item_details', 'chart_of_accounts', 'amount', 'debit_or_credit', 'product_gst', 'igst', 'cgst', 'sgst')
+    readonly_fields = ('created_at', 'igst', 'cgst', 'sgst')
 
 
 class TallyExpenseAnalyzedBillAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'vendor', 'bill_no', 'bill_date', 'total', 'organization')
+    list_display = ('__str__', 'vendor', 'bill_no', 'bill_date', 'due_date', 'total', 'organization')
     list_filter = ('organization', 'created_at')
     search_fields = ('bill_no', 'vendor__name', 'selected_bill__bill_munshi_name', 'voucher')
     readonly_fields = ('created_at',)
@@ -306,7 +306,7 @@ class TallyExpenseAnalyzedBillAdmin(admin.ModelAdmin):
 
     fieldsets = (
         (None, {
-            'fields': ('selected_bill', 'vendor', 'voucher', 'bill_no', 'bill_date', 'note')
+            'fields': ('selected_bill', 'vendor', 'voucher', 'bill_no', 'bill_date', 'due_date', 'note')
         }),
         ('GST Details', {
             'fields': ('total', 'igst', 'igst_taxes', 'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes')
