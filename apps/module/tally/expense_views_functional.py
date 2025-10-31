@@ -1882,18 +1882,26 @@ def prepare_expense_sync_data(analyzed_bill, organization):
     #     })
 
     # Build expense sync payload with structured format similar to vendor bills
+    vendor_name = vendor_ledger.name if vendor_ledger and vendor_ledger.name else "Unknown Vendor"
+    
+    # Construct the expense bill URL
+    bill_url = f"https://billmunshi.com/tally/expense-bill/{analyzed_bill.selected_bill.id}"
+    
+    # Create the notes message
+    notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
+    
     bill_data = {
         "id": analyzed_bill.id,
         "voucher": analyzed_bill.voucher or "",
         "bill_no": analyzed_bill.bill_no,
         "bill_date": bill_date_str,
         "total": float(analyzed_bill.total or 0),
-        "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
+        "name": vendor_name,
         "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "No Ledger",
         "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
         "DR_LEDGER": dr_ledger,
         "CR_LEDGER": cr_ledger,
-        "notes": analyzed_bill.note or "AI Analyzed Expense Bill",
+        "notes": notes_message,
         "created_at": analyzed_bill.created_at
     }
 

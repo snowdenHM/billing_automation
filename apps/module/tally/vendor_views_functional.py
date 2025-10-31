@@ -1308,6 +1308,15 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
             analyzed_bill.gst_type = TallyVendorAnalyzedBill.GSTType.UNKNOWN
 
         # Save the analyzed bill
+        # Persist optional note field if provided
+        if 'note' in analyzed_data:
+            # Ensure note is a string and trim whitespace
+            note_val = analyzed_data.get('note') or ''
+            try:
+                analyzed_bill.note = str(note_val).strip()
+            except Exception:
+                analyzed_bill.note = ''
+
         analyzed_bill.save(skip_validation=True)
 
         # Update line items (products)
@@ -1871,13 +1880,21 @@ def prepare_sync_data(analyzed_bill, organization):
         allow_product_sync = False
 
     # Use the same structured format as get_structured_bill_data
+    vendor_name = vendor_ledger.name if vendor_ledger and vendor_ledger.name else "Unknown Vendor"
+    
+    # Construct the bill URL - assuming the frontend URL pattern
+    bill_url = f"https://billmunshi.com/tally/vendor-bill/{analyzed_bill.selected_bill.id}"
+    
+    # Create the notes message
+    notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
+    
     bill_data = {
-        "vendor_name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
+        "vendor_name": vendor_name,
         "bill_no": analyzed_bill.bill_no,
         "bill_date": bill_date_str,
         "total_amount": float(analyzed_bill.total or 0),
         "company_id": team_slug,
-        "notes": analyzed_bill.note,
+        "notes": notes_message,
         "taxes": {
             "igst": {
                 "amount": float(analyzed_bill.igst or 0),
@@ -1989,3 +2006,4 @@ def vendor_bill_sync_external(request, org_id):
             'details': str(e),
             'error_code': 'EXTERNAL_SYNC_FAILED'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
