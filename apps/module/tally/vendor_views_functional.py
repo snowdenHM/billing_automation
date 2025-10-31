@@ -1138,6 +1138,52 @@ def _to_int(val, default=0):
         return default
 
 
+def calculate_product_gst(amount, product_gst_str, gst_type):
+    """
+    Calculate IGST, CGST, and SGST based on amount, product_gst percentage, and gst_type.
+    
+    Args:
+        amount: Product amount (Decimal or float)
+        product_gst_str: GST percentage string (e.g., "18%", "12%")
+        gst_type: GST type from TallyVendorAnalyzedBill.GSTType
+    
+    Returns:
+        tuple: (igst, cgst, sgst) as Decimal values
+    """
+    try:
+        # Convert amount to Decimal
+        amount_decimal = _to_decimal(amount, "0")
+        
+        # Extract GST percentage from string (e.g., "18%" -> 18.0)
+        if not product_gst_str or product_gst_str == "":
+            return Decimal("0"), Decimal("0"), Decimal("0")
+        
+        gst_percentage_str = str(product_gst_str).strip().replace('%', '')
+        if not gst_percentage_str:
+            return Decimal("0"), Decimal("0"), Decimal("0")
+        
+        gst_percentage = Decimal(gst_percentage_str)
+        
+        # Calculate total GST amount
+        gst_amount = (amount_decimal * gst_percentage) / Decimal("100")
+        
+        # Distribute GST based on gst_type
+        if gst_type == TallyVendorAnalyzedBill.GSTType.IGST:
+            # All GST goes to IGST
+            return round(gst_amount, 2), Decimal("0"), Decimal("0")
+        elif gst_type == TallyVendorAnalyzedBill.GSTType.CGST_SGST:
+            # Split equally between CGST and SGST
+            half_gst = gst_amount / Decimal("2")
+            return Decimal("0"), round(half_gst, 2), round(half_gst, 2)
+        else:
+            # Unknown GST type - return zeros
+            return Decimal("0"), Decimal("0"), Decimal("0")
+    
+    except (ValueError, InvalidOperation) as e:
+        logger.warning(f"Error calculating product GST: {str(e)}")
+        return Decimal("0"), Decimal("0"), Decimal("0")
+
+
 # ✅
 @extend_schema(
     summary="Verify Vendor Bill",
@@ -1469,6 +1515,7 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
     """
     Update existing products by item_id, or create new ones if item_id is missing/unknown.
     Keeps vendor_bill_analyzed FK to analyzed_bill.
+    Calculates GST values based on gst_type from analyzed_bill.
     """
 
     # Map existing products by UUID string
@@ -1509,21 +1556,29 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
             if 'product_gst' in item and product.product_gst != item.get('product_gst'):
                 product.product_gst = item.get('product_gst')
                 needs_update = True
-            if 'igst' in item:
-                new_igst = _to_decimal(item.get('igst'), "0")
-                if product.igst != new_igst:
-                    product.igst = new_igst
-                    needs_update = True
-            if 'cgst' in item:
-                new_cgst = _to_decimal(item.get('cgst'), "0")
-                if product.cgst != new_cgst:
-                    product.cgst = new_cgst
-                    needs_update = True
-            if 'sgst' in item:
-                new_sgst = _to_decimal(item.get('sgst'), "0")
-                if product.sgst != new_sgst:
-                    product.sgst = new_sgst
-                    needs_update = True
+            
+            # Calculate GST values based on gst_type from analyzed_bill
+            # This ensures GST is correctly distributed according to bill's GST type
+            current_amount = _to_decimal(item.get('amount'), str(product.amount))
+            current_product_gst = item.get('product_gst', product.product_gst)
+            
+            calc_igst, calc_cgst, calc_sgst = calculate_product_gst(
+                current_amount, 
+                current_product_gst, 
+                analyzed_bill.gst_type
+            )
+            
+            # Update GST values if calculated values differ
+            if product.igst != calc_igst:
+                product.igst = calc_igst
+                needs_update = True
+            if product.cgst != calc_cgst:
+                product.cgst = calc_cgst
+                needs_update = True
+            if product.sgst != calc_sgst:
+                product.sgst = calc_sgst
+                needs_update = True
+            
             # Tax ledger
             if 'tax_ledger' in item and item['tax_ledger'] != "No Tax Ledger":
                 current_name = str(product.taxes) if product.taxes else "No Tax Ledger"
@@ -1534,11 +1589,21 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                         needs_update = True
             if needs_update:
                 product.save()
-                logger.info(f"Updated product {item_id}")
+                logger.info(f"Updated product {item_id} with GST type: {analyzed_bill.gst_type}")
             else:
                 logger.info(f"No changes for product {item_id}")
         else:
             # Create new product
+            product_amount = _to_decimal(item.get('amount'), "0")
+            product_gst_str = item.get('product_gst', '')
+            
+            # Calculate GST values based on gst_type from analyzed_bill
+            calc_igst, calc_cgst, calc_sgst = calculate_product_gst(
+                product_amount, 
+                product_gst_str, 
+                analyzed_bill.gst_type
+            )
+            
             product = TallyVendorAnalyzedProduct(
                 vendor_bill_analyzed=analyzed_bill,
                 organization=organization,
@@ -1546,11 +1611,11 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 item_details=item.get('item_details'),
                 price=_to_decimal(item.get('price'), "0"),
                 quantity=_to_int(item.get('quantity'), 0),
-                amount=_to_decimal(item.get('amount'), "0"),
-                product_gst=item.get('product_gst'),
-                igst=_to_decimal(item.get('igst'), "0"),
-                cgst=_to_decimal(item.get('cgst'), "0"),
-                sgst=_to_decimal(item.get('sgst'), "0"),
+                amount=product_amount,
+                product_gst=product_gst_str,
+                igst=calc_igst,
+                cgst=calc_cgst,
+                sgst=calc_sgst,
             )
             if item.get('tax_ledger') and item['tax_ledger'] != "No Tax Ledger":
                 tax_ledger = find_or_create_tax_ledger(item['tax_ledger'], 'Product Tax', organization)
@@ -1558,7 +1623,8 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                     product.taxes = tax_ledger
             product.save()
             logger.info(
-                f"Created new product (client item_id: {item.get('item_id')}) name={item.get('item_name') or 'Unknown'}")
+                f"Created new product (client item_id: {item.get('item_id')}) name={item.get('item_name') or 'Unknown'} "
+                f"with GST type: {analyzed_bill.gst_type} (IGST: {calc_igst}, CGST: {calc_cgst}, SGST: {calc_sgst})")
 
     # Delete products that are no longer in the frontend payload
     products_to_delete = []
