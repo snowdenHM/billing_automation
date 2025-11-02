@@ -257,7 +257,7 @@ class VendorZohoBillAdmin(BaseOrgScopedAdmin):
             'fields': ('selectBill', 'vendor', 'bill_no', 'bill_date', 'due_date', 'note')
         }),
         ('Financial Details', {
-            'fields': ('total', 'discount_type', 'discount_amount', 'discount_account', 'adjustment_amount', 'adjustment_description')
+            'fields': ('total', 'discount_type', 'discount', 'discount_amount', 'discount_account', 'adjustment_amount', 'adjustment_description')
         }),
         ('Tax Information', {
             'fields': ('igst', 'cgst', 'sgst', 'tds_tcs_id', 'is_tax')

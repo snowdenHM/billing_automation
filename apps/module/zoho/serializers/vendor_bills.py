@@ -125,6 +125,53 @@ class VendorZohoBillSerializer(serializers.ModelSerializer):
             return self.context['organization']
         return None
     
+    def _calculate_subtotal(self, instance):
+        """Calculate subtotal from products"""
+        from decimal import Decimal
+        subtotal = Decimal("0")
+        for product in instance.products.all():
+            try:
+                amount = Decimal(str(product.amount)) if product.amount else Decimal("0")
+                subtotal += amount
+            except:
+                pass
+        return subtotal
+    
+    def _calculate_discount_amount(self, discount, discount_type, subtotal):
+        """Calculate discount_amount based on discount and discount_type"""
+        from decimal import Decimal
+        
+        if not discount or discount == 0:
+            return Decimal("0")
+        
+        discount_value = Decimal(str(discount))
+        
+        if discount_type == "Percentage":
+            # Calculate percentage of subtotal
+            return (subtotal * discount_value) / Decimal("100")
+        else:  # INR (flat amount)
+            # Return the discount value as-is
+            return discount_value
+    
+    def update(self, instance, validated_data):
+        """Override update to calculate discount_amount automatically"""
+        # Extract discount-related fields
+        discount = validated_data.get('discount', instance.discount)
+        discount_type = validated_data.get('discount_type', instance.discount_type)
+        
+        # Calculate subtotal from products
+        subtotal = self._calculate_subtotal(instance)
+        
+        # Calculate discount_amount automatically
+        if discount is not None:
+            calculated_discount_amount = self._calculate_discount_amount(
+                discount, discount_type, subtotal
+            )
+            validated_data['discount_amount'] = calculated_discount_amount
+        
+        # Update the instance
+        return super().update(instance, validated_data)
+    
     def to_representation(self, instance):
         """Override to pass organization context to nested products serializer"""
         data = super().to_representation(instance)
@@ -149,11 +196,11 @@ class VendorZohoBillSerializer(serializers.ModelSerializer):
         model = VendorZohoBill
         fields = [
             "id", "selectBill", "vendor", "bill_no", "bill_date", "due_date", "total",
-            "discount_type", "discount_amount", "discount_account", "adjustment_amount", "adjustment_description",
+            "discount_type", "discount", "discount_amount", "discount_account", "adjustment_amount", "adjustment_description",
             "igst", "cgst", "sgst", "tds_tcs_id", "is_tax", "note",
             "created_at", "products"
         ]
-        read_only_fields = ["id", "selectBill", "created_at"]
+        read_only_fields = ["id", "selectBill", "created_at", "discount_amount"]
 
 
 class ZohoVendorBillSerializer(serializers.ModelSerializer):
@@ -438,11 +485,20 @@ class ZohoVendorBillVerifySerializer(serializers.Serializer):
         required=False,
         allow_null=True
     )
+    discount = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+        help_text="User-entered discount value (e.g., 5 for 5% or 100 for ₹100)"
+    )
     discount_amount = serializers.DecimalField(
         max_digits=12,
         decimal_places=2,
         required=False,
-        allow_null=True
+        allow_null=True,
+        read_only=True,
+        help_text="Calculated discount amount in INR (auto-calculated)"
     )
     discount_account = serializers.PrimaryKeyRelatedField(
         queryset=ZohoChartOfAccount.objects.all(), required=False, allow_null=True

@@ -1206,19 +1206,19 @@ def vendor_bill_sync_view(request, org_id, bill_id):
             bill_data['due_date'] = due_date_str
         
         # Add discount information if provided
-        if zoho_bill.discount_amount and zoho_bill.discount_amount > 0:
+        if zoho_bill.discount and zoho_bill.discount > 0:
             # Set discount type - always entity level for bill-level discounts
             bill_data['discount_type'] = 'entity_level'
             bill_data['discount_amount'] = float(zoho_bill.discount_amount)
             
             # Handle percentage vs INR discount
             if zoho_bill.discount_type == 'Percentage':
-                # Percentage discount: send as "5.00%" format
-                bill_data['discount'] = f"{float(zoho_bill.discount_amount):.2f}%"
+                # Percentage discount: send as "5.00%" format (user-entered value)
+                bill_data['discount'] = f"{float(zoho_bill.discount):.2f}%"
                 bill_data['is_discount_before_tax'] = True
             elif zoho_bill.discount_type == 'INR':
-                # INR (flat amount) discount: send as number
-                bill_data['discount'] = float(zoho_bill.discount_amount)
+                # INR (flat amount) discount: send as number (user-entered value)
+                bill_data['discount'] = float(zoho_bill.discount)
                 bill_data['is_discount_before_tax'] = False
             
             # Add discount account if specified (required for proper accounting)
