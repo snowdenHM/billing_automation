@@ -354,7 +354,7 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
                 'igst': safe_numeric_string(relevant_data.get('igst')),
                 'cgst': safe_numeric_string(relevant_data.get('cgst')),
                 'sgst': safe_numeric_string(relevant_data.get('sgst')),
-                'discount_type': 'INR',
+                'discount_type': 'Percentage',
                 'discount_amount': Decimal('0'),
                 'adjustment_amount': Decimal('0'),
                 'note': f"Bill from analysis for {company_name or 'Unknown Vendor'} entered via Billmunshi"
@@ -580,14 +580,18 @@ def vendor_bill_upload_view(request, org_id):
 
     serializer = ZohoVendorBillMultipleUploadSerializer(data=serializer_data)
     if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Invalid Upload Data',
+            'detail': 'The uploaded file data is invalid. Please check file format and size requirements.',
+            'errors': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
 
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
-        return Response(
-            {'error': 'Organization not found'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'Organization Not Found',
+            'detail': f'Organization with ID {org_id} not found or you do not have access to it. Please check the organization ID and your permissions.'
+        }, status=status.HTTP_400_BAD_REQUEST)
 
     files = serializer.validated_data['files']
     file_type = serializer.validated_data['fileType']
@@ -596,10 +600,10 @@ def vendor_bill_upload_view(request, org_id):
     print(f"[VENDOR DEBUG] After serializer validation - files count: {len(files)}, fileType: {file_type}")
 
     if not files:
-        return Response(
-            {'error': 'No files provided for upload'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'No Files Provided',
+            'detail': 'At least one file must be provided for upload. Please select files to upload.'
+        }, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         # Temporarily removing atomic transaction to debug
@@ -657,10 +661,11 @@ def vendor_bill_upload_view(request, org_id):
         logger.error(f"Exception type: {type(e).__name__}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
-        return Response(
-            {'error': f'Error processing files: {str(e)}'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({
+            'error': 'File Upload Processing Failed',
+            'detail': 'There was an error processing the uploaded files. This could be due to file corruption, unsupported format, or server issues.',
+            'message': str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
 
 
 # ✅
@@ -736,10 +741,12 @@ def vendor_bill_analyze_view(request, org_id, bill_id):
         bill = VendorBill.objects.get(id=bill_id, organization=organization)
 
         if bill.status != 'Draft':
-            return Response(
-                {"detail": "Bill must be in 'Draft' status to analyze"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({
+                'error': 'Invalid Bill Status',
+                'detail': f'Bill must be in "Draft" status to analyze. Current status: {bill.status}',
+                'current_status': bill.status,
+                'required_status': 'Draft'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Read file content
         try:
@@ -748,10 +755,11 @@ def vendor_bill_analyze_view(request, org_id, bill_id):
             file_extension = bill.file.name.split('.')[-1].lower()
         except Exception as e:
             logger.error(f"Error reading bill file: {e}")
-            return Response(
-                {"detail": "Error reading the bill file"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({
+                'error': 'File Read Error',
+                'detail': 'Unable to read the bill file. The file may be corrupted or inaccessible.',
+                'message': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Analyze with OpenAI
         analyzed_data = analyze_vendor_bill_with_openai(file_content, file_extension)
@@ -826,10 +834,12 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Found vendor in database: {vendor_obj.companyName} (ID: {vendor_obj.id})")
             except ZohoVendor.DoesNotExist:
                 logger.error(f"[DEBUG] vendor_bill_verify_view - ERROR: Vendor {vendor_data} does not exist in organization {organization.name}")
-                return Response(
-                    {"detail": f"Vendor with ID {vendor_data} does not exist in this organization. Please sync vendors from Zoho first."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                return Response({
+                    'error': 'Vendor Not Found',
+                    'detail': f'Vendor with ID {vendor_data} does not exist in this organization. Please sync vendors from Zoho Books first.',
+                    'vendor_id': vendor_data,
+                    'solution': 'Sync vendors from Zoho Books or select a different vendor'
+                }, status=status.HTTP_400_BAD_REQUEST)
             except Exception as vendor_check_error:
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Error checking vendor: {vendor_check_error}")
         else:
@@ -840,10 +850,12 @@ def vendor_bill_verify_view(request, org_id, bill_id):
         logger.error(f"[DEBUG] vendor_bill_verify_view - Found VendorBill: {bill.id}, status: {bill.status}")
 
         if bill.status not in ['Analysed', 'Verified']:
-            return Response(
-                {"detail": "Bill must be in 'Analysed' or 'Verified' status to save"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({
+                'error': 'Invalid Bill Status',
+                'detail': f'Bill must be in "Analysed" or "Verified" status to save. Current status: {bill.status}',
+                'current_status': bill.status,
+                'required_status': ['Analysed', 'Verified']
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Get existing VendorZohoBill
         logger.error(f"[DEBUG] vendor_bill_verify_view - Attempting to find VendorZohoBill for bill: {bill.id}, org: {organization.id}")
@@ -857,10 +869,12 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                 logger.error(f"[DEBUG] vendor_bill_verify_view - No vendor currently assigned to zoho_bill")
         except VendorZohoBill.DoesNotExist:
             logger.error(f"[DEBUG] vendor_bill_verify_view - VendorZohoBill not found for bill {bill.id}")
-            return Response(
-                {"detail": "No analyzed vendor data found. Please analyze the bill first."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({
+                'error': 'Analysis Data Not Found',
+                'detail': 'No analyzed vendor data found for this bill. Please analyze the bill first before verification.',
+                'bill_id': str(bill.id),
+                'solution': 'Use the analyze endpoint to process the bill first'
+            }, status=status.HTTP_400_BAD_REQUEST)
         except Exception as zoho_bill_error:
             logger.error(f"[DEBUG] vendor_bill_verify_view - Unexpected error getting VendorZohoBill: {zoho_bill_error}")
             logger.error(f"[DEBUG] vendor_bill_verify_view - Error type: {type(zoho_bill_error).__name__}")
@@ -886,44 +900,77 @@ def vendor_bill_verify_view(request, org_id, bill_id):
 
             if serializer.is_valid():
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Serializer is valid, proceeding to save")
-                logger.error(f"[DEBUG] vendor_bill_verify_view - Validated data: {serializer.validated_data}")
+                logger.error(f"[DEBUG] vendor_bill_verify_view - Validated data keys: {list(serializer.validated_data.keys())}")
 
-                # Check vendor in validated data
+                # Log critical fields before save
                 vendor_in_validated = serializer.validated_data.get('vendor')
                 if vendor_in_validated:
-                    logger.error(f"[DEBUG] vendor_bill_verify_view - Vendor in validated_data: {vendor_in_validated} (Type: {type(vendor_in_validated)})")
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - Vendor in validated_data: {vendor_in_validated.companyName} (ID: {vendor_in_validated.id})")
                 else:
                     logger.error(f"[DEBUG] vendor_bill_verify_view - No vendor in validated_data")
 
-                # Save the serializer
-                updated_bill = serializer.save()
-                logger.error(f"[DEBUG] vendor_bill_verify_view - Serializer saved successfully")
-                logger.error(f"[DEBUG] vendor_bill_verify_view - Updated bill ID: {updated_bill.id}")
-                logger.error(f"[DEBUG] vendor_bill_verify_view - Updated bill vendor after save: {updated_bill.vendor}")
+                # Log other critical fields
+                for field in ['bill_no', 'bill_date', 'due_date', 'total', 'discount_amount', 'adjustment_amount']:
+                    if field in serializer.validated_data:
+                        logger.error(f"[DEBUG] vendor_bill_verify_view - {field}: {serializer.validated_data[field]}")
 
-                if updated_bill.vendor:
-                    logger.error(f"[DEBUG] vendor_bill_verify_view - Vendor saved successfully: ID={updated_bill.vendor.id}, Name={updated_bill.vendor.companyName}")
-                else:
-                    logger.error(f"[DEBUG] vendor_bill_verify_view - WARNING: No vendor assigned after save!")
-                    # Let's check if vendor data was in the original payload
-                    if 'vendor' in zoho_bill_data:
-                        logger.error(f"[DEBUG] vendor_bill_verify_view - ERROR: Vendor was in payload but not saved: {zoho_bill_data['vendor']}")
+                # Save the bill data
+                try:
+                    updated_bill = serializer.save()
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - Bill saved successfully: ID={updated_bill.id}")
+                except Exception as save_error:
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - ERROR saving bill: {save_error}")
+                    import traceback
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - Save traceback: {traceback.format_exc()}")
+                    return Response({
+                        'error': 'Bill Save Failed',
+                        'detail': f'Failed to save bill data: {str(save_error)}',
+                        'solution': 'Check that all required fields are provided correctly'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                # Verify critical fields were saved correctly
+                logger.error(f"[DEBUG] vendor_bill_verify_view - Verifying saved data:")
+                logger.error(f"  - Vendor: {updated_bill.vendor.companyName if updated_bill.vendor else 'NOT SET'}")
+                logger.error(f"  - Bill No: {updated_bill.bill_no}")
+                logger.error(f"  - Bill Date: {updated_bill.bill_date}")
+                logger.error(f"  - Due Date: {updated_bill.due_date}")
+                logger.error(f"  - Total: {updated_bill.total}")
+                logger.error(f"  - Discount: {updated_bill.discount_amount} ({updated_bill.discount_type})")
+                logger.error(f"  - Adjustment: {updated_bill.adjustment_amount}")
+
+                # Warn if critical fields are missing
+                if not updated_bill.vendor:
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - WARNING: Vendor not saved! Check if vendor ID was in request.")
+                if not updated_bill.bill_no:
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - WARNING: Bill number not saved!")
 
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Complete updated bill: {updated_bill}")
+                
                 # Handle products update if provided
                 products_data = zoho_bill_data.get('products')
                 if products_data is not None:
-                    # Get existing product IDs
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - Processing {len(products_data)} products from request")
+                    
+                    # Get all existing products for this bill
                     existing_products = {str(product.id): product for product in updated_bill.products.all()}
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - Found {len(existing_products)} existing products in database")
 
-                    # Track which products to keep
+                    # Track which products were processed (to keep)
                     processed_product_ids = set()
+                    created_count = 0
+                    updated_count = 0
 
-                    for product_data in products_data:
-                        if not product_data.get('item_details'):  # Skip if no item_details
+                    # Process each product from the request
+                    for idx, product_data in enumerate(products_data):
+                        logger.error(f"[DEBUG] vendor_bill_verify_view - Processing product {idx + 1}: {product_data}")
+                        
+                        # Validate that item_details is present (required field)
+                        if not product_data.get('item_details'):
+                            logger.warning(f"[DEBUG] vendor_bill_verify_view - Skipping product {idx + 1}: missing item_details")
                             continue
 
                         product_id = product_data.get('id')
+                        logger.error(f"[DEBUG] vendor_bill_verify_view - Product ID from request: {product_id}")
 
                         # Prepare product data for creation/update
                         product_fields = {
@@ -938,49 +985,110 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                             'amount': product_data.get('amount'),
                         }
 
-                        # Remove None values
+                        # Remove None values to avoid overwriting with null
                         product_fields = {k: v for k, v in product_fields.items() if v is not None}
+                        logger.error(f"[DEBUG] vendor_bill_verify_view - Product fields to save: {product_fields}")
 
+                        # Check if this is an existing product (has valid ID in database)
                         if product_id and str(product_id) in existing_products:
-                            # Update existing product
+                            # UPDATE existing product
                             existing_product = existing_products[str(product_id)]
+                            logger.error(f"[DEBUG] vendor_bill_verify_view - Updating existing product: {product_id}")
+                            
+                            # Update each field
                             for field, value in product_fields.items():
                                 setattr(existing_product, field, value)
+                            
                             existing_product.save()
                             processed_product_ids.add(str(product_id))
-                            logger.info(f"Updated existing product {product_id}")
+                            updated_count += 1
+                            logger.error(f"[DEBUG] vendor_bill_verify_view - Successfully updated product {product_id}")
                         else:
-                            # Create new product
-                            new_product = VendorZohoProduct.objects.create(
-                                zohoBill=updated_bill,
-                                organization=organization,
-                                **product_fields
-                            )
-                            processed_product_ids.add(str(new_product.id))
-                            logger.info(f"Created new product {new_product.id}")
+                            # CREATE new product (either no ID provided or ID doesn't exist)
+                            logger.error(f"[DEBUG] vendor_bill_verify_view - Creating new product (ID: {product_id})")
+                            
+                            try:
+                                new_product = VendorZohoProduct.objects.create(
+                                    zohoBill=updated_bill,
+                                    organization=organization,
+                                    **product_fields
+                                )
+                                processed_product_ids.add(str(new_product.id))
+                                created_count += 1
+                                logger.error(f"[DEBUG] vendor_bill_verify_view - Successfully created new product with ID: {new_product.id}")
+                            except Exception as create_error:
+                                logger.error(f"[DEBUG] vendor_bill_verify_view - Error creating product: {create_error}")
+                                # Continue processing other products even if one fails
+                                continue
 
-                    # Delete products that were not in the update data
+                    # DELETE products that were NOT in the request (removed by user)
                     products_to_delete = set(existing_products.keys()) - processed_product_ids
+                    deleted_count = len(products_to_delete)
+                    
                     if products_to_delete:
-                        VendorZohoProduct.objects.filter(
+                        logger.error(f"[DEBUG] vendor_bill_verify_view - Deleting {deleted_count} products not in request: {products_to_delete}")
+                        deleted = VendorZohoProduct.objects.filter(
                             id__in=products_to_delete,
                             zohoBill=updated_bill
                         ).delete()
-                        logger.info(f"Deleted {len(products_to_delete)} products not in update")
+                        logger.error(f"[DEBUG] vendor_bill_verify_view - Deleted {deleted[0]} product records")
+                    else:
+                        logger.error(f"[DEBUG] vendor_bill_verify_view - No products to delete")
+                    
+                    # Log summary
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - Product processing summary:")
+                    logger.error(f"  - Created: {created_count}")
+                    logger.error(f"  - Updated: {updated_count}")
+                    logger.error(f"  - Deleted: {deleted_count}")
+                    logger.error(f"  - Total processed: {len(processed_product_ids)}")
+                else:
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - No products data in request, skipping product update")
 
-                # Update bill status
+                # Validate bill has required data before marking as Verified
+                validation_errors = []
+                if not updated_bill.vendor:
+                    validation_errors.append("Vendor is required")
+                if not updated_bill.bill_no:
+                    validation_errors.append("Bill number is required")
+                if not updated_bill.bill_date:
+                    validation_errors.append("Bill date is required")
+                
+                # Check if bill has at least one product
+                product_count = updated_bill.products.count()
+                if product_count == 0:
+                    validation_errors.append("At least one product line item is required")
+                
+                if validation_errors:
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - Validation failed: {validation_errors}")
+                    return Response({
+                        'error': 'Validation Failed',
+                        'detail': 'Bill cannot be verified due to missing required information',
+                        'validation_errors': validation_errors,
+                        'solution': 'Please provide all required fields and at least one product line item'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                # Update bill status to Verified
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Updating bill status from '{bill.status}' to 'Verified'")
                 bill.status = 'Verified'
                 bill.save()
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Bill status updated successfully to '{bill.status}'")
 
-                # Final verification of vendor data in response
+                # Refresh the bill to get latest data with relationships
+                updated_bill.refresh_from_db()
+                
+                # Prepare response with full bill data
                 response_data = VendorZohoBillSerializer(
                     updated_bill, 
-                    context={'organization': organization}
+                    context={'organization': organization, 'request': request}
                 ).data
-                logger.error(f"[DEBUG] vendor_bill_verify_view - Response vendor data: {response_data.get('vendor')}")
-                logger.error(f"[DEBUG] vendor_bill_verify_view - Verification process completed successfully")
+                
+                # Log final verification summary
+                logger.error(f"[DEBUG] vendor_bill_verify_view - Verification completed successfully")
+                logger.error(f"[DEBUG] vendor_bill_verify_view - Final summary:")
+                logger.error(f"  - Vendor: {response_data.get('vendor')}")
+                logger.error(f"  - Products count: {len(response_data.get('products', []))}")
+                logger.error(f"  - Bill total: {response_data.get('total')}")
+                logger.error(f"  - Status: Verified")
 
                 return Response(response_data)
 
@@ -1033,43 +1141,52 @@ def vendor_bill_sync_view(request, org_id, bill_id):
         bill = VendorBill.objects.get(id=bill_id, organization=organization)
 
         if bill.status != 'Verified':
-            return Response(
-                {"detail": "Bill must be in 'Verified' status to sync"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({
+                'error': 'Invalid Bill Status',
+                'detail': f'Bill must be in "Verified" status to sync. Current status: {bill.status}',
+                'current_status': bill.status,
+                'required_status': 'Verified'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Get Zoho vendor data
         try:
             zoho_bill = VendorZohoBill.objects.get(selectBill=bill, organization=organization)
         except VendorZohoBill.DoesNotExist:
-            return Response(
-                {"detail": "Zoho vendor data not found. Please verify the bill first."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({
+                'error': 'Zoho Data Not Found',
+                'detail': 'Zoho vendor data not found for this bill. Please verify the bill first.',
+                'bill_id': str(bill.id),
+                'solution': 'Use the verify endpoint to process the bill first'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Get Zoho credentials
         try:
             current_token = ZohoCredentials.objects.get(organization=organization)
         except ZohoCredentials.DoesNotExist:
-            return Response(
-                {"detail": "Zoho credentials not found"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({
+                'error': 'Zoho Credentials Not Found',
+                'detail': 'Zoho Books credentials are not configured for this organization. Please configure Zoho credentials first.',
+                'solution': 'Add Zoho Books credentials in the organization settings'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Get products
         zoho_products = zoho_bill.products.all()
         if not zoho_products.exists():
-            return Response(
-                {"detail": "No products found for this bill"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({
+                'error': 'No Products Found',
+                'detail': 'No line items found for this bill. At least one product line item is required to sync.',
+                'bill_id': str(bill.id),
+                'solution': 'Add product line items to the bill before syncing'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Get vendor
         if not zoho_bill.vendor:
-            return Response(
-                {"detail": "No vendor specified for this bill"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({
+                'error': 'Vendor Not Specified',
+                'detail': 'No vendor is associated with this bill. Please assign a vendor before syncing.',
+                'bill_id': str(bill.id),
+                'solution': 'Update the bill to include vendor information'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Prepare data for Zoho API (Vendor Bill)
         bill_date_str = zoho_bill.bill_date.strftime('%Y-%m-%d') if zoho_bill.bill_date else None
@@ -1090,19 +1207,29 @@ def vendor_bill_sync_view(request, org_id, bill_id):
         
         # Add discount information if provided
         if zoho_bill.discount_amount and zoho_bill.discount_amount > 0:
-            bill_data['discount'] = float(zoho_bill.discount_amount)
-            if zoho_bill.discount_type:
-                # Zoho Books uses 'entity_level' or 'item_level' for discount type
-                # 'Percentage' maps to percentage discount
-                bill_data['discount_type'] = 'entity_level'
-                if zoho_bill.discount_type == 'Percentage':
-                    bill_data['is_discount_before_tax'] = True
-                    bill_data['discount'] = float(zoho_bill.discount_amount)  # As percentage
+            # Set discount type - always entity level for bill-level discounts
+            bill_data['discount_type'] = 'entity_level'
+            bill_data['discount_amount'] = float(zoho_bill.discount_amount)
+            
+            # Handle percentage vs INR discount
+            if zoho_bill.discount_type == 'Percentage':
+                # Percentage discount: send as "5.00%" format
+                bill_data['discount'] = f"{float(zoho_bill.discount_amount):.2f}%"
+                bill_data['is_discount_before_tax'] = True
+            elif zoho_bill.discount_type == 'INR':
+                # INR (flat amount) discount: send as number
+                bill_data['discount'] = float(zoho_bill.discount_amount)
+                bill_data['is_discount_before_tax'] = False
+            
+            # Add discount account if specified (required for proper accounting)
+            if zoho_bill.discount_account and hasattr(zoho_bill.discount_account, 'accountId'):
+                bill_data['discount_account_id'] = str(zoho_bill.discount_account.accountId)
         
         # Add adjustment amount if provided
         if zoho_bill.adjustment_amount and zoho_bill.adjustment_amount != 0:
             bill_data['adjustment'] = float(zoho_bill.adjustment_amount)
-            bill_data['adjustment_description'] = 'Bill adjustment'
+            # Use custom adjustment description if provided, otherwise use default
+            bill_data['adjustment_description'] = zoho_bill.adjustment_description if zoho_bill.adjustment_description else 'Bill adjustment'
 
         # Add TDS/TCS if applicable
         if hasattr(zoho_bill, 'tds_tcs_id') and zoho_bill.tds_tcs_id:
@@ -1140,10 +1267,12 @@ def vendor_bill_sync_view(request, org_id, bill_id):
                 continue
 
         if not bill_data["line_items"]:
-            return Response(
-                {"detail": "No valid line items found for syncing"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({
+                'error': 'No Valid Line Items',
+                'detail': 'No valid line items found for syncing. All line items must have a chart of account assigned.',
+                'bill_id': str(bill.id),
+                'solution': 'Ensure each product has a chart of account and tax information'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Sync to Zoho Books
         url = f"https://www.zohoapis.in/books/v3/bills?organization_id={current_token.organisationId}"
@@ -1175,12 +1304,14 @@ def vendor_bill_sync_view(request, org_id, bill_id):
                 })
             else:
                 response_json = response.json() if response.content else {}
-                error_message = response_json.get("message", "Failed to send data to Zoho")
+                error_message = response_json.get("message", "Failed to send data to Zoho Books")
                 logger.error(f"Zoho sync failed: {response.status_code} - {error_message}")
-                return Response(
-                    {"detail": error_message},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                return Response({
+                    'error': 'Zoho Sync Failed',
+                    'detail': f'Failed to sync bill to Zoho Books. {error_message}',
+                    'status_code': response.status_code,
+                    'zoho_message': error_message
+                }, status=status.HTTP_400_BAD_REQUEST)
 
         except requests.RequestException as e:
             logger.error(f"Network error during Zoho sync: {str(e)}")

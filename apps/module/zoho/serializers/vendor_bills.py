@@ -113,6 +113,9 @@ class VendorZohoBillSerializer(serializers.ModelSerializer):
             self.fields['tds_tcs_id'].queryset = ZohoTdsTcs.objects.filter(
                 organization=organization
             )
+            self.fields['discount_account'].queryset = ZohoChartOfAccount.objects.filter(
+                organization=organization
+            )
     
     def _get_organization(self):
         """Get organization from instance or context"""
@@ -146,7 +149,7 @@ class VendorZohoBillSerializer(serializers.ModelSerializer):
         model = VendorZohoBill
         fields = [
             "id", "selectBill", "vendor", "bill_no", "bill_date", "due_date", "total",
-            "discount_type", "discount_amount", "adjustment_amount",
+            "discount_type", "discount_amount", "discount_account", "adjustment_amount", "adjustment_description",
             "igst", "cgst", "sgst", "tds_tcs_id", "is_tax", "note",
             "created_at", "products"
         ]
@@ -441,12 +444,16 @@ class ZohoVendorBillVerifySerializer(serializers.Serializer):
         required=False,
         allow_null=True
     )
+    discount_account = serializers.PrimaryKeyRelatedField(
+        queryset=ZohoChartOfAccount.objects.all(), required=False, allow_null=True
+    )
     adjustment_amount = serializers.DecimalField(
         max_digits=12,
         decimal_places=2,
         required=False,
         allow_null=True
     )
+    adjustment_description = serializers.CharField(required=False, allow_blank=True)
     cgst = serializers.CharField(required=False, allow_blank=True)
     sgst = serializers.CharField(required=False, allow_blank=True)
     igst = serializers.CharField(required=False, allow_blank=True)
@@ -465,6 +472,9 @@ class ZohoVendorBillVerifySerializer(serializers.Serializer):
                 organization=organization
             )
             self.fields['tds_tcs_id'].queryset = ZohoTdsTcs.objects.filter(
+                organization=organization
+            )
+            self.fields['discount_account'].queryset = ZohoChartOfAccount.objects.filter(
                 organization=organization
             )
 

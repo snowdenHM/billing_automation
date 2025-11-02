@@ -330,8 +330,12 @@ class VendorZohoBill(BaseTeamModel):
         ("TDS", "is_tds_tax"),
     )
     
+    # Discount type choices for Zoho Books bill-level discounts
+    # INR: Flat amount discount (e.g., ₹100 off)
+    # Percentage: Percentage-based discount (e.g., 10% off)
+    # Note: Zoho Books always uses 'entity_level' for bill-level discounts
     DISCOUNT_TYPE_CHOICES = (
-        ("INR", "INR"),
+        ("INR", "INR (Flat Amount)"),
         ("Percentage", "Percentage"),
     )
 
@@ -342,9 +346,11 @@ class VendorZohoBill(BaseTeamModel):
     bill_date = models.DateField(null=True, blank=True)
     due_date = models.DateField(null=True, blank=True)
     total = models.CharField(max_length=50, null=True, blank=True, default=0)
-    discount_type = models.CharField(choices=DISCOUNT_TYPE_CHOICES, max_length=20, null=True, blank=True, default="INR")
+    discount_type = models.CharField(choices=DISCOUNT_TYPE_CHOICES, max_length=20, null=True, blank=True, default="Percentage")
     discount_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, default=Decimal("0"))
+    discount_account = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True, related_name="discount_bills")
     adjustment_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, default=Decimal("0"))
+    adjustment_description = models.CharField(max_length=255, null=True, blank=True, default="Adjustment")
     igst = models.CharField(max_length=50, null=True, blank=True, default=0)
     cgst = models.CharField(max_length=50, null=True, blank=True, default=0)
     sgst = models.CharField(max_length=50, null=True, blank=True, default=0)

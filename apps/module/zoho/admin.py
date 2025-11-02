@@ -250,14 +250,14 @@ class VendorZohoBillAdmin(BaseOrgScopedAdmin):
     search_fields = ["bill_no", "vendor__companyName"]
     readonly_fields = ("created_at",)
     inlines = [VendorZohoProductInline]
-    autocomplete_fields = ("organization", "vendor", "selectBill", "tds_tcs_id")
+    autocomplete_fields = ("organization", "vendor", "selectBill", "tds_tcs_id", "discount_account")
     
     fieldsets = (
         ('Bill Information', {
             'fields': ('selectBill', 'vendor', 'bill_no', 'bill_date', 'due_date', 'note')
         }),
         ('Financial Details', {
-            'fields': ('total', 'discount_type', 'discount_amount', 'adjustment_amount')
+            'fields': ('total', 'discount_type', 'discount_amount', 'discount_account', 'adjustment_amount', 'adjustment_description')
         }),
         ('Tax Information', {
             'fields': ('igst', 'cgst', 'sgst', 'tds_tcs_id', 'is_tax')
