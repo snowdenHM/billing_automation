@@ -145,7 +145,8 @@ class VendorZohoBillSerializer(serializers.ModelSerializer):
     class Meta:
         model = VendorZohoBill
         fields = [
-            "id", "selectBill", "vendor", "bill_no", "bill_date", "total",
+            "id", "selectBill", "vendor", "bill_no", "bill_date", "due_date", "total",
+            "discount_type", "discount_amount", "adjustment_amount",
             "igst", "cgst", "sgst", "tds_tcs_id", "is_tax", "note",
             "created_at", "products"
         ]
@@ -428,6 +429,24 @@ class ZohoVendorBillVerifySerializer(serializers.Serializer):
     note = serializers.CharField(required=False, allow_blank=True)
     bill_no = serializers.CharField(required=False, allow_blank=True)
     bill_date = serializers.DateField(required=False, allow_null=True)
+    due_date = serializers.DateField(required=False, allow_null=True)
+    discount_type = serializers.ChoiceField(
+        choices=[("INR", "INR"), ("Percentage", "Percentage")],
+        required=False,
+        allow_null=True
+    )
+    discount_amount = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        required=False,
+        allow_null=True
+    )
+    adjustment_amount = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        required=False,
+        allow_null=True
+    )
     cgst = serializers.CharField(required=False, allow_blank=True)
     sgst = serializers.CharField(required=False, allow_blank=True)
     igst = serializers.CharField(required=False, allow_blank=True)

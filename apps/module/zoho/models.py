@@ -329,13 +329,22 @@ class VendorZohoBill(BaseTeamModel):
         ("TCS", "is_tcs_tax"),
         ("TDS", "is_tds_tax"),
     )
+    
+    DISCOUNT_TYPE_CHOICES = (
+        ("INR", "INR"),
+        ("Percentage", "Percentage"),
+    )
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     selectBill = models.ForeignKey("VendorBill", on_delete=models.CASCADE, null=True, blank=True)
     vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
     bill_no = models.CharField(max_length=50, null=True, blank=True)
     bill_date = models.DateField(null=True, blank=True)
+    due_date = models.DateField(null=True, blank=True)
     total = models.CharField(max_length=50, null=True, blank=True, default=0)
+    discount_type = models.CharField(choices=DISCOUNT_TYPE_CHOICES, max_length=20, null=True, blank=True, default="INR")
+    discount_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, default=Decimal("0"))
+    adjustment_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, default=Decimal("0"))
     igst = models.CharField(max_length=50, null=True, blank=True, default=0)
     cgst = models.CharField(max_length=50, null=True, blank=True, default=0)
     sgst = models.CharField(max_length=50, null=True, blank=True, default=0)

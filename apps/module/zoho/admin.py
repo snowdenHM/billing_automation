@@ -241,14 +241,31 @@ class VendorZohoBillAdmin(BaseOrgScopedAdmin):
         "bill_no",
         "vendor",
         "bill_date",
+        "due_date",
         "total",
+        "discount_amount",
         "organization",
     ]
-    list_filter = ["bill_date", "organization", "vendor"]
+    list_filter = ["bill_date", "due_date", "organization", "vendor", "discount_type"]
     search_fields = ["bill_no", "vendor__companyName"]
     readonly_fields = ("created_at",)
     inlines = [VendorZohoProductInline]
     autocomplete_fields = ("organization", "vendor", "selectBill", "tds_tcs_id")
+    
+    fieldsets = (
+        ('Bill Information', {
+            'fields': ('selectBill', 'vendor', 'bill_no', 'bill_date', 'due_date', 'note')
+        }),
+        ('Financial Details', {
+            'fields': ('total', 'discount_type', 'discount_amount', 'adjustment_amount')
+        }),
+        ('Tax Information', {
+            'fields': ('igst', 'cgst', 'sgst', 'tds_tcs_id', 'is_tax')
+        }),
+        ('Metadata', {
+            'fields': ('organization', 'created_at')
+        }),
+    )
 
     @admin.display(description="Selected Bill")
     def selectBill_link(self, obj):

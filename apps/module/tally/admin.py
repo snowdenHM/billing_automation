@@ -292,8 +292,8 @@ class TallyExpenseBillAdmin(admin.ModelAdmin):
 class TallyExpenseAnalyzedProductInline(admin.TabularInline):
     model = TallyExpenseAnalyzedProduct
     extra = 0
-    fields = ('item_details', 'chart_of_accounts', 'amount', 'debit_or_credit', 'product_gst', 'igst', 'cgst', 'sgst')
-    readonly_fields = ('created_at', 'igst', 'cgst', 'sgst')
+    fields = ('item_details', 'chart_of_accounts', 'amount', 'debit_or_credit')
+    readonly_fields = ('created_at',)
 
 
 class TallyExpenseAnalyzedBillAdmin(admin.ModelAdmin):

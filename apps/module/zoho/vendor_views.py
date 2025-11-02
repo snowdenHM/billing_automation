@@ -309,14 +309,23 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
             lower_name=company_name).first()
         logger.info(f"Found vendor by name {company_name}: {vendor}")
 
-    # Parse date
+    # Parse bill date
     bill_date = None
     date_issued = relevant_data.get('dateIssued', '')
     if date_issued:
         try:
             bill_date = datetime.strptime(date_issued, '%Y-%m-%d').date()
         except (ValueError, TypeError):
-            logger.warning(f"Could not parse date: {date_issued}")
+            logger.warning(f"Could not parse bill date: {date_issued}")
+    
+    # Parse due date
+    due_date = None
+    due_date_issued = relevant_data.get('dueDate', '')
+    if due_date_issued:
+        try:
+            due_date = datetime.strptime(due_date_issued, '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            logger.warning(f"Could not parse due date: {due_date_issued}")
 
     # Validate numeric fields and convert to string
     def safe_numeric_string(value, default='0'):
@@ -340,10 +349,14 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
                 'vendor': vendor,
                 'bill_no': relevant_data.get('invoiceNumber', ''),
                 'bill_date': bill_date,
+                'due_date': due_date,
                 'total': safe_numeric_string(relevant_data.get('total')),
                 'igst': safe_numeric_string(relevant_data.get('igst')),
                 'cgst': safe_numeric_string(relevant_data.get('cgst')),
                 'sgst': safe_numeric_string(relevant_data.get('sgst')),
+                'discount_type': 'INR',
+                'discount_amount': Decimal('0'),
+                'adjustment_amount': Decimal('0'),
                 'note': f"Bill from analysis for {company_name or 'Unknown Vendor'} entered via Billmunshi"
             }
         )
@@ -356,6 +369,7 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
             zoho_bill.vendor = vendor
             zoho_bill.bill_no = relevant_data.get('invoiceNumber', zoho_bill.bill_no)
             zoho_bill.bill_date = bill_date or zoho_bill.bill_date
+            zoho_bill.due_date = due_date or zoho_bill.due_date
             zoho_bill.total = safe_numeric_string(relevant_data.get('total'), zoho_bill.total)
             zoho_bill.igst = safe_numeric_string(relevant_data.get('igst'), zoho_bill.igst)
             zoho_bill.cgst = safe_numeric_string(relevant_data.get('cgst'), zoho_bill.cgst)
@@ -1059,6 +1073,7 @@ def vendor_bill_sync_view(request, org_id, bill_id):
 
         # Prepare data for Zoho API (Vendor Bill)
         bill_date_str = zoho_bill.bill_date.strftime('%Y-%m-%d') if zoho_bill.bill_date else None
+        due_date_str = zoho_bill.due_date.strftime('%Y-%m-%d') if zoho_bill.due_date else None
         tax_choice = getattr(zoho_bill, 'is_tax', 'No')
 
         bill_data = {
@@ -1068,6 +1083,26 @@ def vendor_bill_sync_view(request, org_id, bill_id):
             "date": bill_date_str,
             "line_items": []
         }
+        
+        # Add due date if provided
+        if due_date_str:
+            bill_data['due_date'] = due_date_str
+        
+        # Add discount information if provided
+        if zoho_bill.discount_amount and zoho_bill.discount_amount > 0:
+            bill_data['discount'] = float(zoho_bill.discount_amount)
+            if zoho_bill.discount_type:
+                # Zoho Books uses 'entity_level' or 'item_level' for discount type
+                # 'Percentage' maps to percentage discount
+                bill_data['discount_type'] = 'entity_level'
+                if zoho_bill.discount_type == 'Percentage':
+                    bill_data['is_discount_before_tax'] = True
+                    bill_data['discount'] = float(zoho_bill.discount_amount)  # As percentage
+        
+        # Add adjustment amount if provided
+        if zoho_bill.adjustment_amount and zoho_bill.adjustment_amount != 0:
+            bill_data['adjustment'] = float(zoho_bill.adjustment_amount)
+            bill_data['adjustment_description'] = 'Bill adjustment'
 
         # Add TDS/TCS if applicable
         if hasattr(zoho_bill, 'tds_tcs_id') and zoho_bill.tds_tcs_id:
