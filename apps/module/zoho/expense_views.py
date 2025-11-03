@@ -1096,7 +1096,9 @@ def expense_bill_verify_view(request, org_id, bill_id):
 @permission_classes([IsAuthenticated])
 def expense_bill_sync_view(request, org_id, bill_id):
     """Sync verified expense bill to Zoho Books as an expense entry."""
-    logger.info(f"[EXPENSE SYNC] Starting expense sync for org_id: {org_id}, bill_id: {bill_id}")
+    # Immediate logging to ensure function is called - using both ERROR and print
+    logger.error(f"[EXPENSE SYNC] Starting expense sync for org_id: {org_id}, bill_id: {bill_id}")
+    print(f"[EXPENSE SYNC DEBUG] Function called - org_id: {org_id}, bill_id: {bill_id}")
 
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
@@ -1193,18 +1195,22 @@ def expense_bill_sync_view(request, org_id, bill_id):
 
         account_name = str(zoho_bill.chart_of_accounts.accountName)
 
-        # Log key values before creating expense data
-        logger.info(f"[EXPENSE SYNC] Bill ID: {bill_id}")
-        logger.info(f"[EXPENSE SYNC] Bill No: '{zoho_bill.bill_no}'")
-        logger.info(f"[EXPENSE SYNC] Account Name: '{account_name}'")
-        logger.info(f"[EXPENSE SYNC] Vendor: {zoho_bill.vendor.companyName if zoho_bill.vendor else 'None'}")
-        logger.info(f"[EXPENSE SYNC] GST Treatment: {zoho_bill.vendor.gst_treatment if zoho_bill.vendor else 'None'}")
+        # Log key values before creating expense data - using ERROR level for visibility
+        logger.error(f"[EXPENSE SYNC] Bill ID: {bill_id}")
+        logger.error(f"[EXPENSE SYNC] Bill No: '{zoho_bill.bill_no}'")
+        logger.error(f"[EXPENSE SYNC] Account Name: '{account_name}'")
+        logger.error(f"[EXPENSE SYNC] Vendor: {zoho_bill.vendor.companyName if zoho_bill.vendor else 'None'}")
+        logger.error(f"[EXPENSE SYNC] GST Treatment: {zoho_bill.vendor.gst_treatment if zoho_bill.vendor else 'None'}")
+
+        print(f"[EXPENSE SYNC DEBUG] Bill ID: {bill_id}")
+        print(f"[EXPENSE SYNC DEBUG] Bill No: '{zoho_bill.bill_no}'")
+        print(f"[EXPENSE SYNC DEBUG] Account Name: '{account_name}'")
 
         expense_data = {
             "paid_through_account_name": account_name,
             "date": expense_date_str,
             "amount": str(total_amount),
-            "invoice_number": str(zoho_bill.bill_no) or "",
+            "invoice_number": str(zoho_bill.bill_no) if zoho_bill.bill_no else "",
             "description": zoho_bill.note or f"Expense from {zoho_bill.vendor.companyName if zoho_bill.vendor else 'Unknown Vendor'}",
             "vendor_id": str(zoho_bill.vendor.contactId) if zoho_bill.vendor else "",
             'gst_treatment': zoho_bill.vendor.gst_treatment if zoho_bill.vendor else "",
@@ -1217,16 +1223,19 @@ def expense_bill_sync_view(request, org_id, bill_id):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Log the expense data before converting to JSON
-        logger.info(f"[EXPENSE SYNC] Raw expense_data: {expense_data}")
+        # Log the expense data before converting to JSON - using ERROR level to ensure visibility
+        logger.error(f"[EXPENSE SYNC] Raw expense_data: {expense_data}")
+        print(f"[EXPENSE SYNC DEBUG] Raw expense_data: {expense_data}")
 
         # Sync to Zoho Books as expense
         url = f"https://www.zohoapis.in/books/v3/expenses?organization_id={current_token.organisationId}"
         payload = json.dumps(expense_data)
 
-        # Log the payload being sent to Zoho for debugging
-        logger.info(f"[EXPENSE SYNC] Payload being sent to Zoho Books API: {payload}")
-        logger.info(f"[EXPENSE SYNC] URL: {url}")
+        # Log the payload being sent to Zoho for debugging - using ERROR level to ensure visibility
+        logger.error(f"[EXPENSE SYNC] Payload being sent to Zoho Books API: {payload}")
+        logger.error(f"[EXPENSE SYNC] URL: {url}")
+        print(f"[EXPENSE SYNC DEBUG] Payload: {payload}")
+        print(f"[EXPENSE SYNC DEBUG] URL: {url}")
 
         headers = {
             'Authorization': f'Zoho-oauthtoken {current_token.accessToken}',
