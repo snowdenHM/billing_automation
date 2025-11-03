@@ -1201,10 +1201,12 @@ def expense_bill_sync_view(request, org_id, bill_id):
         logger.error(f"[EXPENSE SYNC] Account Name: '{account_name}'")
         logger.error(f"[EXPENSE SYNC] Vendor: {zoho_bill.vendor.companyName if zoho_bill.vendor else 'None'}")
         logger.error(f"[EXPENSE SYNC] GST Treatment: {zoho_bill.vendor.gst_treatment if zoho_bill.vendor else 'None'}")
+        logger.error(f"[EXPENSE SYNC] GST Number: '{zoho_bill.vendor.gstNo if zoho_bill.vendor else 'None'}'")
 
         print(f"[EXPENSE SYNC DEBUG] Bill ID: {bill_id}")
         print(f"[EXPENSE SYNC DEBUG] Bill No: '{zoho_bill.bill_no}'")
         print(f"[EXPENSE SYNC DEBUG] Account Name: '{account_name}'")
+        print(f"[EXPENSE SYNC DEBUG] GST Number: '{zoho_bill.vendor.gstNo if zoho_bill.vendor else 'None'}'")
 
         expense_data = {
             "paid_through_account_name": account_name,
@@ -1214,6 +1216,7 @@ def expense_bill_sync_view(request, org_id, bill_id):
             "description": zoho_bill.note or f"Expense from {zoho_bill.vendor.companyName if zoho_bill.vendor else 'Unknown Vendor'}",
             "vendor_id": str(zoho_bill.vendor.contactId) if zoho_bill.vendor else "",
             'gst_treatment': zoho_bill.vendor.gst_treatment if zoho_bill.vendor else "",
+            "gst_number": str(zoho_bill.vendor.gstNo) if zoho_bill.vendor and zoho_bill.vendor.gstNo else "",
             "line_items": line_items
         }
 
