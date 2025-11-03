@@ -1180,6 +1180,13 @@ def expense_bill_sync_view(request, org_id, bill_id):
 
         account_name = str(zoho_bill.chart_of_accounts.accountName)
 
+        # Log key values before creating expense data
+        logger.info(f"[EXPENSE SYNC] Bill ID: {bill_id}")
+        logger.info(f"[EXPENSE SYNC] Bill No: '{zoho_bill.bill_no}'")
+        logger.info(f"[EXPENSE SYNC] Account Name: '{account_name}'")
+        logger.info(f"[EXPENSE SYNC] Vendor: {zoho_bill.vendor.companyName if zoho_bill.vendor else 'None'}")
+        logger.info(f"[EXPENSE SYNC] GST Treatment: {zoho_bill.vendor.gst_treatment if zoho_bill.vendor else 'None'}")
+
         expense_data = {
             "paid_through_account_name": account_name,
             "date": expense_date_str,
@@ -1197,12 +1204,16 @@ def expense_bill_sync_view(request, org_id, bill_id):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Log the expense data before converting to JSON
+        logger.info(f"[EXPENSE SYNC] Raw expense_data: {expense_data}")
+
         # Sync to Zoho Books as expense
         url = f"https://www.zohoapis.in/books/v3/expenses?organization_id={current_token.organisationId}"
         payload = json.dumps(expense_data)
 
-        # Print the payload being sent to Zoho for debugging
-        print(f"[EXPENSE SYNC] Payload being sent to Zoho Books: {payload}")
+        # Log the payload being sent to Zoho for debugging
+        logger.info(f"[EXPENSE SYNC] Payload being sent to Zoho Books API: {payload}")
+        logger.info(f"[EXPENSE SYNC] URL: {url}")
 
         headers = {
             'Authorization': f'Zoho-oauthtoken {current_token.accessToken}',
