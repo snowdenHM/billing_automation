@@ -1216,7 +1216,7 @@ def expense_bill_sync_view(request, org_id, bill_id):
             "description": zoho_bill.note or f"Expense from {zoho_bill.vendor.companyName if zoho_bill.vendor else 'Unknown Vendor'}",
             "vendor_id": str(zoho_bill.vendor.contactId) if zoho_bill.vendor else "",
             'gst_treatment': zoho_bill.vendor.gst_treatment if zoho_bill.vendor else "",
-            "gst_number": str(zoho_bill.vendor.gstNo) if zoho_bill.vendor and zoho_bill.vendor.gstNo else "",
+            "gst_no": str(zoho_bill.vendor.gstNo) if zoho_bill.vendor and zoho_bill.vendor.gstNo else "",
             "line_items": line_items
         }
 
