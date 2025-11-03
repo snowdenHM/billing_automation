@@ -505,6 +505,7 @@ class JournalZohoBill(BaseTeamModel):
     vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
     bill_no = models.CharField(max_length=50, null=True, blank=True)
     bill_date = models.DateField(null=True, blank=True)
+    due_date = models.DateField(null=True, blank=True)
     vendor_coa = models.ForeignKey(
         ZohoChartOfAccount, on_delete=models.CASCADE, blank=True, null=True,
         related_name="vendor_tally_expense_analysed_bills"
@@ -680,6 +681,7 @@ class ExpenseZohoBill(BaseTeamModel):
     chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
     bill_no = models.CharField(max_length=50, null=True, blank=True)
     bill_date = models.DateField(null=True, blank=True)
+    due_date = models.DateField(null=True, blank=True)
     total = models.CharField(max_length=50, null=True, blank=True, default=0)
     igst = models.CharField(max_length=50, null=True, blank=True, default=0)
     cgst = models.CharField(max_length=50, null=True, blank=True, default=0)

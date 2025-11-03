@@ -85,7 +85,7 @@ class JournalZohoBillSerializer(serializers.ModelSerializer):
     class Meta:
         model = JournalZohoBill
         fields = [
-            "id", "selectBill", "vendor", "bill_no", "bill_date", 
+            "id", "selectBill", "vendor", "bill_no", "bill_date", "due_date",
             "vendor_coa", "vendor_debit_or_credit", "vendor_amount",
             "total", "igst", "igst_coa", "igst_debit_or_credit", 
             "cgst", "cgst_coa", "cgst_debit_or_credit", 
@@ -337,6 +337,7 @@ class ZohoJournalBillVerifySerializer(serializers.Serializer):
     note = serializers.CharField(required=False, allow_blank=True)
     bill_no = serializers.CharField(required=False, allow_blank=True)
     bill_date = serializers.DateField(required=False, allow_null=True)
+    due_date = serializers.DateField(required=False, allow_null=True)
     cgst = serializers.CharField(required=False, allow_blank=True)
     sgst = serializers.CharField(required=False, allow_blank=True)
     igst = serializers.CharField(required=False, allow_blank=True)

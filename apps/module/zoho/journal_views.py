@@ -343,14 +343,23 @@ def create_journal_zoho_objects_from_analysis(bill, analyzed_data, organization)
             lower_name=company_name).first()
         logger.info(f"Found vendor by name {company_name}: {vendor}")
 
-    # Parse date
+    # Parse dates
     bill_date = None
+    due_date = None
     date_issued = relevant_data.get('dateIssued', '')
+    due_date_str = relevant_data.get('dueDate', '')
+
     if date_issued:
         try:
             bill_date = datetime.strptime(date_issued, '%Y-%m-%d').date()
         except (ValueError, TypeError):
-            logger.warning(f"Could not parse date: {date_issued}")
+            logger.warning(f"Could not parse bill date: {date_issued}")
+
+    if due_date_str:
+        try:
+            due_date = datetime.strptime(due_date_str, '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            logger.warning(f"Could not parse due date: {due_date_str}")
 
     # Validate numeric fields and convert to string
     def safe_numeric_string(value, default='0'):
@@ -374,6 +383,7 @@ def create_journal_zoho_objects_from_analysis(bill, analyzed_data, organization)
                 'vendor': vendor,
                 'bill_no': relevant_data.get('invoiceNumber', ''),
                 'bill_date': bill_date,
+                'due_date': due_date,
                 'total': safe_numeric_string(relevant_data.get('total')),
                 'igst': safe_numeric_string(relevant_data.get('igst')),
                 'cgst': safe_numeric_string(relevant_data.get('cgst')),
@@ -390,6 +400,7 @@ def create_journal_zoho_objects_from_analysis(bill, analyzed_data, organization)
             zoho_bill.vendor = vendor
             zoho_bill.bill_no = relevant_data.get('invoiceNumber', zoho_bill.bill_no)
             zoho_bill.bill_date = bill_date or zoho_bill.bill_date
+            zoho_bill.due_date = due_date or zoho_bill.due_date
             zoho_bill.total = safe_numeric_string(relevant_data.get('total'), zoho_bill.total)
             zoho_bill.igst = safe_numeric_string(relevant_data.get('igst'), zoho_bill.igst)
             zoho_bill.cgst = safe_numeric_string(relevant_data.get('cgst'), zoho_bill.cgst)

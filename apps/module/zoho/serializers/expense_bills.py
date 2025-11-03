@@ -88,7 +88,7 @@ class ExpenseZohoBillSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExpenseZohoBill
         fields = [
-            "id", "selectBill", "vendor", "bill_no", "bill_date", "total", "chart_of_accounts",
+            "id", "selectBill", "vendor", "bill_no", "bill_date", "due_date", "total", "chart_of_accounts",
             "igst", "cgst", "sgst", "note", "created_at", "products"
         ]
         read_only_fields = ["id", "selectBill", "created_at"]
@@ -285,6 +285,7 @@ class ZohoExpenseBillVerifySerializer(serializers.Serializer):
     note = serializers.CharField(required=False, allow_blank=True)
     bill_no = serializers.CharField(required=False, allow_blank=True)
     bill_date = serializers.DateField(required=False, allow_null=True)
+    due_date = serializers.DateField(required=False, allow_null=True)
     cgst = serializers.CharField(required=False, allow_blank=True)
     sgst = serializers.CharField(required=False, allow_blank=True)
     igst = serializers.CharField(required=False, allow_blank=True)

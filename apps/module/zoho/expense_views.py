@@ -341,14 +341,23 @@ def create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
             lower_name=company_name).first()
         logger.info(f"Found vendor by name {company_name}: {vendor}")
 
-    # Parse date
+    # Parse dates
     bill_date = None
+    due_date = None
     date_issued = relevant_data.get('dateIssued', '')
+    due_date_str = relevant_data.get('dueDate', '')
+
     if date_issued:
         try:
             bill_date = datetime.strptime(date_issued, '%Y-%m-%d').date()
         except (ValueError, TypeError):
-            logger.warning(f"Could not parse date: {date_issued}")
+            logger.warning(f"Could not parse bill date: {date_issued}")
+
+    if due_date_str:
+        try:
+            due_date = datetime.strptime(due_date_str, '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            logger.warning(f"Could not parse due date: {due_date_str}")
 
     # Validate numeric fields and convert to string
     def safe_numeric_string(value, default='0'):
@@ -372,6 +381,7 @@ def create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
                 'vendor': vendor,
                 'bill_no': relevant_data.get('invoiceNumber', ''),
                 'bill_date': bill_date,
+                'due_date': due_date,
                 'total': safe_numeric_string(relevant_data.get('total')),
                 'igst': safe_numeric_string(relevant_data.get('igst')),
                 'cgst': safe_numeric_string(relevant_data.get('cgst')),
@@ -388,6 +398,7 @@ def create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
             zoho_bill.vendor = vendor
             zoho_bill.bill_no = relevant_data.get('invoiceNumber', zoho_bill.bill_no)
             zoho_bill.bill_date = bill_date or zoho_bill.bill_date
+            zoho_bill.due_date = due_date or zoho_bill.due_date
             zoho_bill.total = safe_numeric_string(relevant_data.get('total'), zoho_bill.total)
             zoho_bill.igst = safe_numeric_string(relevant_data.get('igst'), zoho_bill.igst)
             zoho_bill.cgst = safe_numeric_string(relevant_data.get('cgst'), zoho_bill.cgst)
@@ -1160,22 +1171,20 @@ def expense_bill_sync_view(request, org_id, bill_id):
                 logger.error(f"Error processing expense product {item.id}: {str(e)}")
                 continue
 
-        # Use the first line item's account_id as the main account_id, or chart_of_accounts from zoho_bill
-        main_account_id = None
-        if line_items:
-            main_account_id = line_items[0]["account_id"]
-        elif zoho_bill.chart_of_accounts:
-            main_account_id = str(zoho_bill.chart_of_accounts.accountId)
-        else:
+        # Use the account name from ExpenseZohoBill chart_of_accounts
+        if not zoho_bill.chart_of_accounts:
             return Response(
                 {"detail": "No chart of account found for the expense. Please verify the bill first."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        account_name = str(zoho_bill.chart_of_accounts.accountName)
+
         expense_data = {
-            "account_id": main_account_id,
+            "paid_through_account_name": account_name,
             "date": expense_date_str,
             "amount": str(total_amount),
+            "invoice_number": zoho_bill.bill_no or "",
             "description": zoho_bill.note or f"Expense from {zoho_bill.vendor.companyName if zoho_bill.vendor else 'Unknown Vendor'}",
             "vendor_id": str(zoho_bill.vendor.contactId) if zoho_bill.vendor else "",
             'gst_treatment': zoho_bill.vendor.gst_treatment if zoho_bill.vendor else "",
