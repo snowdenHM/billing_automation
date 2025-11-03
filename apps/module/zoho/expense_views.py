@@ -1210,7 +1210,7 @@ def expense_bill_sync_view(request, org_id, bill_id):
             "paid_through_account_name": account_name,
             "date": expense_date_str,
             "amount": str(total_amount),
-            "invoice_number": str(zoho_bill.bill_no) if zoho_bill.bill_no else "",
+            "reference_number": str(zoho_bill.bill_no) if zoho_bill.bill_no else "",
             "description": zoho_bill.note or f"Expense from {zoho_bill.vendor.companyName if zoho_bill.vendor else 'Unknown Vendor'}",
             "vendor_id": str(zoho_bill.vendor.contactId) if zoho_bill.vendor else "",
             'gst_treatment': zoho_bill.vendor.gst_treatment if zoho_bill.vendor else "",
