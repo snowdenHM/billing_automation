@@ -1200,6 +1200,10 @@ def expense_bill_sync_view(request, org_id, bill_id):
         # Sync to Zoho Books as expense
         url = f"https://www.zohoapis.in/books/v3/expenses?organization_id={current_token.organisationId}"
         payload = json.dumps(expense_data)
+
+        # Print the payload being sent to Zoho for debugging
+        print(f"[EXPENSE SYNC] Payload being sent to Zoho Books: {payload}")
+
         headers = {
             'Authorization': f'Zoho-oauthtoken {current_token.accessToken}',
             'Content-Type': 'application/json'
