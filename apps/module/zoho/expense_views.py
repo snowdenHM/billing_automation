@@ -1096,33 +1096,46 @@ def expense_bill_verify_view(request, org_id, bill_id):
 @permission_classes([IsAuthenticated])
 def expense_bill_sync_view(request, org_id, bill_id):
     """Sync verified expense bill to Zoho Books as an expense entry."""
+    logger.info(f"[EXPENSE SYNC] Starting expense sync for org_id: {org_id}, bill_id: {bill_id}")
+
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
+        logger.error(f"[EXPENSE SYNC] Organization not found: {org_id}")
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    logger.info(f"[EXPENSE SYNC] Organization found: {organization.name}")
 
     try:
         bill = ExpenseBill.objects.get(id=bill_id, organization=organization)
-        
+        logger.info(f"[EXPENSE SYNC] Bill found: {bill.id}, status: {bill.status}")
+
         if bill.status != 'Verified':
+            logger.warning(f"[EXPENSE SYNC] Bill status is '{bill.status}', not 'Verified'")
             return Response(
                 {"detail": "Bill must be in 'Verified' status to sync"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         # Get Zoho credentials
+        logger.info(f"[EXPENSE SYNC] Getting Zoho credentials for organization")
         try:
             current_token = get_zoho_credentials(organization)
+            logger.info(f"[EXPENSE SYNC] Zoho credentials obtained successfully")
         except ValueError as e:
+            logger.error(f"[EXPENSE SYNC] Failed to get Zoho credentials: {str(e)}")
             return Response(
                 {"detail": str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         # Get ExpenseZohoBill and products
+        logger.info(f"[EXPENSE SYNC] Getting ExpenseZohoBill and products")
         try:
             zoho_bill = ExpenseZohoBill.objects.get(selectBill=bill, organization=organization)
             zoho_products = ExpenseZohoProduct.objects.filter(zohoBill=zoho_bill)
+            logger.info(f"[EXPENSE SYNC] Found ExpenseZohoBill: {zoho_bill.id}, Products count: {zoho_products.count()}")
         except ExpenseZohoBill.DoesNotExist:
+            logger.error(f"[EXPENSE SYNC] No ExpenseZohoBill found for bill: {bill_id}")
             return Response(
                 {"detail": "No analyzed expense data found"},
                 status=status.HTTP_400_BAD_REQUEST
@@ -1191,7 +1204,7 @@ def expense_bill_sync_view(request, org_id, bill_id):
             "paid_through_account_name": account_name,
             "date": expense_date_str,
             "amount": str(total_amount),
-            "invoice_number": zoho_bill.bill_no or "",
+            "invoice_number": str(zoho_bill.bill_no) or "",
             "description": zoho_bill.note or f"Expense from {zoho_bill.vendor.companyName if zoho_bill.vendor else 'Unknown Vendor'}",
             "vendor_id": str(zoho_bill.vendor.contactId) if zoho_bill.vendor else "",
             'gst_treatment': zoho_bill.vendor.gst_treatment if zoho_bill.vendor else "",
@@ -1221,14 +1234,18 @@ def expense_bill_sync_view(request, org_id, bill_id):
         }
 
         try:
+            logger.info(f"[EXPENSE SYNC] Making API call to Zoho Books")
             response = requests.post(url, headers=headers, data=payload)
+            logger.info(f"[EXPENSE SYNC] API response status: {response.status_code}")
 
             # Handle token refresh if needed
             if response.status_code == 401:
+                logger.info(f"[EXPENSE SYNC] Token expired, refreshing...")
                 new_access_token = refresh_zoho_access_token(current_token)
                 if new_access_token:
                     headers['Authorization'] = f'Zoho-oauthtoken {new_access_token}'
                     response = requests.post(url, headers=headers, data=payload)
+                    logger.info(f"[EXPENSE SYNC] Retry API response status: {response.status_code}")
 
             if response.status_code == 201:
                 # Update bill status
@@ -1243,6 +1260,9 @@ def expense_bill_sync_view(request, org_id, bill_id):
             else:
                 response_json = response.json() if response.content else {}
                 error_message = response_json.get("message", "Failed to send expense to Zoho")
+                logger.error(f"[EXPENSE SYNC] Zoho API error - Status: {response.status_code}")
+                logger.error(f"[EXPENSE SYNC] Full response: {response.text}")
+                logger.error(f"[EXPENSE SYNC] Error message: {error_message}")
                 logger.error(f"Zoho expense sync failed: {response.status_code} - {error_message}")
                 return Response(
                     {"detail": error_message},
@@ -1250,6 +1270,7 @@ def expense_bill_sync_view(request, org_id, bill_id):
                 )
 
         except requests.RequestException as e:
+            logger.error(f"[EXPENSE SYNC] Network error: {str(e)}")
             logger.error(f"Network error during Zoho expense sync: {str(e)}")
             return Response(
                 {"detail": f"Network error: {str(e)}"},
@@ -1257,9 +1278,13 @@ def expense_bill_sync_view(request, org_id, bill_id):
             )
 
     except ExpenseBill.DoesNotExist:
+        logger.error(f"[EXPENSE SYNC] ExpenseBill not found: {bill_id}")
         return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
+        logger.error(f"[EXPENSE SYNC] Unexpected error: {str(e)}")
         logger.error(f"Expense sync failed: {str(e)}")
+        import traceback
+        logger.error(f"[EXPENSE SYNC] Traceback: {traceback.format_exc()}")
         return Response(
             {"detail": f"Expense sync failed: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
