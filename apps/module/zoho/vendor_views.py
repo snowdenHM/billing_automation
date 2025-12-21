@@ -1685,8 +1685,9 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                     updated_bill.save()
 
                 # Create or update consolidated product if consolidation is enabled
-                if updated_bill.consolidate:
-                    logger.info(f"Creating/updating consolidated product for bill {updated_bill.id}")
+                # BUT ONLY if consolidate_prod array was NOT provided (to avoid duplicates)
+                if updated_bill.consolidate and not consolidate_prod_data:
+                    logger.info(f"Creating/updating consolidated product for bill {updated_bill.id} (auto-consolidation)")
                     try:
                         consolidated_product = create_consolidated_vendor_product(updated_bill, organization)
                         if consolidated_product:
@@ -1696,6 +1697,8 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                     except Exception as consolidation_error:
                         logger.error(f"Error during consolidation: {str(consolidation_error)}")
                         # Don't fail the entire request for consolidation errors
+                elif updated_bill.consolidate and consolidate_prod_data:
+                    logger.info(f"Skipping auto-consolidation for bill {updated_bill.id} - consolidate_prod array was provided")
                 else:
                     # Remove consolidated products if consolidation is disabled
                     try:
@@ -1727,11 +1730,16 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                 if not updated_bill.bill_date:
                     validation_errors.append("Bill date is required")
                 
-                # Check if bill has at least one product
+                # Check if bill has at least one product (individual OR consolidated)
                 product_count = updated_bill.products.count()
-                if product_count == 0:
-                    validation_errors.append("At least one product line item is required")
-                
+                consolidated_count = updated_bill.consolidated_products.count()
+                total_line_items = product_count + consolidated_count
+
+                if total_line_items == 0:
+                    validation_errors.append("At least one product line item or consolidated product is required")
+
+                logger.error(f"[DEBUG] vendor_bill_verify_view - Line item counts: Individual={product_count}, Consolidated={consolidated_count}, Total={total_line_items}")
+
                 if validation_errors:
                     logger.error(f"[DEBUG] vendor_bill_verify_view - Validation failed: {validation_errors}")
                     return Response({
@@ -1760,7 +1768,8 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Verification completed successfully")
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Final summary:")
                 logger.error(f"  - Vendor: {response_data.get('vendor')}")
-                logger.error(f"  - Products count: {len(response_data.get('products', []))}")
+                logger.error(f"  - Individual products count: {len(response_data.get('products', []))}")
+                logger.error(f"  - Consolidated products count: {len(response_data.get('consolidate_prod', []))}")
                 logger.error(f"  - Bill total: {response_data.get('total')}")
                 logger.error(f"  - Status: Verified")
 
