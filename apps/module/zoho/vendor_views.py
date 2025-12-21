@@ -1614,64 +1614,34 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                     logger.error(f"[DEBUG] vendor_bill_verify_view - Processing consolidate_prod array with {len(consolidate_prod_data)} items")
 
                     try:
-                        # Handle consolidated product updates/creation with ForeignKey relationship
+                        # 🔄 FIRST: Clear existing consolidated products to prevent duplicates
+                        existing_consolidated = updated_bill.consolidated_products.all()
+                        if existing_consolidated.exists():
+                            existing_count = existing_consolidated.count()
+                            existing_consolidated.delete()
+                            logger.error(f"[DEBUG] vendor_bill_verify_view - Deleted {existing_count} existing consolidated products before creating new ones")
+
+                        # Handle consolidated product creation (since we cleared existing ones, always create new)
                         for idx, consolidated_data in enumerate(consolidate_prod_data):
-                            logger.error(f"[DEBUG] vendor_bill_verify_view - Processing consolidated product {idx}: {consolidated_data}")
+                            logger.error(f"[DEBUG] vendor_bill_verify_view - Creating consolidated product {idx + 1}: {consolidated_data.get('item_name', 'Unnamed')}")
 
-                            consolidated_id = consolidated_data.get('id')
-                            if consolidated_id:
-                                # Update existing consolidated product
-                                try:
-                                    consolidated_product = VendorZohoConsolidatedProduct.objects.get(
-                                        id=consolidated_id,
-                                        zohoBill=updated_bill
-                                    )
-
-                                    # Update fields from frontend using CORRECT field names
-                                    consolidated_product.consolidated_item_name = consolidated_data.get('item_name', consolidated_product.consolidated_item_name)
-                                    consolidated_product.consolidated_item_details = consolidated_data.get('item_details', consolidated_product.consolidated_item_details)
-                                    consolidated_product.consolidated_rate = consolidated_data.get('rate', consolidated_product.consolidated_rate)
-                                    consolidated_product.total_quantity = consolidated_data.get('quantity', consolidated_product.total_quantity)
-                                    consolidated_product.consolidated_amount = consolidated_data.get('amount', consolidated_product.consolidated_amount)
-
-                                    # Handle foreign key fields
-                                    chart_of_accounts_id = consolidated_data.get('chart_of_accounts')
-                                    if chart_of_accounts_id:
-                                        consolidated_product.chart_of_accounts_id = chart_of_accounts_id
-
-                                    taxes_id = consolidated_data.get('taxes')
-                                    if taxes_id:
-                                        consolidated_product.taxes_id = taxes_id
-
-                                    # Handle other fields
-                                    consolidated_product.itc_eligibility = consolidated_data.get('itc_eligibility', consolidated_product.itc_eligibility)
-                                    consolidated_product.reverse_charge_tax_id = consolidated_data.get('reverse_charge_tax_id', consolidated_product.reverse_charge_tax_id)
-
-                                    consolidated_product.save()
-                                    logger.error(f"[DEBUG] vendor_bill_verify_view - Updated consolidated product {consolidated_id}")
-
-                                except VendorZohoConsolidatedProduct.DoesNotExist:
-                                    logger.error(f"[DEBUG] vendor_bill_verify_view - Consolidated product {consolidated_id} not found, creating new one")
-                                    consolidated_id = None  # Fall through to create new
-
-                            if not consolidated_id:
-                                # Create new consolidated product - ForeignKey allows multiple
-                                consolidated_product = VendorZohoConsolidatedProduct.objects.create(
-                                    zohoBill=updated_bill,
-                                    organization=organization,
-                                    consolidated_item_name=consolidated_data.get('item_name', 'Consolidated Product'),
-                                    consolidated_item_details=consolidated_data.get('item_details', 'New consolidated product from verification'),
-                                    consolidated_rate=consolidated_data.get('rate', 0),
-                                    total_quantity=consolidated_data.get('quantity', 1),
-                                    consolidated_amount=consolidated_data.get('amount', 0),
-                                    chart_of_accounts_id=consolidated_data.get('chart_of_accounts'),
-                                    taxes_id=consolidated_data.get('taxes'),
-                                    itc_eligibility=consolidated_data.get('itc_eligibility', 'eligible'),
-                                    reverse_charge_tax_id=consolidated_data.get('reverse_charge_tax_id', False),
-                                    original_items_count=1,
-                                    consolidation_notes='Created from frontend verification'
-                                )
-                                logger.error(f"[DEBUG] vendor_bill_verify_view - Created new consolidated product {consolidated_product.id}")
+                            # Create new consolidated product - ForeignKey allows multiple
+                            consolidated_product = VendorZohoConsolidatedProduct.objects.create(
+                                zohoBill=updated_bill,
+                                organization=organization,
+                                consolidated_item_name=consolidated_data.get('item_name', 'Consolidated Product'),
+                                consolidated_item_details=consolidated_data.get('item_details', 'Consolidated product from verification'),
+                                consolidated_rate=consolidated_data.get('rate', 0),
+                                total_quantity=consolidated_data.get('quantity', 1),
+                                consolidated_amount=consolidated_data.get('amount', 0),
+                                chart_of_accounts_id=consolidated_data.get('chart_of_accounts'),
+                                taxes_id=consolidated_data.get('taxes'),
+                                itc_eligibility=consolidated_data.get('itc_eligibility', 'eligible'),
+                                reverse_charge_tax_id=consolidated_data.get('reverse_charge_tax_id', False),
+                                original_items_count=1,
+                                consolidation_notes='Created from frontend verification'
+                            )
+                            logger.error(f"[DEBUG] vendor_bill_verify_view - Created new consolidated product {consolidated_product.id}")
 
                     except Exception as consolidate_error:
                         logger.error(f"[DEBUG] vendor_bill_verify_view - Error processing consolidate_prod array: {consolidate_error}")
