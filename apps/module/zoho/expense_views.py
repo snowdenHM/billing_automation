@@ -29,6 +29,7 @@ from .models import (
     ExpenseBill,
     ExpenseZohoBill,
     ExpenseZohoProduct,
+    ExpenseZohoConsolidatedProduct,
 )
 from .serializers.common import (
     AnalysisResponseSerializer,
@@ -46,6 +47,168 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
+def check_duplicate_expense_bill(bill, organization):
+    """
+    Check if an expense bill is a duplicate based on invoice number and vendor information.
+    Returns tuple (is_duplicate, duplicate_bills, similarity_score)
+    """
+    logger.info(f"Checking for duplicates of expense bill {bill.id} in organization {organization.id}")
+
+    if not bill.analysed_data:
+        # If bill hasn't been analyzed yet, we can't check for duplicates
+        return False, [], 0.0
+
+    analyzed_data = bill.analysed_data
+    current_invoice_number = analyzed_data.get('invoiceNumber', '').strip()
+    current_vendor_name = analyzed_data.get('from', {}).get('name', '').strip()
+    current_total = analyzed_data.get('total', 0)
+    current_date = analyzed_data.get('dateIssued', '')
+
+    if not current_invoice_number and not current_vendor_name:
+        # Can't check duplicates without key identifying information
+        return False, [], 0.0
+
+    # Find potentially duplicate bills in the same organization
+    potential_duplicates = ExpenseBill.objects.filter(
+        organization=organization,
+        status__in=['Analysed', 'Verified', 'Synced']
+    ).exclude(id=bill.id)
+
+    duplicate_bills = []
+    max_similarity = 0.0
+
+    for other_bill in potential_duplicates:
+        if not other_bill.analysed_data:
+            continue
+
+        other_data = other_bill.analysed_data
+        other_invoice_number = other_data.get('invoiceNumber', '').strip()
+        other_vendor_name = other_data.get('from', {}).get('name', '').strip()
+        other_total = other_data.get('total', 0)
+        other_date = other_data.get('dateIssued', '')
+
+        similarity_score = 0.0
+        match_reasons = []
+
+        # Check exact invoice number match
+        if (current_invoice_number and other_invoice_number and
+            current_invoice_number.lower() == other_invoice_number.lower()):
+            similarity_score += 40.0
+            match_reasons.append('exact_invoice_number')
+
+        # Check vendor name similarity
+        if current_vendor_name and other_vendor_name:
+            vendor_similarity = _calculate_string_similarity_expense(current_vendor_name.lower(), other_vendor_name.lower())
+            if vendor_similarity > 0.8:
+                similarity_score += 25.0 * vendor_similarity
+                match_reasons.append('vendor_name_match')
+
+        # Check total amount match
+        if current_total and other_total:
+            try:
+                current_amount = float(current_total)
+                other_amount = float(other_total)
+                if abs(current_amount - other_amount) < 0.01:  # Allow for minor rounding differences
+                    similarity_score += 20.0
+                    match_reasons.append('exact_amount')
+                elif abs(current_amount - other_amount) / max(current_amount, other_amount) < 0.05:  # 5% difference
+                    similarity_score += 10.0
+                    match_reasons.append('similar_amount')
+            except (ValueError, TypeError):
+                pass
+
+        # Check date similarity
+        if current_date and other_date and current_date == other_date:
+            similarity_score += 15.0
+            match_reasons.append('same_date')
+
+        # Consider it a potential duplicate if similarity is high
+        if similarity_score >= 60.0:  # Threshold for considering as duplicate
+            duplicate_bills.append({
+                'bill': other_bill,
+                'similarity_score': similarity_score,
+                'match_reasons': match_reasons,
+                'invoice_number': other_invoice_number,
+                'vendor_name': other_vendor_name,
+                'total': other_total,
+                'date': other_date
+            })
+            max_similarity = max(max_similarity, similarity_score)
+
+    is_duplicate = len(duplicate_bills) > 0
+    logger.info(f"Expense duplicate check complete. Found {len(duplicate_bills)} potential duplicates with max similarity {max_similarity}")
+
+    return is_duplicate, duplicate_bills, max_similarity
+
+
+def _calculate_string_similarity_expense(str1, str2):
+    """Calculate similarity between two strings using enhanced logic for Indian business names."""
+    if not str1 or not str2:
+        return 0.0
+
+    str1_clean = str1.lower().strip()
+    str2_clean = str2.lower().strip()
+
+    # Exact match
+    if str1_clean == str2_clean:
+        return 1.0
+
+    # Common business abbreviations for Indian companies
+    abbreviations = {
+        'ltd': 'limited',
+        'pvt': 'private',
+        'llp': 'limited liability partnership',
+        'co': 'company',
+        'corp': 'corporation',
+        'inc': 'incorporated',
+        'enterprises': 'ent',
+        'industries': 'ind',
+        'services': 'svc',
+        'technologies': 'tech',
+        'systems': 'sys',
+        'solutions': 'sol'
+    }
+
+    # Normalize abbreviations
+    for abbrev, full in abbreviations.items():
+        str1_clean = str1_clean.replace(full, abbrev).replace(abbrev, abbrev)
+        str2_clean = str2_clean.replace(full, abbrev).replace(abbrev, abbrev)
+
+    # Word-based similarity
+    str1_words = set(str1_clean.split())
+    str2_words = set(str2_clean.split())
+
+    if not str1_words or not str2_words:
+        return 0.0
+
+    # Calculate Jaccard similarity (intersection over union)
+    intersection = str1_words.intersection(str2_words)
+    union = str1_words.union(str2_words)
+    word_similarity = len(intersection) / len(union) if union else 0.0
+
+    # Character-level similarity using simple edit distance approach
+    max_len = max(len(str1_clean), len(str2_clean))
+    min_len = min(len(str1_clean), len(str2_clean))
+
+    if max_len == 0:
+        return 1.0
+
+    # Simple character overlap calculation
+    common_chars = 0
+    for char in set(str1_clean):
+        common_chars += min(str1_clean.count(char), str2_clean.count(char))
+
+    char_similarity = (2 * common_chars) / (len(str1_clean) + len(str2_clean))
+
+    # Bonus for similar length
+    length_similarity = min_len / max_len
+
+    # Weighted combination - prioritize word similarity for business names
+    final_similarity = (word_similarity * 0.6) + (char_similarity * 0.3) + (length_similarity * 0.1)
+
+    return min(final_similarity, 1.0)
+
 
 def get_organization_from_request(request, **kwargs):
     """Get organization from URL org_id parameter, API key, or user membership."""
@@ -434,6 +597,43 @@ def create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
                 continue
 
         logger.info(f"Successfully created {len(created_products)} products for bill {zoho_bill.id}")
+
+        # ✅ AUTO-CREATE CONSOLIDATED PRODUCT FOR MULTI-ITEM BILLS
+        if len(created_products) > 1:
+            try:
+                # Delete existing consolidated product if exists
+                ExpenseZohoConsolidatedProduct.objects.filter(zohoBill=zoho_bill).delete()
+
+                # Calculate consolidated data
+                from decimal import Decimal
+                total_amount = sum(Decimal(str(p.amount or 0)) for p in created_products)
+                items_count = len(created_products)
+
+                # Create detailed breakdown
+                item_details = []
+                for product in created_products:
+                    item_details.append(f'• {product.item_details} (Amount: ₹{product.amount})')
+
+                consolidated_details = f'Consolidated {items_count} expense entries:\n' + '\n'.join(item_details)
+
+                # Create consolidated product (but keep consolidate=False by default)
+                consolidated_product = ExpenseZohoConsolidatedProduct.objects.create(
+                    zohoBill=zoho_bill,
+                    organization=organization,
+                    consolidated_item_details=consolidated_details,
+                    consolidated_amount=total_amount,
+                    original_entries_count=items_count,
+                    consolidation_notes=f'Auto-created during analysis for {items_count} expense entries'
+                )
+
+                logger.info(f"✅ Auto-created consolidated expense product for bill {zoho_bill.id} with {items_count} entries (₹{total_amount})")
+
+            except Exception as e:
+                logger.error(f"❌ Error creating consolidated expense product for bill {zoho_bill.id}: {str(e)}")
+                # Don't raise - consolidated product creation failure shouldn't break the main flow
+        else:
+            logger.info(f"ℹ️ Skipping consolidated expense product creation - bill has only {len(created_products)} item(s)")
+
         return zoho_bill
 
     except Exception as e:
@@ -632,9 +832,77 @@ def expense_bill_upload_view(request, org_id):
         # Temporarily removing atomic transaction to debug
         # with transaction.atomic():
         print(f"[Expense DEBUG] Starting to process {len(files)} files")
+
+        # Check for potential duplicates based on file characteristics
+        upload_warnings = []
+
         for i, uploaded_file in enumerate(files):
             print(f"[Expense DEBUG] Processing file {i + 1}/{len(files)}: {uploaded_file.name}")
             file_extension = uploaded_file.name.lower().split('.')[-1]
+
+            # Check for potential file-level duplicates (same name, similar size)
+            similar_files = ExpenseBill.objects.filter(
+                organization=organization,
+                file__isnull=False
+            ).exclude(status='Draft')
+
+            potential_duplicate_files = []
+            for existing_bill in similar_files:
+                if existing_bill.file and existing_bill.file.name:
+                    existing_filename = os.path.basename(existing_bill.file.name)
+                    uploaded_filename = uploaded_file.name
+
+                    # Check for exact filename match
+                    if existing_filename.lower() == uploaded_filename.lower():
+                        potential_duplicate_files.append({
+                            'bill': existing_bill,
+                            'match_type': 'exact_filename',
+                            'reason': 'Same filename detected'
+                        })
+                    # Check for similar filename (without extension or with slight differences)
+                    elif (existing_filename.lower().replace('.pdf', '').replace('.jpg', '').replace('.png', '') ==
+                          uploaded_filename.lower().replace('.pdf', '').replace('.jpg', '').replace('.png', '')):
+                        potential_duplicate_files.append({
+                            'bill': existing_bill,
+                            'match_type': 'similar_filename',
+                            'reason': 'Similar filename detected'
+                        })
+                    # Check file size similarity (within 5% difference)
+                    elif (existing_bill.file and existing_bill.file.name and
+                          hasattr(existing_bill.file.storage, 'exists') and
+                          existing_bill.file.storage.exists(existing_bill.file.name) and
+                          hasattr(existing_bill.file, 'size') and hasattr(uploaded_file, 'size')):
+                        try:
+                            existing_size = existing_bill.file.size
+                            uploaded_size = uploaded_file.size
+
+                            if (existing_size > 0 and uploaded_size > 0 and
+                                abs(existing_size - uploaded_size) / max(existing_size, uploaded_size) < 0.05):
+                                potential_duplicate_files.append({
+                                    'bill': existing_bill,
+                                    'match_type': 'similar_size',
+                                    'reason': 'Similar file size detected'
+                                })
+
+                        except (FileNotFoundError, OSError) as e:
+                            # Handle file access errors gracefully
+                            print(f"[EXPENSE DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {str(e)}")
+                            continue
+
+            if potential_duplicate_files:
+                upload_warnings.append({
+                    'uploaded_file': uploaded_file.name,
+                    'potential_duplicates': len(potential_duplicate_files),
+                    'warning': f'File "{uploaded_file.name}" may be a duplicate of existing bills',
+                    'existing_bills': [
+                        {
+                            'bill_name': dup['bill'].billmunshiName,
+                            'bill_id': str(dup['bill'].id),
+                            'match_type': dup['match_type'],
+                            'reason': dup['reason']
+                        } for dup in potential_duplicate_files[:3]  # Limit to first 3 matches
+                    ]
+                })
 
             # Handle PDF splitting for multiple invoice files
             if file_type == 'Multiple Invoice/File' and file_extension == 'pdf':
@@ -660,23 +928,117 @@ def expense_bill_upload_view(request, org_id):
 
         print(f"[Expense DEBUG] Completed processing all files. Total bills created: {len(created_bills)}")
 
-        # Debug: Print all created bills
+        # Auto-analyze uploaded bills and check for duplicates
+        analysis_results = []
+        all_duplicate_warnings = []
+
         for i, bill in enumerate(created_bills):
             print(f"[Expense DEBUG] Bill {i + 1}: {bill.billmunshiName} (ID: {bill.id})")
+
+            # Auto-analyze the bill if it's in Draft status
+            if bill.status == 'Draft':
+                try:
+                    print(f"[Expense DEBUG] Auto-analyzing bill: {bill.billmunshiName}")
+
+                    # Read and analyze file content
+                    bill.file.seek(0)
+                    file_content = bill.file.read()
+                    file_extension = bill.file.name.split('.')[-1].lower()
+
+                    # Analyze with OpenAI
+                    analyzed_data = analyze_bill_with_openai(file_content, file_extension)
+
+                    # Update bill with analyzed data
+                    bill.analysed_data = analyzed_data
+                    bill.status = 'Analysed'
+                    bill.process = True
+                    bill.save()
+
+                    # Create Zoho objects from analysis
+                    create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
+
+                    # Check for duplicates after analysis
+                    is_duplicate, duplicate_bills, max_similarity = check_duplicate_expense_bill(bill, organization)
+
+                    analysis_result = {
+                        'bill_id': str(bill.id),
+                        'bill_name': bill.billmunshiName,
+                        'analysis_successful': True,
+                        'duplicate_detected': is_duplicate
+                    }
+
+                    if is_duplicate:
+                        duplicate_warnings = []
+                        for dup in duplicate_bills:
+                            duplicate_warnings.append({
+                                "duplicate_bill_id": str(dup['bill'].id),
+                                "duplicate_bill_name": dup['bill'].billmunshiName,
+                                "similarity_score": round(dup['similarity_score'], 2),
+                                "match_reasons": dup['match_reasons'],
+                                "invoice_number": dup['invoice_number'],
+                                "vendor_name": dup['vendor_name'],
+                                "total": dup['total'],
+                                "date": dup['date'],
+                                "status": dup['bill'].status
+                            })
+
+                        analysis_result.update({
+                            "duplicate_count": len(duplicate_bills),
+                            "max_similarity": round(max_similarity, 2),
+                            "duplicate_bills": duplicate_warnings,
+                            "warning_message": f"⚠️ DUPLICATE DETECTED: Expense Bill '{bill.billmunshiName}' appears to be {round(max_similarity, 1)}% similar to {len(duplicate_bills)} existing bill(s)."
+                        })
+
+                        all_duplicate_warnings.extend(duplicate_warnings)
+                        logger.warning(f"Expense duplicate detected for {bill.billmunshiName} - {len(duplicate_bills)} similar bills found")
+
+                    analysis_results.append(analysis_result)
+                    print(f"[Expense DEBUG] Successfully analyzed bill: {bill.billmunshiName}")
+
+                except Exception as analysis_error:
+                    logger.error(f"Auto-analysis failed for expense bill {bill.billmunshiName}: {str(analysis_error)}")
+                    analysis_results.append({
+                        'bill_id': str(bill.id),
+                        'bill_name': bill.billmunshiName,
+                        'analysis_successful': False,
+                        'error': str(analysis_error),
+                        'duplicate_detected': False
+                    })
 
         response_serializer = ZohoExpenseBillSerializer(created_bills, many=True, context={'request': request})
 
         # Log the successful result
-        logger.info(f"Successfully processed {len(files)} files and created {len(created_bills)} bills")
-        for i, bill in enumerate(created_bills):
-            logger.info(f"Created bill {i + 1}: {bill.billmunshiName} (ID: {bill.id})")
+        logger.info(f"Successfully processed {len(files)} files and created {len(created_bills)} expense bills")
 
-        return Response({
-            'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} bill(s)',
+        response_data = {
+            'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} expense bill(s)',
             'files_uploaded': len(files),
             'bills_created': len(created_bills),
-            'bills': response_serializer.data
-        }, status=status.HTTP_201_CREATED)
+            'bills': response_serializer.data,
+            'auto_analysis_results': analysis_results
+        }
+
+        # Add comprehensive warnings
+        warnings_count = len(upload_warnings) + len(all_duplicate_warnings)
+        if upload_warnings or all_duplicate_warnings:
+            warning_messages = []
+
+            if upload_warnings:
+                warning_messages.append(f"📁 FILE WARNING: {len(upload_warnings)} file(s) may be duplicates based on filename/size")
+                response_data['upload_warnings'] = upload_warnings
+
+            if all_duplicate_warnings:
+                warning_messages.append(f"🔍 CONTENT WARNING: {len(all_duplicate_warnings)} duplicate(s) detected after analyzing expense bill content")
+                response_data['duplicate_warnings'] = all_duplicate_warnings
+
+            response_data.update({
+                'total_warnings': warnings_count,
+                'warning_message': " | ".join(warning_messages) + " | Please review carefully before proceeding."
+            })
+
+            logger.warning(f"Expense bills - Total warnings generated: {warnings_count} (Upload: {len(upload_warnings)}, Content: {len(all_duplicate_warnings)})")
+
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
     except Exception as e:
         logger.error(f"Error uploading Expense bills: {str(e)}")
@@ -802,10 +1164,43 @@ def expense_bill_analyze_view(request, org_id, bill_id):
         # Create Zoho bill and product objects from analysis
         create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
 
-        return Response({
-            "detail": "Bill analyzed successfully",
+        # Check for duplicate bills after analysis
+        is_duplicate, duplicate_bills, max_similarity = check_duplicate_expense_bill(bill, organization)
+
+        response_data = {
+            "detail": "Expense bill analyzed successfully",
             "analyzed_data": analyzed_data
-        })
+        }
+
+        # Add duplicate warnings if found
+        if is_duplicate:
+            duplicate_warnings = []
+            for dup in duplicate_bills:
+                duplicate_warnings.append({
+                    "duplicate_bill_id": str(dup['bill'].id),
+                    "duplicate_bill_name": dup['bill'].billmunshiName,
+                    "similarity_score": round(dup['similarity_score'], 2),
+                    "match_reasons": dup['match_reasons'],
+                    "invoice_number": dup['invoice_number'],
+                    "vendor_name": dup['vendor_name'],
+                    "total": dup['total'],
+                    "date": dup['date'],
+                    "status": dup['bill'].status
+                })
+
+            response_data.update({
+                "duplicate_warning": True,
+                "duplicate_count": len(duplicate_bills),
+                "max_similarity": round(max_similarity, 2),
+                "duplicate_bills": duplicate_warnings,
+                "warning_message": f"⚠️ DUPLICATE DETECTED: Found {len(duplicate_bills)} similar expense bill(s) in your organization. "
+                                  f"This bill appears to be {round(max_similarity, 1)}% similar to existing bills. "
+                                  "Please review carefully before proceeding to avoid duplicate entries."
+            })
+
+            logger.warning(f"Duplicate expense bill detected for {bill.billmunshiName} - {len(duplicate_bills)} similar bills found")
+
+        return Response(response_data)
 
     except ExpenseBill.DoesNotExist:
         return Response({"detail": "Expense bill not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -1020,6 +1415,70 @@ def expense_bill_verify_view(request, org_id, bill_id):
                         ).delete()
                         logger.info(f"Deleted {len(products_to_delete)} products not in update")
 
+                # 🔄 Handle consolidate_prod array from frontend
+                consolidate_prod_data = zoho_bill_data.get('consolidate_prod', [])
+                if consolidate_prod_data:
+                    logger.info(f"[DEBUG] expense_bill_verify_view - Processing consolidate_prod array with {len(consolidate_prod_data)} items")
+
+                    try:
+                        # Handle consolidated product updates/creation
+                        for idx, consolidated_data in enumerate(consolidate_prod_data):
+                            logger.info(f"[DEBUG] expense_bill_verify_view - Processing consolidated expense {idx}: {consolidated_data}")
+
+                            consolidated_id = consolidated_data.get('id')
+                            if consolidated_id:
+                                # Update existing consolidated product
+                                try:
+                                    consolidated_product = ExpenseZohoConsolidatedProduct.objects.get(
+                                        id=consolidated_id,
+                                        zohoBill=updated_bill
+                                    )
+
+                                    # Update fields from frontend
+                                    consolidated_product.consolidated_item_details = consolidated_data.get('item_details', consolidated_product.consolidated_item_details)
+                                    consolidated_product.consolidated_amount = consolidated_data.get('amount', consolidated_product.consolidated_amount)
+
+                                    # Handle foreign key fields
+                                    chart_of_accounts_id = consolidated_data.get('chart_of_accounts')
+                                    if chart_of_accounts_id:
+                                        consolidated_product.chart_of_accounts_id = chart_of_accounts_id
+
+                                    taxes_id = consolidated_data.get('taxes')
+                                    if taxes_id:
+                                        consolidated_product.taxes_id = taxes_id
+
+                                    consolidated_product.save()
+                                    logger.info(f"[DEBUG] expense_bill_verify_view - Updated consolidated expense {consolidated_id}")
+
+                                except ExpenseZohoConsolidatedProduct.DoesNotExist:
+                                    logger.info(f"[DEBUG] expense_bill_verify_view - Consolidated expense {consolidated_id} not found, creating new one")
+                                    consolidated_id = None  # Fall through to create new
+
+                            if not consolidated_id:
+                                # Create new consolidated product
+                                consolidated_product = ExpenseZohoConsolidatedProduct.objects.create(
+                                    zohoBill=updated_bill,
+                                    organization=organization,
+                                    consolidated_item_details=consolidated_data.get('item_details', 'New consolidated expense from verification'),
+                                    consolidated_amount=consolidated_data.get('amount', 0),
+                                    chart_of_accounts_id=consolidated_data.get('chart_of_accounts'),
+                                    taxes_id=consolidated_data.get('taxes'),
+                                    original_entries_count=1,
+                                    consolidation_notes='Created from frontend verification'
+                                )
+                                logger.info(f"[DEBUG] expense_bill_verify_view - Created new consolidated expense {consolidated_product.id}")
+
+                    except Exception as consolidate_error:
+                        logger.error(f"[DEBUG] expense_bill_verify_view - Error processing consolidate_prod array: {consolidate_error}")
+                        # Don't fail the entire request, just log the error
+
+                # Handle consolidation flag
+                consolidate_flag = zoho_bill_data.get('consolidate', False)
+                if consolidate_flag != updated_bill.consolidate:
+                    logger.info(f"Consolidation setting changed from {updated_bill.consolidate} to {consolidate_flag}")
+                    updated_bill.consolidate = consolidate_flag
+                    updated_bill.save()
+
                 # Update bill status
                 logger.info(f"[DEBUG] expense_bill_verify_view - Updating bill status from '{bill.status}' to 'Verified'")
                 bill.status = 'Verified'
@@ -1157,34 +1616,67 @@ def expense_bill_sync_view(request, org_id, bill_id):
         line_items = []
         item_order = 1
 
-        # Process line items first to calculate total
-        for item in zoho_products:
+        # 🔄 Check consolidation flag and use appropriate data source
+        if hasattr(zoho_bill, 'consolidate') and zoho_bill.consolidate:
+            # ✅ USE CONSOLIDATED PRODUCT DATA
+            logger.info(f"[EXPENSE SYNC] Using consolidated expense data for bill {bill_id}")
             try:
-                # Get chart of account
-                if not item.chart_of_accounts:
-                    logger.warning(f"No chart of account found for product {item.id}")
-                    continue
+                consolidated_product = zoho_bill.consolidated_product
 
-                item_amount = float(item.amount) if item.amount else 0
+                item_amount = float(consolidated_product.consolidated_amount) if consolidated_product.consolidated_amount else 0
                 total_amount += item_amount
 
                 line_item = {
-                    "account_id": str(item.chart_of_accounts.accountId),
-                    "description": item.item_details or "Expense Item",
+                    "account_id": str(consolidated_product.chart_of_accounts.accountId) if consolidated_product.chart_of_accounts else str(zoho_bill.chart_of_accounts.accountId),
+                    "description": consolidated_product.consolidated_item_details or "Consolidated Expense Items",
                     "amount": str(item_amount),
                     "item_order": str(item_order)
                 }
 
                 # Add tax information if available
-                if item.taxes:
-                    line_item['tax_id'] = str(item.taxes.taxId)
+                if consolidated_product.taxes:
+                    line_item['tax_id'] = str(consolidated_product.taxes.taxId)
 
                 line_items.append(line_item)
-                item_order += 1
+                logger.info(f"[EXPENSE SYNC] Added consolidated line item: {item_amount}")
 
             except Exception as e:
-                logger.error(f"Error processing expense product {item.id}: {str(e)}")
-                continue
+                logger.error(f"[EXPENSE SYNC] Error accessing consolidated product, falling back to individual products: {e}")
+                # Fallback to individual products
+                zoho_bill.consolidate = False
+
+        if not hasattr(zoho_bill, 'consolidate') or not zoho_bill.consolidate:
+            # ✅ USE INDIVIDUAL EXPENSE PRODUCTS (Original logic)
+            logger.info(f"[EXPENSE SYNC] Using individual expense products for bill {bill_id}")
+
+            # Process line items first to calculate total
+            for item in zoho_products:
+                try:
+                    # Get chart of account
+                    if not item.chart_of_accounts:
+                        logger.warning(f"No chart of account found for product {item.id}")
+                        continue
+
+                    item_amount = float(item.amount) if item.amount else 0
+                    total_amount += item_amount
+
+                    line_item = {
+                        "account_id": str(item.chart_of_accounts.accountId),
+                        "description": item.item_details or "Expense Item",
+                        "amount": str(item_amount),
+                        "item_order": str(item_order)
+                    }
+
+                    # Add tax information if available
+                    if item.taxes:
+                        line_item['tax_id'] = str(item.taxes.taxId)
+
+                    line_items.append(line_item)
+                    item_order += 1
+
+                except Exception as e:
+                    logger.error(f"Error processing expense product {item.id}: {str(e)}")
+                    continue
 
         # Use the account name from ExpenseZohoBill chart_of_accounts
         if not zoho_bill.chart_of_accounts:

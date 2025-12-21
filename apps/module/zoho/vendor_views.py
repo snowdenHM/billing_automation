@@ -4,7 +4,6 @@ import base64
 import json
 import logging
 import os
-import random
 from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
@@ -33,6 +32,10 @@ from .models import (
     VendorBill,
     VendorZohoBill,
     VendorZohoProduct,
+    VendorZohoConsolidatedProduct,
+    ZohoChartOfAccount,
+    ZohoTaxes,
+    ZohoTdsTcs,
 )
 from .serializers.common import (
     AnalysisResponseSerializer,
@@ -41,7 +44,6 @@ from .serializers.vendor_bills import (
     ZohoVendorBillSerializer,
     ZohoVendorBillDetailSerializer,
     VendorZohoBillSerializer,
-    ZohoVendorBillUploadSerializer,
     ZohoVendorBillMultipleUploadSerializer,
 )
 
@@ -49,8 +51,326 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
+# Consolidation Helper Functions
+# ============================================================================
+
+def create_consolidated_vendor_product(zoho_bill, organization):
+    """
+    Create consolidated product entry for vendor bill when consolidate=True
+    Handles tax conflicts by using most common or highest tax rate
+    """
+    from .models import VendorZohoConsolidatedProduct
+
+    products = zoho_bill.products.all()
+    if not products.exists():
+        return None
+
+    # Calculate consolidated data
+    total_quantity = sum(float(p.quantity or 0) for p in products)
+    total_amount = sum(float(p.total or 0) for p in products)
+    items_count = products.count()
+
+    # Create detailed breakdown
+    item_details = []
+    for product in products:
+        item_details.append(f"• {product.name} (Qty: {product.quantity}, Rate: ₹{product.rate})")
+
+    consolidated_details = f"Consolidated {items_count} items:\n" + "\n".join(item_details)
+
+    # Handle tax conflicts - use most common tax or highest rate
+    tax_to_use = None
+    if products.filter(taxes__isnull=False).exists():
+        # Get tax usage frequency
+        tax_usage = {}
+        for product in products.filter(taxes__isnull=False):
+            tax_id = product.taxes.id
+            tax_rate = float(product.taxes.percentage or 0)
+            if tax_id in tax_usage:
+                tax_usage[tax_id]['count'] += 1
+                tax_usage[tax_id]['amount'] += float(product.total or 0)
+            else:
+                tax_usage[tax_id] = {
+                    'tax': product.taxes,
+                    'rate': tax_rate,
+                    'count': 1,
+                    'amount': float(product.total or 0)
+                }
+
+        # Use tax with highest amount (most significant)
+        if tax_usage:
+            most_significant_tax = max(tax_usage.values(), key=lambda x: x['amount'])
+            tax_to_use = most_significant_tax['tax']
+
+    # Handle chart of accounts conflicts - use most common
+    chart_of_accounts_to_use = None
+    if products.filter(chart_of_accounts__isnull=False).exists():
+        chart_usage = {}
+        for product in products.filter(chart_of_accounts__isnull=False):
+            chart_id = product.chart_of_accounts.id
+            if chart_id in chart_usage:
+                chart_usage[chart_id]['count'] += 1
+                chart_usage[chart_id]['amount'] += float(product.total or 0)
+            else:
+                chart_usage[chart_id] = {
+                    'chart': product.chart_of_accounts,
+                    'count': 1,
+                    'amount': float(product.total or 0)
+                }
+
+        # Use chart of accounts with highest amount
+        if chart_usage:
+            most_significant_chart = max(chart_usage.values(), key=lambda x: x['amount'])
+            chart_of_accounts_to_use = most_significant_chart['chart']
+
+    # Create or update consolidated product
+    consolidated_product, created = VendorZohoConsolidatedProduct.objects.get_or_create(
+        zohoBill=zoho_bill,
+        organization=organization,
+        defaults={
+            'consolidated_item_name': f"Multiple items consolidated ({items_count} products)",
+            'consolidated_item_details': consolidated_details,
+            'total_quantity': 1,  # Single consolidated item
+            'consolidated_rate': total_amount,
+            'consolidated_amount': total_amount,
+            'chart_of_accounts': chart_of_accounts_to_use,
+            'taxes': tax_to_use,
+            'original_items_count': items_count,
+            'consolidation_notes': f"Consolidated from {items_count} individual items. Tax strategy: highest amount. Chart strategy: highest amount."
+        }
+    )
+
+    if not created:
+        # Update existing consolidated product
+        consolidated_product.consolidated_item_details = consolidated_details
+        consolidated_product.consolidated_amount = total_amount
+        consolidated_product.consolidated_rate = total_amount
+        consolidated_product.chart_of_accounts = chart_of_accounts_to_use
+        consolidated_product.taxes = tax_to_use
+        consolidated_product.original_items_count = items_count
+        consolidated_product.save()
+
+    return consolidated_product
+
+
+def get_line_items_for_sync(zoho_bill):
+    """
+    Get line items for sync based on consolidate flag
+    Returns either individual products or consolidated product data
+    """
+    if zoho_bill.consolidate:
+        # Use consolidated product if exists
+        try:
+            consolidated = zoho_bill.consolidated_product
+            return [{
+                "name": consolidated.consolidated_item_name,
+                "description": consolidated.consolidated_item_details[:500],  # Zoho API limit
+                "rate": str(consolidated.consolidated_rate),
+                "quantity": str(consolidated.total_quantity),
+                "unit": "unit",
+                "item_total": str(consolidated.consolidated_amount),
+                "tax_id": consolidated.taxes.taxId if consolidated.taxes else None,
+                "account_id": consolidated.chart_of_accounts.accountId if consolidated.chart_of_accounts else None,
+                "is_consolidated": True,
+                "original_items_count": consolidated.original_items_count
+            }]
+        except VendorZohoConsolidatedProduct.DoesNotExist:
+            # Fallback to creating consolidated data on the fly
+            products = zoho_bill.products.all()
+            if products.exists():
+                total_amount = sum(float(p.total or 0) for p in products)
+                return [{
+                    "name": f"Multiple items consolidated ({products.count()} products)",
+                    "description": f"Consolidated from {products.count()} individual items",
+                    "rate": str(total_amount),
+                    "quantity": "1",
+                    "unit": "unit",
+                    "item_total": str(total_amount),
+                    "is_consolidated": True,
+                    "original_items_count": products.count()
+                }]
+    else:
+        # Return individual products as usual
+        line_items = []
+        for product in zoho_bill.products.all():
+            line_items.append({
+                "name": product.name,
+                "description": product.name,
+                "rate": str(product.rate),
+                "quantity": str(product.quantity),
+                "unit": "unit",
+                "item_total": str(product.total),
+                "tax_id": product.taxes.taxId if product.taxes else None,
+                "account_id": product.chart_of_accounts.accountId if product.chart_of_accounts else None,
+                "is_consolidated": False
+            })
+        return line_items
+
+
+# ============================================================================
 # Helper Functions
 # ============================================================================
+
+def check_duplicate_bill(bill, organization):
+    """
+    Check if a vendor bill is a duplicate based on invoice number and vendor information.
+    Returns tuple (is_duplicate, duplicate_bills, similarity_score)
+    """
+    logger.info(f"Checking for duplicates of bill {bill.id} in organization {organization.id}")
+
+    if not bill.analysed_data:
+        # If bill hasn't been analyzed yet, we can't check for duplicates
+        return False, [], 0.0
+
+    analyzed_data = bill.analysed_data
+    current_invoice_number = analyzed_data.get('invoiceNumber', '').strip()
+    current_vendor_name = analyzed_data.get('from', {}).get('name', '').strip()
+    current_total = analyzed_data.get('total', 0)
+    current_date = analyzed_data.get('dateIssued', '')
+
+    if not current_invoice_number and not current_vendor_name:
+        # Can't check duplicates without key identifying information
+        return False, [], 0.0
+
+    # Find potentially duplicate bills in the same organization
+    potential_duplicates = VendorBill.objects.filter(
+        organization=organization,
+        status__in=['Analysed', 'Verified', 'Synced']
+    ).exclude(id=bill.id)
+
+    duplicate_bills = []
+    max_similarity = 0.0
+
+    for other_bill in potential_duplicates:
+        if not other_bill.analysed_data:
+            continue
+
+        other_data = other_bill.analysed_data
+        other_invoice_number = other_data.get('invoiceNumber', '').strip()
+        other_vendor_name = other_data.get('from', {}).get('name', '').strip()
+        other_total = other_data.get('total', 0)
+        other_date = other_data.get('dateIssued', '')
+
+        similarity_score = 0.0
+        match_reasons = []
+
+        # Check exact invoice number match
+        if (current_invoice_number and other_invoice_number and
+            current_invoice_number.lower() == other_invoice_number.lower()):
+            similarity_score += 40.0
+            match_reasons.append('exact_invoice_number')
+
+        # Check vendor name similarity
+        if current_vendor_name and other_vendor_name:
+            vendor_similarity = _calculate_string_similarity(current_vendor_name.lower(), other_vendor_name.lower())
+            if vendor_similarity > 0.8:
+                similarity_score += 25.0 * vendor_similarity
+                match_reasons.append('vendor_name_match')
+
+        # Check total amount match
+        if current_total and other_total:
+            try:
+                current_amount = float(current_total)
+                other_amount = float(other_total)
+                if abs(current_amount - other_amount) < 0.01:  # Allow for minor rounding differences
+                    similarity_score += 20.0
+                    match_reasons.append('exact_amount')
+                elif abs(current_amount - other_amount) / max(current_amount, other_amount) < 0.05:  # 5% difference
+                    similarity_score += 10.0
+                    match_reasons.append('similar_amount')
+            except (ValueError, TypeError):
+                pass
+
+        # Check date similarity
+        if current_date and other_date and current_date == other_date:
+            similarity_score += 15.0
+            match_reasons.append('same_date')
+
+        # Consider it a potential duplicate if similarity is high
+        if similarity_score >= 60.0:  # Threshold for considering as duplicate
+            duplicate_bills.append({
+                'bill': other_bill,
+                'similarity_score': similarity_score,
+                'match_reasons': match_reasons,
+                'invoice_number': other_invoice_number,
+                'vendor_name': other_vendor_name,
+                'total': other_total,
+                'date': other_date
+            })
+            max_similarity = max(max_similarity, similarity_score)
+
+    is_duplicate = len(duplicate_bills) > 0
+    logger.info(f"Duplicate check complete. Found {len(duplicate_bills)} potential duplicates with max similarity {max_similarity}")
+
+    return is_duplicate, duplicate_bills, max_similarity
+
+
+def _calculate_string_similarity(str1, str2):
+    """Calculate similarity between two strings using enhanced logic for Indian business names."""
+    if not str1 or not str2:
+        return 0.0
+
+    str1_clean = str1.lower().strip()
+    str2_clean = str2.lower().strip()
+
+    # Exact match
+    if str1_clean == str2_clean:
+        return 1.0
+
+    # Common business abbreviations for Indian companies
+    abbreviations = {
+        'ltd': 'limited',
+        'pvt': 'private',
+        'llp': 'limited liability partnership',
+        'co': 'company',
+        'corp': 'corporation',
+        'inc': 'incorporated',
+        'enterprises': 'ent',
+        'industries': 'ind',
+        'services': 'svc',
+        'technologies': 'tech',
+        'systems': 'sys',
+        'solutions': 'sol'
+    }
+
+    # Normalize abbreviations
+    for abbrev, full in abbreviations.items():
+        str1_clean = str1_clean.replace(full, abbrev).replace(abbrev, abbrev)
+        str2_clean = str2_clean.replace(full, abbrev).replace(abbrev, abbrev)
+
+    # Word-based similarity
+    str1_words = set(str1_clean.split())
+    str2_words = set(str2_clean.split())
+
+    if not str1_words or not str2_words:
+        return 0.0
+
+    # Calculate Jaccard similarity (intersection over union)
+    intersection = str1_words.intersection(str2_words)
+    union = str1_words.union(str2_words)
+    word_similarity = len(intersection) / len(union) if union else 0.0
+
+    # Character-level similarity using simple edit distance approach
+    max_len = max(len(str1_clean), len(str2_clean))
+    min_len = min(len(str1_clean), len(str2_clean))
+
+    if max_len == 0:
+        return 1.0
+
+    # Simple character overlap calculation
+    common_chars = 0
+    for char in set(str1_clean):
+        common_chars += min(str1_clean.count(char), str2_clean.count(char))
+
+    char_similarity = (2 * common_chars) / (len(str1_clean) + len(str2_clean))
+
+    # Bonus for similar length
+    length_similarity = min_len / max_len
+
+    # Weighted combination - prioritize word similarity for business names
+    final_similarity = (word_similarity * 0.6) + (char_similarity * 0.3) + (length_similarity * 0.1)
+
+    return min(final_similarity, 1.0)
+
 
 def get_organization_from_request(request, **kwargs):
     """Get organization from URL org_id parameter, API key, or user membership."""
@@ -412,6 +732,48 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
                 continue
 
         logger.info(f"Successfully created {len(created_products)} products for bill {zoho_bill.id}")
+
+        # ✅ AUTO-CREATE CONSOLIDATED PRODUCT FOR MULTI-ITEM BILLS
+        if len(created_products) > 1:
+            try:
+                # Delete existing consolidated product if exists
+                VendorZohoConsolidatedProduct.objects.filter(zohoBill=zoho_bill).delete()
+
+                # Calculate consolidated data
+                total_amount = sum(Decimal(str(p.amount or 0)) for p in created_products)
+                items_count = len(created_products)
+
+                # Create detailed breakdown
+                item_details = []
+                for product in created_products:
+                    item_details.append(f'• {product.item_name} (Qty: {product.quantity}, Rate: ₹{product.rate})')
+
+                consolidated_details = f'Consolidated {items_count} items:\n' + '\n'.join(item_details)
+                consolidated_name = f'Consolidated Items - {zoho_bill.bill_no or "Bill"} ({items_count} items)'
+
+                # Create consolidated product (but keep consolidate=False by default)
+                consolidated_product = VendorZohoConsolidatedProduct.objects.create(
+                    zohoBill=zoho_bill,
+                    organization=organization,
+                    consolidated_item_name=consolidated_name,
+                    consolidated_item_details=consolidated_details,
+                    total_quantity=Decimal('1'),  # Always 1 for consolidated
+                    consolidated_rate=total_amount,  # Total amount as rate
+                    consolidated_amount=total_amount,
+                    original_items_count=items_count,
+                    consolidation_notes=f'Auto-created during analysis for {items_count} items',
+                    itc_eligibility='eligible',  # Default
+                    reverse_charge_tax_id=False
+                )
+
+                logger.info(f"✅ Auto-created consolidated product for bill {zoho_bill.id} with {items_count} items (₹{total_amount})")
+
+            except Exception as e:
+                logger.error(f"❌ Error creating consolidated product for bill {zoho_bill.id}: {str(e)}")
+                # Don't raise - consolidated product creation failure shouldn't break the main flow
+        else:
+            logger.info(f"ℹ️ Skipping consolidated product creation - bill has only {len(created_products)} item(s)")
+
         return zoho_bill
 
     except Exception as e:
@@ -609,9 +971,77 @@ def vendor_bill_upload_view(request, org_id):
         # Temporarily removing atomic transaction to debug
         # with transaction.atomic():
         print(f"[VENDOR DEBUG] Starting to process {len(files)} files")
+
+        # Check for potential duplicates based on file characteristics
+        upload_warnings = []
+
         for i, uploaded_file in enumerate(files):
                 print(f"[VENDOR DEBUG] Processing file {i+1}/{len(files)}: {uploaded_file.name}")
                 file_extension = uploaded_file.name.lower().split('.')[-1]
+
+                # Check for potential file-level duplicates (same name, similar size)
+                similar_files = VendorBill.objects.filter(
+                    organization=organization,
+                    file__isnull=False
+                ).exclude(status='Draft')
+
+                potential_duplicate_files = []
+                for existing_bill in similar_files:
+                    if existing_bill.file and existing_bill.file.name:
+                        existing_filename = os.path.basename(existing_bill.file.name)
+                        uploaded_filename = uploaded_file.name
+
+                        # Check for exact filename match
+                        if existing_filename.lower() == uploaded_filename.lower():
+                            potential_duplicate_files.append({
+                                'bill': existing_bill,
+                                'match_type': 'exact_filename',
+                                'reason': 'Same filename detected'
+                            })
+                        # Check for similar filename (without extension or with slight differences)
+                        elif (existing_filename.lower().replace('.pdf', '').replace('.jpg', '').replace('.png', '') ==
+                              uploaded_filename.lower().replace('.pdf', '').replace('.jpg', '').replace('.png', '')):
+                            potential_duplicate_files.append({
+                                'bill': existing_bill,
+                                'match_type': 'similar_filename',
+                                'reason': 'Similar filename detected'
+                            })
+                        # Check file size similarity (within 5% difference)
+                        elif (existing_bill.file and existing_bill.file.name and
+                              hasattr(existing_bill.file.storage, 'exists') and
+                              existing_bill.file.storage.exists(existing_bill.file.name) and
+                              hasattr(existing_bill.file, 'size') and hasattr(uploaded_file, 'size')):
+                            try:
+                                existing_size = existing_bill.file.size
+                                uploaded_size = uploaded_file.size
+
+                                if (existing_size > 0 and uploaded_size > 0 and
+                                    abs(existing_size - uploaded_size) / max(existing_size, uploaded_size) < 0.05):
+                                    potential_duplicate_files.append({
+                                        'bill': existing_bill,
+                                        'match_type': 'similar_size',
+                                        'reason': 'Similar file size detected'
+                                    })
+
+                            except (FileNotFoundError, OSError) as e:
+                                # Handle file access errors gracefully
+                                print(f"[VENDOR DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {str(e)}")
+                                continue
+
+                if potential_duplicate_files:
+                    upload_warnings.append({
+                        'uploaded_file': uploaded_file.name,
+                        'potential_duplicates': len(potential_duplicate_files),
+                        'warning': f'File "{uploaded_file.name}" may be a duplicate of existing bills',
+                        'existing_bills': [
+                            {
+                                'bill_name': dup['bill'].billmunshiName,
+                                'bill_id': str(dup['bill'].id),
+                                'match_type': dup['match_type'],
+                                'reason': dup['reason']
+                            } for dup in potential_duplicate_files[:3]  # Limit to first 3 matches
+                        ]
+                    })
 
                 # Handle PDF splitting for multiple invoice files
                 if (file_type == 'Multiple Invoice/File' and
@@ -638,23 +1068,117 @@ def vendor_bill_upload_view(request, org_id):
 
         print(f"[VENDOR DEBUG] Completed processing all files. Total bills created: {len(created_bills)}")
 
-        # Debug: Print all created bills
+        # Auto-analyze uploaded bills and check for duplicates
+        analysis_results = []
+        all_duplicate_warnings = []
+
         for i, bill in enumerate(created_bills):
             print(f"[VENDOR DEBUG] Bill {i+1}: {bill.billmunshiName} (ID: {bill.id})")
+
+            # Auto-analyze the bill if it's in Draft status
+            if bill.status == 'Draft':
+                try:
+                    print(f"[VENDOR DEBUG] Auto-analyzing bill: {bill.billmunshiName}")
+
+                    # Read and analyze file content
+                    bill.file.seek(0)
+                    file_content = bill.file.read()
+                    file_extension = bill.file.name.split('.')[-1].lower()
+
+                    # Analyze with OpenAI
+                    analyzed_data = analyze_vendor_bill_with_openai(file_content, file_extension)
+
+                    # Update bill with analyzed data
+                    bill.analysed_data = analyzed_data
+                    bill.status = 'Analysed'
+                    bill.process = True
+                    bill.save()
+
+                    # Create Zoho objects from analysis
+                    create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization)
+
+                    # Check for duplicates after analysis
+                    is_duplicate, duplicate_bills, max_similarity = check_duplicate_bill(bill, organization)
+
+                    analysis_result = {
+                        'bill_id': str(bill.id),
+                        'bill_name': bill.billmunshiName,
+                        'analysis_successful': True,
+                        'duplicate_detected': is_duplicate
+                    }
+
+                    if is_duplicate:
+                        duplicate_warnings = []
+                        for dup in duplicate_bills:
+                            duplicate_warnings.append({
+                                "duplicate_bill_id": str(dup['bill'].id),
+                                "duplicate_bill_name": dup['bill'].billmunshiName,
+                                "similarity_score": round(dup['similarity_score'], 2),
+                                "match_reasons": dup['match_reasons'],
+                                "invoice_number": dup['invoice_number'],
+                                "vendor_name": dup['vendor_name'],
+                                "total": dup['total'],
+                                "date": dup['date'],
+                                "status": dup['bill'].status
+                            })
+
+                        analysis_result.update({
+                            "duplicate_count": len(duplicate_bills),
+                            "max_similarity": round(max_similarity, 2),
+                            "duplicate_bills": duplicate_warnings,
+                            "warning_message": f"⚠️ DUPLICATE DETECTED: Bill '{bill.billmunshiName}' appears to be {round(max_similarity, 1)}% similar to {len(duplicate_bills)} existing bill(s)."
+                        })
+
+                        all_duplicate_warnings.extend(duplicate_warnings)
+                        logger.warning(f"Duplicate detected for {bill.billmunshiName} - {len(duplicate_bills)} similar bills found")
+
+                    analysis_results.append(analysis_result)
+                    print(f"[VENDOR DEBUG] Successfully analyzed bill: {bill.billmunshiName}")
+
+                except Exception as analysis_error:
+                    logger.error(f"Auto-analysis failed for bill {bill.billmunshiName}: {str(analysis_error)}")
+                    analysis_results.append({
+                        'bill_id': str(bill.id),
+                        'bill_name': bill.billmunshiName,
+                        'analysis_successful': False,
+                        'error': str(analysis_error),
+                        'duplicate_detected': False
+                    })
 
         response_serializer = ZohoVendorBillSerializer(created_bills, many=True, context={'request': request})
 
         # Log the successful result
         logger.info(f"Successfully processed {len(files)} files and created {len(created_bills)} bills")
-        for i, bill in enumerate(created_bills):
-            logger.info(f"Created bill {i+1}: {bill.billmunshiName} (ID: {bill.id})")
 
-        return Response({
+        response_data = {
             'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} bill(s)',
             'files_uploaded': len(files),
             'bills_created': len(created_bills),
-            'bills': response_serializer.data
-        }, status=status.HTTP_201_CREATED)
+            'bills': response_serializer.data,
+            'auto_analysis_results': analysis_results
+        }
+
+        # Add comprehensive warnings
+        warnings_count = len(upload_warnings) + len(all_duplicate_warnings)
+        if upload_warnings or all_duplicate_warnings:
+            warning_messages = []
+
+            if upload_warnings:
+                warning_messages.append(f"📁 FILE WARNING: {len(upload_warnings)} file(s) may be duplicates based on filename/size")
+                response_data['upload_warnings'] = upload_warnings
+
+            if all_duplicate_warnings:
+                warning_messages.append(f"🔍 CONTENT WARNING: {len(all_duplicate_warnings)} duplicate(s) detected after analyzing bill content")
+                response_data['duplicate_warnings'] = all_duplicate_warnings
+
+            response_data.update({
+                'total_warnings': warnings_count,
+                'warning_message': " | ".join(warning_messages) + " | Please review carefully before proceeding."
+            })
+
+            logger.warning(f"Total warnings generated: {warnings_count} (Upload: {len(upload_warnings)}, Content: {len(all_duplicate_warnings)})")
+
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
     except Exception as e:
         logger.error(f"Error uploading vendor bills: {str(e)}")
@@ -686,7 +1210,7 @@ def vendor_bill_detail_view(request, org_id, bill_id):
         # Fetch the VendorBill without prefetch_related to avoid relationship errors
         bill = VendorBill.objects.get(id=bill_id, organization=organization)
 
-        # Get the next bill with 'Analysed' status
+        # Get the next bill with 'Analyzed' status
         next_bill_id = None
         analysed_bills = VendorBill.objects.filter(
             organization=organization,
@@ -704,7 +1228,9 @@ def vendor_bill_detail_view(request, org_id, bill_id):
 
         # Get the related VendorZohoBill if it exists
         try:
-            zoho_bill = VendorZohoBill.objects.select_related('vendor', 'tds_tcs_id').prefetch_related(
+            zoho_bill = VendorZohoBill.objects.select_related(
+                'vendor', 'tds_tcs_id', 'consolidated_product'
+            ).prefetch_related(
                 'products__chart_of_accounts',
                 'products__taxes'
             ).get(selectBill=bill, organization=organization)
@@ -716,7 +1242,10 @@ def vendor_bill_detail_view(request, org_id, bill_id):
             bill.zoho_bill = None
 
         # Serialize the data with request context for full URLs
-        serializer = ZohoVendorBillDetailSerializer(bill, context={'request': request})
+        serializer = ZohoVendorBillDetailSerializer(bill, context={
+            'request': request,
+            'organization': organization
+        })
         return Response(serializer.data)
 
     except VendorBill.DoesNotExist:
@@ -773,10 +1302,43 @@ def vendor_bill_analyze_view(request, org_id, bill_id):
         # Create Zoho bill and product objects from analysis
         create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization)
 
-        return Response({
+        # Check for duplicate bills after analysis
+        is_duplicate, duplicate_bills, max_similarity = check_duplicate_bill(bill, organization)
+
+        response_data = {
             "detail": "Bill analyzed successfully",
             "analyzed_data": analyzed_data
-        })
+        }
+
+        # Add duplicate warnings if found
+        if is_duplicate:
+            duplicate_warnings = []
+            for dup in duplicate_bills:
+                duplicate_warnings.append({
+                    "duplicate_bill_id": str(dup['bill'].id),
+                    "duplicate_bill_name": dup['bill'].billmunshiName,
+                    "similarity_score": round(dup['similarity_score'], 2),
+                    "match_reasons": dup['match_reasons'],
+                    "invoice_number": dup['invoice_number'],
+                    "vendor_name": dup['vendor_name'],
+                    "total": dup['total'],
+                    "date": dup['date'],
+                    "status": dup['bill'].status
+                })
+
+            response_data.update({
+                "duplicate_warning": True,
+                "duplicate_count": len(duplicate_bills),
+                "max_similarity": round(max_similarity, 2),
+                "duplicate_bills": duplicate_warnings,
+                "warning_message": f"⚠️ DUPLICATE DETECTED: Found {len(duplicate_bills)} similar bill(s) in your organization. "
+                                  f"This bill appears to be {round(max_similarity, 1)}% similar to existing bills. "
+                                  "Please review carefully before proceeding to avoid duplicate entries."
+            })
+
+            logger.warning(f"Duplicate bill detected for {bill.billmunshiName} - {len(duplicate_bills)} similar bills found")
+
+        return Response(response_data)
 
     except VendorBill.DoesNotExist:
         return Response({"detail": "Vendor bill not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -1032,10 +1594,113 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                             zohoBill=updated_bill
                         ).delete()
                         logger.error(f"[DEBUG] vendor_bill_verify_view - Deleted {deleted[0]} product records")
-                    else:
-                        logger.error(f"[DEBUG] vendor_bill_verify_view - No products to delete")
-                    
-                    # Log summary
+
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - Product operations summary:")
+                    logger.error(f"  - Created: {created_count} products")
+                    logger.error(f"  - Updated: {updated_count} products")
+                    logger.error(f"  - Deleted: {deleted_count} products")
+
+                # 🔄 Handle consolidate_prod array from frontend
+                consolidate_prod_data = zoho_bill_data.get('consolidate_prod', [])
+                if consolidate_prod_data:
+                    logger.error(f"[DEBUG] vendor_bill_verify_view - Processing consolidate_prod array with {len(consolidate_prod_data)} items")
+
+                    try:
+                        # Handle consolidated product updates/creation
+                        for idx, consolidated_data in enumerate(consolidate_prod_data):
+                            logger.error(f"[DEBUG] vendor_bill_verify_view - Processing consolidated product {idx}: {consolidated_data}")
+
+                            consolidated_id = consolidated_data.get('id')
+                            if consolidated_id:
+                                # Update existing consolidated product
+                                try:
+                                    consolidated_product = VendorZohoConsolidatedProduct.objects.get(
+                                        id=consolidated_id,
+                                        zohoBill=updated_bill
+                                    )
+
+                                    # Update fields from frontend
+                                    consolidated_product.item_name = consolidated_data.get('item_name', consolidated_product.item_name)
+                                    consolidated_product.item_details = consolidated_data.get('item_details', consolidated_product.item_details)
+                                    consolidated_product.price = consolidated_data.get('rate', consolidated_product.price)
+                                    consolidated_product.quantity = consolidated_data.get('quantity', consolidated_product.quantity)
+                                    consolidated_product.amount = consolidated_data.get('amount', consolidated_product.amount)
+                                    consolidated_product.product_gst = consolidated_data.get('product_gst', consolidated_product.product_gst)
+                                    consolidated_product.igst = consolidated_data.get('igst', consolidated_product.igst)
+                                    consolidated_product.cgst = consolidated_data.get('cgst', consolidated_product.cgst)
+                                    consolidated_product.sgst = consolidated_data.get('sgst', consolidated_product.sgst)
+
+                                    # Handle foreign key fields
+                                    chart_of_accounts_id = consolidated_data.get('chart_of_accounts')
+                                    if chart_of_accounts_id:
+                                        consolidated_product.chart_of_accounts_id = chart_of_accounts_id
+
+                                    taxes_id = consolidated_data.get('taxes')
+                                    if taxes_id:
+                                        consolidated_product.taxes_id = taxes_id
+
+                                    consolidated_product.save()
+                                    logger.error(f"[DEBUG] vendor_bill_verify_view - Updated consolidated product {consolidated_id}")
+
+                                except VendorZohoConsolidatedProduct.DoesNotExist:
+                                    logger.error(f"[DEBUG] vendor_bill_verify_view - Consolidated product {consolidated_id} not found, creating new one")
+                                    consolidated_id = None  # Fall through to create new
+
+                            if not consolidated_id:
+                                # Create new consolidated product
+                                consolidated_product = VendorZohoConsolidatedProduct.objects.create(
+                                    zohoBill=updated_bill,
+                                    organization=organization,
+                                    item_name=consolidated_data.get('item_name', 'Consolidated Product'),
+                                    item_details=consolidated_data.get('item_details', 'New consolidated product from verification'),
+                                    price=consolidated_data.get('rate', 0),
+                                    quantity=consolidated_data.get('quantity', 1),
+                                    amount=consolidated_data.get('amount', 0),
+                                    product_gst=consolidated_data.get('product_gst', '18%'),
+                                    igst=consolidated_data.get('igst', 0),
+                                    cgst=consolidated_data.get('cgst', 0),
+                                    sgst=consolidated_data.get('sgst', 0),
+                                    chart_of_accounts_id=consolidated_data.get('chart_of_accounts'),
+                                    taxes_id=consolidated_data.get('taxes'),
+                                    original_items_count=1,
+                                    consolidation_notes='Created from frontend verification'
+                                )
+                                logger.error(f"[DEBUG] vendor_bill_verify_view - Created new consolidated product {consolidated_product.id}")
+
+                    except Exception as consolidate_error:
+                        logger.error(f"[DEBUG] vendor_bill_verify_view - Error processing consolidate_prod array: {consolidate_error}")
+                        # Don't fail the entire request, just log the error
+
+                # Handle consolidation logic
+                consolidate_flag = zoho_bill_data.get('consolidate', False)
+                if consolidate_flag != updated_bill.consolidate:
+                    logger.info(f"Consolidation setting changed from {updated_bill.consolidate} to {consolidate_flag}")
+                    updated_bill.consolidate = consolidate_flag
+                    updated_bill.save()
+
+                # Create or update consolidated product if consolidation is enabled
+                if updated_bill.consolidate:
+                    logger.info(f"Creating/updating consolidated product for bill {updated_bill.id}")
+                    try:
+                        consolidated_product = create_consolidated_vendor_product(updated_bill, organization)
+                        if consolidated_product:
+                            logger.info(f"Successfully created/updated consolidated product: {consolidated_product.id}")
+                        else:
+                            logger.warning(f"Failed to create consolidated product for bill {updated_bill.id}")
+                    except Exception as consolidation_error:
+                        logger.error(f"Error during consolidation: {str(consolidation_error)}")
+                        # Don't fail the entire request for consolidation errors
+                else:
+                    # Remove consolidated product if consolidation is disabled
+                    try:
+                        consolidated_product = updated_bill.consolidated_product
+                        consolidated_product.delete()
+                        logger.info(f"Deleted consolidated product as consolidation was disabled")
+                    except VendorZohoConsolidatedProduct.DoesNotExist:
+                        pass  # No consolidated product exists, which is fine
+
+                # Log summary only if products were processed
+                if products_data is not None:
                     logger.error(f"[DEBUG] vendor_bill_verify_view - Product processing summary:")
                     logger.error(f"  - Created: {created_count}")
                     logger.error(f"  - Updated: {updated_count}")
@@ -1121,7 +1786,10 @@ def vendor_bill_verify_view(request, org_id, bill_id):
         logger.error(f"[DEBUG] vendor_bill_verify_view - Error type: {type(e).__name__}")
         import traceback
         logger.error(f"[DEBUG] vendor_bill_verify_view - Traceback: {traceback.format_exc()}")
-        raise
+        return Response(
+            {"detail": f"Verification failed: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 @extend_schema(
@@ -1201,6 +1869,122 @@ def vendor_bill_sync_view(request, org_id, bill_id):
             "line_items": []
         }
         
+        # Use consolidated or individual line items based on consolidate flag
+        if zoho_bill.consolidate:
+            logger.info(f"Syncing bill {bill.id} with CONSOLIDATED line items")
+
+            # Use consolidated product if available
+            try:
+                consolidated_product = zoho_bill.consolidated_product
+                logger.info(f"Using existing consolidated product: {consolidated_product.id}")
+
+                consolidated_item = {
+                    "account_id": consolidated_product.chart_of_accounts.accountId if consolidated_product.chart_of_accounts else None,
+                    "name": consolidated_product.consolidated_item_name or "Consolidated Items",
+                    "description": consolidated_product.consolidated_item_details[:500] if consolidated_product.consolidated_item_details else "Multiple items consolidated",
+                    "rate": float(consolidated_product.consolidated_rate or 0),
+                    "quantity": float(consolidated_product.total_quantity or 1),
+                    "unit": "unit",
+                    "item_total": float(consolidated_product.consolidated_amount or 0)
+                }
+
+                # Add tax information if available
+                if consolidated_product.taxes and consolidated_product.taxes.taxId:
+                    consolidated_item["tax_id"] = consolidated_product.taxes.taxId
+
+                # Add ITC information
+                if consolidated_product.itc_eligibility:
+                    consolidated_item["input_tax_credit"] = consolidated_product.itc_eligibility
+
+                bill_data["line_items"].append(consolidated_item)
+
+                logger.info(f"Added consolidated line item: {consolidated_item['name']} (Amount: ₹{consolidated_item['item_total']})")
+
+            except VendorZohoConsolidatedProduct.DoesNotExist:
+                # Fallback: create consolidated data on-the-fly
+                logger.warning(f"No consolidated product found, creating consolidated data on-the-fly")
+
+                total_amount = sum(float(p.total or 0) for p in zoho_products)
+                items_count = zoho_products.count()
+
+                # Use most common or highest-value tax
+                tax_id = None
+                chart_account_id = None
+
+                if zoho_products.filter(taxes__isnull=False).exists():
+                    # Get tax with highest amount
+                    tax_amounts = {}
+                    for product in zoho_products.filter(taxes__isnull=False):
+                        tax_id_key = product.taxes.taxId
+                        amount = float(product.total or 0)
+                        if tax_id_key in tax_amounts:
+                            tax_amounts[tax_id_key] += amount
+                        else:
+                            tax_amounts[tax_id_key] = amount
+
+                    if tax_amounts:
+                        highest_tax = max(tax_amounts, key=tax_amounts.get)
+                        tax_id = highest_tax
+
+                # Use most common chart of accounts
+                if zoho_products.filter(chart_of_accounts__isnull=False).exists():
+                    chart_amounts = {}
+                    for product in zoho_products.filter(chart_of_accounts__isnull=False):
+                        chart_id_key = product.chart_of_accounts.accountId
+                        amount = float(product.total or 0)
+                        if chart_id_key in chart_amounts:
+                            chart_amounts[chart_id_key] += amount
+                        else:
+                            chart_amounts[chart_id_key] = amount
+
+                    if chart_amounts:
+                        highest_chart = max(chart_amounts, key=chart_amounts.get)
+                        chart_account_id = highest_chart
+
+                consolidated_item = {
+                    "account_id": chart_account_id,
+                    "name": f"Multiple items consolidated ({items_count} products)",
+                    "description": f"Consolidated from {items_count} individual items - Total: ₹{total_amount}",
+                    "rate": total_amount,
+                    "quantity": 1,
+                    "unit": "unit",
+                    "item_total": total_amount
+                }
+
+                if tax_id:
+                    consolidated_item["tax_id"] = tax_id
+
+                bill_data["line_items"].append(consolidated_item)
+
+                logger.info(f"Added on-the-fly consolidated item: {items_count} products, Total: ₹{total_amount}")
+
+        else:
+            logger.info(f"Syncing bill {bill.id} with INDIVIDUAL line items")
+
+            # Use individual products as before
+            for item in zoho_products:
+                line_item = {
+                    "account_id": item.chart_of_accounts.accountId if item.chart_of_accounts else None,
+                    "name": item.name,
+                    "description": item.name,
+                    "rate": float(item.rate or 0),
+                    "quantity": float(item.quantity or 0),
+                    "unit": "unit",
+                    "item_total": float(item.total or 0)
+                }
+
+                # Add tax information
+                if item.taxes and item.taxes.taxId:
+                    line_item["tax_id"] = item.taxes.taxId
+
+                # Add ITC information
+                if item.itc_eligibility:
+                    line_item["input_tax_credit"] = item.itc_eligibility
+
+                bill_data["line_items"].append(line_item)
+
+            logger.info(f"Added {len(bill_data['line_items'])} individual line items")
+
         # Add due date if provided
         if due_date_str:
             bill_data['due_date'] = due_date_str
@@ -1238,33 +2022,6 @@ def vendor_bill_sync_view(request, org_id, bill_id):
             elif tax_choice == 'TCS':
                 bill_data['tcs_tax_id'] = str(zoho_bill.tds_tcs_id.taxId)
 
-        # Add line items from products
-        for item in zoho_products:
-            try:
-                # Get chart of account
-                if not item.chart_of_accounts:
-                    logger.warning(f"No chart of account found for product {item.id}")
-                    continue
-
-                line_item = {
-                    "account_id": str(item.chart_of_accounts.accountId),
-                    "rate": float(item.rate) if item.rate else 0,
-                    "quantity": float(item.quantity) if item.quantity else 1,
-                    "discount": 0.00,
-                    "itc_eligibility": getattr(item, 'itc_eligibility', 'eligible')
-                }
-
-                # Add tax information
-                if hasattr(item, 'reverse_charge_tax_id') and item.reverse_charge_tax_id and item.taxes:
-                    line_item['reverse_charge_tax_id'] = item.taxes.taxId
-                elif item.taxes:
-                    line_item['tax_id'] = item.taxes.taxId
-
-                bill_data["line_items"].append(line_item)
-
-            except Exception as e:
-                logger.error(f"Error processing product {item.id}: {str(e)}")
-                continue
 
         if not bill_data["line_items"]:
             return Response({

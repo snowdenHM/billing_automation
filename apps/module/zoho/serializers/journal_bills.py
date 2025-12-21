@@ -7,6 +7,7 @@ from apps.module.zoho.models import (
     JournalBill,
     JournalZohoBill,
     JournalZohoProduct,
+    JournalZohoConsolidatedProduct,
     ZohoVendor,
     ZohoChartOfAccount,
     ZohoTaxes,
@@ -77,10 +78,112 @@ class JournalZohoProductSerializer(serializers.ModelSerializer):
             self.fields['chart_of_accounts'].queryset = ZohoChartOfAccount.objects.filter(organization=organization)
 
 
+class JournalZohoConsolidatedProductSerializer(serializers.ModelSerializer):
+    """Serializer for consolidated journal product - matches JournalZohoProduct structure"""
+
+    # Use consistent field names with individual journal products
+    item_details = serializers.CharField(source='consolidated_item_details', read_only=True)
+    amount = serializers.DecimalField(source='consolidated_amount', max_digits=15, decimal_places=2, read_only=True)
+
+    # Add zohoBill field for consistency
+    zohoBill = serializers.UUIDField(source='zohoBill.id', read_only=True)
+
+    # Journal-specific fields (use default values)
+    debit_or_credit = serializers.CharField(default="debit", read_only=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope foreign key fields to current organization
+        organization = self._get_organization()
+
+        if organization:
+            self.fields['chart_of_accounts'].queryset = ZohoChartOfAccount.objects.filter(
+                organization=organization
+            )
+
+    def _get_organization(self):
+        """Get organization from various sources"""
+        # Try to get organization from instance
+        if self.instance and hasattr(self.instance, 'organization'):
+            return self.instance.organization
+        # Try to get organization from zohoBill
+        elif self.instance and hasattr(self.instance, 'zohoBill') and hasattr(self.instance.zohoBill, 'organization'):
+            return self.instance.zohoBill.organization
+        # Try to get organization from context
+        elif hasattr(self, 'context') and 'organization' in self.context:
+            return self.context['organization']
+        return None
+
+    class Meta:
+        model = JournalZohoConsolidatedProduct
+        fields = [
+            "id", "zohoBill", "item_details", "amount", "chart_of_accounts", "debit_or_credit",
+            "created_at"
+        ]
+        read_only_fields = ["id", "zohoBill", "created_at"]
+
+
 class JournalZohoBillSerializer(serializers.ModelSerializer):
-    """Serializer for Journal Zoho bill with corrected product relationship"""
+    """Serializer for Journal Zoho bill with consolidated product support"""
 
     products = JournalZohoProductSerializer(many=True, read_only=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope querysets to organization
+        organization = self._get_organization()
+
+        if organization:
+            from ..models import ZohoVendor, ZohoChartOfAccount
+            self.fields['vendor'].queryset = ZohoVendor.objects.filter(organization=organization)
+            # Scope all chart of accounts fields
+            coa_fields = ['vendor_coa', 'igst_coa', 'cgst_coa', 'sgst_coa']
+            for field in coa_fields:
+                if field in self.fields:
+                    self.fields[field].queryset = ZohoChartOfAccount.objects.filter(organization=organization)
+
+    def _get_organization(self):
+        """Get organization from instance or context"""
+        if self.instance and hasattr(self.instance, 'organization'):
+            return self.instance.organization
+        elif hasattr(self, 'context') and 'organization' in self.context:
+            return self.context['organization']
+        return None
+
+    def to_representation(self, instance):
+        """Override to include consolidated product data when it exists"""
+        data = super().to_representation(instance)
+
+        # Get organization for products serialization
+        organization = self._get_organization()
+        if organization and instance:
+            # Re-serialize products with organization context
+            products_context = self.context.copy() if self.context else {}
+            products_context['organization'] = organization
+
+            # Always include individual products
+            products_serializer = JournalZohoProductSerializer(
+                instance.products.all(),
+                many=True,
+                context=products_context
+            )
+            data['products'] = products_serializer.data
+
+            # Always include consolidated product data if it exists (regardless of consolidate flag)
+            # Return as array for verification flexibility (frontend can add/update multiple consolidated items)
+            try:
+                consolidated_product = instance.consolidated_product
+                consolidated_serializer = JournalZohoConsolidatedProductSerializer(
+                    consolidated_product,
+                    context=products_context
+                )
+                # 🔄 Return as ARRAY for frontend verification flexibility
+                data['consolidate_prod'] = [consolidated_serializer.data]
+            except JournalZohoConsolidatedProduct.DoesNotExist:
+                # No consolidated product exists, return empty array
+                data['consolidate_prod'] = []
+
+        return data
 
     class Meta:
         model = JournalZohoBill
@@ -90,7 +193,7 @@ class JournalZohoBillSerializer(serializers.ModelSerializer):
             "total", "igst", "igst_coa", "igst_debit_or_credit", 
             "cgst", "cgst_coa", "cgst_debit_or_credit", 
             "sgst", "sgst_coa", "sgst_debit_or_credit", 
-            "note", "created_at", "products"
+            "note", "consolidate", "created_at", "products"
         ]
         read_only_fields = ["id", "selectBill", "created_at"]
 

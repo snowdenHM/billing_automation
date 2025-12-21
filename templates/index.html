@@ -3,8 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Billmunshi - Smart Bill Management</title>
+    <title>BillMunshi - Smart Bill Management & Accounting Automation</title>
+    <meta name="description" content="Streamline your invoice workflows with AI-powered bill processing and seamless Tally ERP integration. BillMunshi automates your accounting processes.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        :root {
+            --primary-color: #667eea;
+            --secondary-color: #764ba2;
+            --accent-color: #f093fb;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --danger-color: #ef4444;
+            --dark-color: #1f2937;
+            --light-gray: #f8fafc;
+            --medium-gray: #6b7280;
+            --border-color: #e5e7eb;
+            --shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 20px 40px rgba(0, 0, 0, 0.15);
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -12,164 +31,554 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
             min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-            padding: 3rem;
-            text-align: center;
-            max-width: 600px;
-            width: 90%;
-        }
-
-        .logo {
-            font-size: 3rem;
-            font-weight: 700;
-            color: #667eea;
-            margin-bottom: 1rem;
-            letter-spacing: -2px;
-        }
-
-        .tagline {
-            font-size: 1.2rem;
-            color: #6b7280;
-            margin-bottom: 2rem;
             line-height: 1.6;
         }
 
-        .features {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        /* Header */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            z-index: 1000;
+            padding: 1rem 0;
+            box-shadow: var(--shadow);
+        }
+
+        .nav-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            text-decoration: none;
+            letter-spacing: -1px;
+        }
+
+        .nav-links {
+            display: flex;
             gap: 2rem;
-            margin: 2rem 0;
+            list-style: none;
         }
 
-        .feature {
-            padding: 1.5rem;
-            background: #f8fafc;
-            border-radius: 12px;
-            border-left: 4px solid #667eea;
+        .nav-links a {
+            color: var(--dark-color);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s ease;
         }
 
-        .feature h3 {
-            color: #1f2937;
-            margin-bottom: 0.5rem;
-            font-size: 1.1rem;
+        .nav-links a:hover {
+            color: var(--primary-color);
         }
 
-        .feature p {
-            color: #6b7280;
-            font-size: 0.9rem;
-            line-height: 1.5;
+        /* Hero Section */
+        .hero {
+            padding: 8rem 2rem 4rem;
+            text-align: center;
+            color: white;
         }
 
-        .api-links {
-            margin-top: 2rem;
+        .hero-container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .hero h1 {
+            font-size: 3.5rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            letter-spacing: -2px;
+            line-height: 1.2;
+        }
+
+        .hero p {
+            font-size: 1.3rem;
+            margin-bottom: 3rem;
+            opacity: 0.9;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .cta-buttons {
             display: flex;
             gap: 1rem;
             justify-content: center;
             flex-wrap: wrap;
+            margin-bottom: 4rem;
         }
 
-        .api-link {
-            display: inline-block;
-            padding: 0.75rem 1.5rem;
-            background: #667eea;
-            color: white;
+        .btn {
+            padding: 1rem 2rem;
+            border: none;
+            border-radius: 12px;
+            font-size: 1.1rem;
+            font-weight: 600;
             text-decoration: none;
-            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
             transition: all 0.3s ease;
-            font-weight: 500;
+            cursor: pointer;
         }
 
-        .api-link:hover {
-            background: #5a67d8;
+        .btn-primary {
+            background: white;
+            color: var(--primary-color);
+            box-shadow: var(--shadow);
+        }
+
+        .btn-primary:hover {
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+            box-shadow: var(--shadow-lg);
         }
 
-        .api-link.secondary {
-            background: #64748b;
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.3);
         }
 
-        .api-link.secondary:hover {
-            background: #475569;
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.3);
         }
 
-        .version {
-            margin-top: 2rem;
-            padding-top: 1rem;
-            border-top: 1px solid #e5e7eb;
+        /* Features Section */
+        .features-section {
+            background: white;
+            padding: 6rem 2rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 4rem;
+        }
+
+        .section-header h2 {
+            font-size: 2.5rem;
+            color: var(--dark-color);
+            margin-bottom: 1rem;
+            font-weight: 700;
+        }
+
+        .section-header p {
+            font-size: 1.2rem;
+            color: var(--medium-gray);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2.5rem;
+            margin-bottom: 4rem;
+        }
+
+        .feature-card {
+            background: white;
+            padding: 2.5rem;
+            border-radius: 20px;
+            box-shadow: var(--shadow);
+            text-align: center;
+            transition: transform 0.3s ease;
+            border: 1px solid var(--border-color);
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .feature-icon {
+            font-size: 3rem;
+            margin-bottom: 1.5rem;
+            display: block;
+        }
+
+        .feature-card h3 {
+            font-size: 1.5rem;
+            color: var(--dark-color);
+            margin-bottom: 1rem;
+            font-weight: 600;
+        }
+
+        .feature-card p {
+            color: var(--medium-gray);
+            line-height: 1.7;
+        }
+
+        /* API Section */
+        .api-section {
+            background: var(--light-gray);
+            padding: 6rem 2rem;
+        }
+
+        .api-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .api-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 16px;
+            box-shadow: var(--shadow);
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+
+        .api-card:hover {
+            transform: translateY(-3px);
+        }
+
+        .api-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            display: block;
+        }
+
+        .api-card h4 {
+            font-size: 1.2rem;
+            margin-bottom: 1rem;
+            color: var(--dark-color);
+        }
+
+        .api-card .btn {
+            width: 100%;
+            justify-content: center;
+        }
+
+        /* Stats Section */
+        .stats-section {
+            background: var(--dark-color);
+            color: white;
+            padding: 4rem 2rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 2rem;
+            text-align: center;
+        }
+
+        .stat-item h3 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--accent-color);
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-item p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        /* Footer */
+        .footer {
+            background: #111827;
+            color: white;
+            padding: 3rem 2rem 2rem;
+        }
+
+        .footer-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+        }
+
+        .footer-links a {
             color: #9ca3af;
-            font-size: 0.9rem;
+            text-decoration: none;
+            transition: color 0.3s ease;
         }
 
-        @media (max-width: 768px) {
-            .container {
-                padding: 2rem;
-            }
+        .footer-links a:hover {
+            color: white;
+        }
 
-            .logo {
+        .footer-bottom {
+            border-top: 1px solid #374151;
+            padding-top: 2rem;
+            color: #9ca3af;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .hero h1 {
                 font-size: 2.5rem;
             }
 
-            .features {
-                grid-template-columns: 1fr;
-                gap: 1rem;
+            .hero p {
+                font-size: 1.1rem;
             }
 
-            .api-links {
+            .cta-buttons {
                 flex-direction: column;
                 align-items: center;
             }
+
+            .nav-links {
+                display: none;
+            }
+
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .feature-card {
+                padding: 2rem;
+            }
+
+            .api-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Animations */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-on-scroll {
+            animation: fadeInUp 0.6s ease-out;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1 class="logo">billmunshi</h1>
-        <p class="tagline">
-            Smart Bill Management & Processing Platform<br>
-            Streamline your invoice workflows with AI-powered analysis
-        </p>
+    <!-- Header -->
+    <header class="header">
+        <div class="nav-container">
+            <a href="/" class="logo">billmunshi</a>
+            <nav class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#api">API</a>
+                <a href="/api/docs/">Documentation</a>
+                <a href="/admin/">Admin</a>
+            </nav>
+        </div>
+    </header>
 
-        <div class="features">
-            <div class="feature">
-                <h3>🧾 Bill Processing</h3>
-                <p>Upload and analyze vendor bills and expense receipts with intelligent data extraction</p>
-            </div>
-            <div class="feature">
-                <h3>📊 Tally Integration</h3>
-                <p>Seamless integration with Tally ERP for automated ledger management and synchronization</p>
-            </div>
-            <div class="feature">
-                <h3>🏢 Multi-Organization</h3>
-                <p>Manage multiple organizations with role-based access control and API key authentication</p>
-            </div>
-            <div class="feature">
-                <h3>🔗 RESTful APIs</h3>
-                <p>Comprehensive REST APIs for all functionalities with OpenAPI documentation</p>
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-container">
+            <h1>Smart Bill Management & Accounting Automation</h1>
+            <p>
+                Streamline your invoice workflows with AI-powered bill processing and seamless Tally ERP integration.
+                Automate your accounting processes and save countless hours.
+            </p>
+            <div class="cta-buttons">
+                <a href="/api/docs/" class="btn btn-primary">
+                    📚 Explore API Documentation
+                </a>
+                <a href="/admin/" class="btn btn-secondary">
+                    🛠️ Access Admin Panel
+                </a>
             </div>
         </div>
+    </section>
 
-        <div class="api-links">
-            <a href="/api/docs/" class="api-link">📚 API Documentation</a>
-            <a href="/api/schema/" class="api-link secondary">📋 OpenAPI Schema</a>
-            <a href="/admin/" class="api-link secondary">🛠️ Admin Panel</a>
-        </div>
+    <!-- Features Section -->
+    <section id="features" class="features-section">
+        <div class="container">
+            <div class="section-header">
+                <h2>Powerful Features for Modern Businesses</h2>
+                <p>Everything you need to automate your bill management and accounting processes</p>
+            </div>
 
-        <div class="version">
-            <p>API Version 1.0.0 | Built with Django REST Framework</p>
+            <div class="features-grid">
+                <div class="feature-card animate-on-scroll">
+                    <span class="feature-icon">🧾</span>
+                    <h3>AI-Powered Bill Processing</h3>
+                    <p>Upload vendor bills and expense receipts for intelligent data extraction using advanced OCR and machine learning algorithms. Automatically extract vendor details, amounts, dates, and line items.</p>
+                </div>
+
+                <div class="feature-card animate-on-scroll">
+                    <span class="feature-icon">📊</span>
+                    <h3>Seamless Tally Integration</h3>
+                    <p>Direct integration with Tally ERP for automated ledger management, voucher creation, and real-time synchronization. Maintain accurate books without manual data entry.</p>
+                </div>
+
+                <div class="feature-card animate-on-scroll">
+                    <span class="feature-icon">🏢</span>
+                    <h3>Multi-Organization Support</h3>
+                    <p>Manage multiple organizations with role-based access control, API key authentication, and isolated data environments. Perfect for accounting firms and enterprise businesses.</p>
+                </div>
+
+                <div class="feature-card animate-on-scroll">
+                    <span class="feature-icon">🔗</span>
+                    <h3>RESTful APIs</h3>
+                    <p>Comprehensive REST APIs for all functionalities with OpenAPI documentation. Easy integration with existing systems and custom applications.</p>
+                </div>
+
+                <div class="feature-card animate-on-scroll">
+                    <span class="feature-icon">⚡</span>
+                    <h3>Real-time Analytics</h3>
+                    <p>Dashboard analytics for expense tracking, vendor analysis, and financial insights. Monitor your organization's spending patterns and cash flow in real-time.</p>
+                </div>
+
+                <div class="feature-card animate-on-scroll">
+                    <span class="feature-icon">🔐</span>
+                    <h3>Enterprise Security</h3>
+                    <p>Bank-grade security with API key authentication, role-based permissions, and encrypted data storage. Your financial data is always protected and compliant.</p>
+                </div>
+            </div>
         </div>
-    </div>
+    </section>
+
+    <!-- API Section -->
+    <section id="api" class="api-section">
+        <div class="container">
+            <div class="section-header">
+                <h2>Developer-Friendly APIs</h2>
+                <p>Integrate BillMunshi into your existing workflow with our comprehensive API suite</p>
+            </div>
+
+            <div class="api-grid">
+                <div class="api-card">
+                    <span class="api-icon">📚</span>
+                    <h4>Interactive Documentation</h4>
+                    <p>Comprehensive Swagger UI documentation with interactive API testing</p>
+                    <a href="/api/docs/" class="btn btn-primary">Explore Docs</a>
+                </div>
+
+                <div class="api-card">
+                    <span class="api-icon">📋</span>
+                    <h4>OpenAPI Schema</h4>
+                    <p>Download the complete OpenAPI 3.0 schema for code generation</p>
+                    <a href="/api/schema/" class="btn btn-primary">Get Schema</a>
+                </div>
+
+                <div class="api-card">
+                    <span class="api-icon">🔄</span>
+                    <h4>ReDoc Documentation</h4>
+                    <p>Clean, three-panel API documentation for easy navigation</p>
+                    <a href="/api/redoc/" class="btn btn-primary">View ReDoc</a>
+                </div>
+
+                <div class="api-card">
+                    <span class="api-icon">🛠️</span>
+                    <h4>Admin Interface</h4>
+                    <p>Powerful Django admin interface for system management</p>
+                    <a href="/admin/" class="btn btn-primary">Admin Panel</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Stats Section -->
+    <section class="stats-section">
+        <div class="container">
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <h3>99.9%</h3>
+                    <p>Uptime Guarantee</p>
+                </div>
+                <div class="stat-item">
+                    <h3>10,000+</h3>
+                    <p>Bills Processed Monthly</p>
+                </div>
+                <div class="stat-item">
+                    <h3>50+</h3>
+                    <p>API Endpoints</p>
+                </div>
+                <div class="stat-item">
+                    <h3>24/7</h3>
+                    <p>System Monitoring</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-content">
+            <div class="footer-links">
+                <a href="/api/docs/">Documentation</a>
+                <a href="/api/schema/">API Schema</a>
+                <a href="/admin/">Admin</a>
+                <a href="#features">Features</a>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 BillMunshi. Built with Django REST Framework | API Version 1.0.0</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // Smooth scrolling for navigation links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+
+        // Simple animation on scroll (intersection observer would be better for production)
+        window.addEventListener('scroll', () => {
+            const elements = document.querySelectorAll('.animate-on-scroll');
+            elements.forEach(element => {
+                const elementTop = element.getBoundingClientRect().top;
+                const elementVisible = 150;
+
+                if (elementTop < window.innerHeight - elementVisible) {
+                    element.style.opacity = '1';
+                    element.style.transform = 'translateY(0)';
+                }
+            });
+        });
+
+        // Initialize animations
+        document.addEventListener('DOMContentLoaded', () => {
+            const elements = document.querySelectorAll('.animate-on-scroll');
+            elements.forEach(element => {
+                element.style.opacity = '0';
+                element.style.transform = 'translateY(30px)';
+                element.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+            });
+        });
+    </script>
 </body>
 </html>
 

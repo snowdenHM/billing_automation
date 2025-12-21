@@ -358,6 +358,13 @@ class VendorZohoBill(BaseTeamModel):
     tds_tcs_id = models.ForeignKey("ZohoTdsTcs", on_delete=models.CASCADE, null=True, blank=True)
     is_tax = models.CharField(choices=TAX_TYPE_CHOICES, max_length=100, null=True, blank=True, default="NOT_APPLICABLE")
     note = models.CharField(max_length=100, null=True, blank=True, default="Enter Your Description")
+
+    # Line Items Consolidation Setting
+    consolidate = models.BooleanField(
+        default=False,
+        help_text="If True, sync as single consolidated line item. If False, sync all individual line items."
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -404,6 +411,101 @@ class VendorZohoProduct(BaseTeamModel):
 
     def __str__(self):
         return self.item_name or f"Product:{self.id}"
+
+
+class VendorZohoConsolidatedProduct(BaseTeamModel):
+    """
+    Represents a consolidated product line item for vendor bills.
+    Used when consolidate=True in VendorZohoBill to avoid tax conflicts.
+    Contains aggregated data from multiple VendorZohoProduct entries.
+    """
+    id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
+    zohoBill = models.OneToOneField("VendorZohoBill", on_delete=models.CASCADE, related_name="consolidated_product")
+
+    # Consolidated item details
+    consolidated_item_name = models.CharField(
+        max_length=1000,
+        null=True,
+        blank=True,
+        default="Multiple items consolidated",
+        help_text="Description for the consolidated line item"
+    )
+    consolidated_item_details = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Detailed breakdown of consolidated items"
+    )
+
+    # Financial data
+    total_quantity = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        default=Decimal("1"),
+        help_text="Total quantity of all items (usually 1 for consolidated)"
+    )
+    consolidated_rate = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Total amount as rate for consolidated item"
+    )
+    consolidated_amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Total consolidated amount"
+    )
+
+    # Tax handling for consolidated item
+    chart_of_accounts = models.ForeignKey(
+        "ZohoChartOfAccount",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        help_text="Primary chart of accounts for consolidated item"
+    )
+    taxes = models.ForeignKey(
+        "ZohoTaxes",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        help_text="Tax applied to consolidated item (highest tax rate or most common)"
+    )
+
+    # ITC and other settings
+    itc_eligibility = models.CharField(
+        choices=VendorZohoProduct.ITC_ELIGIBILITY_CHOICES,
+        max_length=100,
+        null=True,
+        blank=True,
+        default="eligible",
+    )
+    reverse_charge_tax_id = models.BooleanField(default=False)
+
+    # Metadata
+    original_items_count = models.IntegerField(
+        default=0,
+        help_text="Number of original line items that were consolidated"
+    )
+    consolidation_notes = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Notes about how consolidation was performed"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Consolidated Vendor Product"
+        verbose_name_plural = "Consolidated Vendor Products"
+
+    def __str__(self):
+        return f"Consolidated: {self.consolidated_item_name} ({self.original_items_count} items)"
 
 
 # ===============================
@@ -539,6 +641,13 @@ class JournalZohoBill(BaseTeamModel):
         choices=TRANSACTION_TYPE_CHOICES, max_length=10, blank=True, null=True, default="debit"
     )
     note = models.CharField(max_length=100, null=True, blank=True, default="Enter Your Description")
+
+    # Line Items Consolidation Setting
+    consolidate = models.BooleanField(
+        default=False,
+        help_text="If True, sync as single consolidated journal entry. If False, sync all individual entries."
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -583,6 +692,76 @@ class JournalZohoProduct(BaseTeamModel):
             if self.zohoBill and self.zohoBill.selectBill and self.zohoBill.selectBill.billmunshiName
             else f"JournalZohoProduct:{self.id}"
         )
+
+
+class JournalZohoConsolidatedProduct(BaseTeamModel):
+    """
+    Represents a consolidated product line item for journal bills.
+    Used when consolidate=True in JournalZohoBill to avoid account conflicts.
+    Contains aggregated data from multiple JournalZohoProduct entries.
+    """
+    TRANSACTION_TYPE_CHOICES = (
+        ("credit", "Credit"),
+        ("debit", "Debit"),
+    )
+
+    id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
+    zohoBill = models.OneToOneField("JournalZohoBill", on_delete=models.CASCADE, related_name="consolidated_product")
+
+    # Consolidated item details
+    consolidated_item_details = models.TextField(
+        null=True,
+        blank=True,
+        default="Multiple journal entries consolidated",
+        help_text="Description for the consolidated journal entry"
+    )
+
+    # Financial data
+    consolidated_amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Total consolidated amount"
+    )
+
+    # Account handling for consolidated entry
+    chart_of_accounts = models.ForeignKey(
+        "ZohoChartOfAccount",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        help_text="Primary chart of accounts for consolidated entry"
+    )
+    debit_or_credit = models.CharField(
+        choices=TRANSACTION_TYPE_CHOICES,
+        max_length=10,
+        null=True,
+        blank=True,
+        default="debit",
+        help_text="Transaction type for consolidated entry"
+    )
+
+    # Metadata
+    original_entries_count = models.IntegerField(
+        default=0,
+        help_text="Number of original journal entries that were consolidated"
+    )
+    consolidation_notes = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Notes about how consolidation was performed"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Consolidated Journal Product"
+        verbose_name_plural = "Consolidated Journal Products"
+
+    def __str__(self):
+        return f"Consolidated Journal: {self.consolidated_item_details[:50]} ({self.original_entries_count} entries)"
 
 
 # ===============================
@@ -687,6 +866,13 @@ class ExpenseZohoBill(BaseTeamModel):
     cgst = models.CharField(max_length=50, null=True, blank=True, default=0)
     sgst = models.CharField(max_length=50, null=True, blank=True, default=0)
     note = models.CharField(max_length=100, null=True, blank=True, default="Enter Your Description")
+
+    # Line Items Consolidation Setting
+    consolidate = models.BooleanField(
+        default=False,
+        help_text="If True, sync as single consolidated expense entry. If False, sync all individual entries."
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -725,4 +911,69 @@ class ExpenseZohoProduct(BaseTeamModel):
             if self.zohoBill and self.zohoBill.selectBill and self.zohoBill.selectBill.billmunshiName
             else f"ExpenseZohoProduct:{self.id}"
         )
+
+
+class ExpenseZohoConsolidatedProduct(BaseTeamModel):
+    """
+    Represents a consolidated product line item for expense bills.
+    Used when consolidate=True in ExpenseZohoBill to avoid account conflicts.
+    Contains aggregated data from multiple ExpenseZohoProduct entries.
+    """
+    id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
+    zohoBill = models.OneToOneField("ExpenseZohoBill", on_delete=models.CASCADE, related_name="consolidated_product")
+
+    # Consolidated item details
+    consolidated_item_details = models.TextField(
+        null=True,
+        blank=True,
+        default="Multiple expense entries consolidated",
+        help_text="Description for the consolidated expense entry"
+    )
+
+    # Financial data
+    consolidated_amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Total consolidated amount"
+    )
+
+    # Account and tax handling for consolidated entry
+    chart_of_accounts = models.ForeignKey(
+        "ZohoChartOfAccount",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        help_text="Primary chart of accounts for consolidated entry"
+    )
+    taxes = models.ForeignKey(
+        "ZohoTaxes",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        help_text="Tax applied to consolidated entry (highest tax rate or most common)"
+    )
+
+    # Metadata
+    original_entries_count = models.IntegerField(
+        default=0,
+        help_text="Number of original expense entries that were consolidated"
+    )
+    consolidation_notes = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Notes about how consolidation was performed"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Consolidated Expense Product"
+        verbose_name_plural = "Consolidated Expense Products"
+
+    def __str__(self):
+        return f"Consolidated Expense: {self.consolidated_item_details[:50]} ({self.original_entries_count} entries)"
+
 

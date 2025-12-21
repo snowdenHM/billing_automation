@@ -296,6 +296,12 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
     gst_type = models.CharField(max_length=20, choices=GSTType.choices, default=GSTType.UNKNOWN)
     note = models.TextField(blank=True, null=True, default="Enter Your Description")
 
+    # Line Items Consolidation Setting
+    consolidate = models.BooleanField(
+        default=False,
+        help_text="If True, sync as single consolidated line item. If False, sync all individual line items."
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -516,6 +522,13 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
     )
 
     note = models.CharField(max_length=100, blank=True, null=True, default="Enter Your Description")
+
+    # Line Items Consolidation Setting
+    consolidate = models.BooleanField(
+        default=False,
+        help_text="If True, sync as single consolidated expense entry. If False, sync all individual entries."
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -560,3 +573,190 @@ class TallyExpenseAnalyzedProduct(BaseOrgModel):
         if self.expense_bill and self.expense_bill.selected_bill:
             return self.expense_bill.selected_bill.bill_munshi_name or f"ExpenseProduct:{self.id}"
         return f"ExpenseProduct:{self.id}"
+
+
+# -----------------------------
+# Consolidated Products for Line Items Consolidation
+# -----------------------------
+
+class TallyVendorConsolidatedProduct(BaseOrgModel):
+    """
+    Represents a consolidated product line item for Tally vendor bills.
+    Used when consolidate=True in TallyVendorAnalyzedBill to avoid ledger conflicts.
+    Contains aggregated data from multiple TallyVendorAnalyzedProduct entries.
+    """
+    GST_CHOICES = [
+        ("0%", "0%"),
+        ("5%", "5%"),
+        ("12%", "12%"),
+        ("18%", "18%"),
+        ("28%", "28%"),
+        ("Exempted", "Exempted"),
+        ("N/A", "N/A"),
+    ]
+
+    id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
+    vendor_bill_analyzed = models.OneToOneField("TallyVendorAnalyzedBill", on_delete=models.CASCADE, related_name="consolidated_product")
+
+    # 📦 SAME FIELDS AS TallyVendorAnalyzedProduct (for compatibility)
+    item_name = models.CharField(
+        max_length=2000,
+        blank=True,
+        null=True,
+        help_text="Consolidated item name"
+    )
+    item_details = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Detailed breakdown of consolidated items"
+    )
+    taxes = models.ForeignKey(
+        Ledger,
+        on_delete=models.CASCADE,
+        blank=True,
+        null=True,
+        help_text="Primary tax ledger for consolidated item"
+    )
+
+    # Financial data (same field names as individual products)
+    price = models.DecimalField(
+        max_digits=50,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        help_text="Consolidated rate/price"
+    )
+    quantity = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        default=1,
+        help_text="Usually 1 for consolidated items"
+    )
+    amount = models.DecimalField(
+        max_digits=50,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        help_text="Total consolidated amount"
+    )
+
+    # 💰 GST fields (same as individual products)
+    product_gst = models.CharField(
+        max_length=50,
+        choices=GST_CHOICES,
+        blank=True,
+        null=True,
+        help_text="Most common GST rate from consolidated items"
+    )
+    igst = models.DecimalField(
+        max_digits=50,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        default=Decimal("0"),
+        help_text="Total IGST amount"
+    )
+    cgst = models.DecimalField(
+        max_digits=50,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        default=Decimal("0"),
+        help_text="Total CGST amount"
+    )
+    sgst = models.DecimalField(
+        max_digits=50,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        default=Decimal("0"),
+        help_text="Total SGST amount"
+    )
+
+    # 📊 Metadata fields
+    original_items_count = models.IntegerField(
+        default=0,
+        help_text="Number of original line items that were consolidated"
+    )
+    consolidation_notes = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Notes about how consolidation was performed"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Consolidated Tally Vendor Product"
+        verbose_name_plural = "Consolidated Tally Vendor Products"
+
+    def __str__(self):
+        return f"Consolidated: {self.item_name or 'Multiple Items'} ({self.original_items_count} items)"
+
+
+class TallyExpenseConsolidatedProduct(BaseOrgModel):
+    """
+    Represents a consolidated product line item for Tally expense bills.
+    Used when consolidate=True in TallyExpenseAnalyzedBill to avoid ledger conflicts.
+    Contains aggregated data from multiple TallyExpenseAnalyzedProduct entries.
+    """
+    class DebitCredit(models.TextChoices):
+        CREDIT = "credit", "Credit"
+        DEBIT = "debit", "Debit"
+
+    id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
+    expense_bill = models.OneToOneField("TallyExpenseAnalyzedBill", on_delete=models.CASCADE, related_name="consolidated_product")
+
+    # 📦 SAME FIELDS AS TallyExpenseAnalyzedProduct (for compatibility)
+    item_details = models.CharField(
+        max_length=2000,
+        blank=True,
+        null=True,
+        help_text="Consolidated expense item details"
+    )
+    chart_of_accounts = models.ForeignKey(
+        Ledger,
+        on_delete=models.CASCADE,
+        blank=True,
+        null=True,
+        help_text="Primary chart of accounts for consolidated entry"
+    )
+    amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        default=Decimal("0"),
+        help_text="Total consolidated amount"
+    )
+    debit_or_credit = models.CharField(
+        choices=DebitCredit.choices,
+        max_length=50,
+        blank=True,
+        null=True,
+        default=DebitCredit.DEBIT,
+        help_text="Debit or credit for consolidated entry"
+    )
+
+    # 📊 Metadata fields
+    original_entries_count = models.IntegerField(
+        default=0,
+        help_text="Number of original expense entries that were consolidated"
+    )
+    consolidation_notes = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Notes about how consolidation was performed"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Consolidated Tally Expense Product"
+        verbose_name_plural = "Consolidated Tally Expense Products"
+
+    def __str__(self):
+        return f"Consolidated Expense: {self.item_details[:50] if self.item_details else 'Multiple Entries'} ({self.original_entries_count} entries)"
+

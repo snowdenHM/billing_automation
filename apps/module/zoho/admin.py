@@ -14,6 +14,7 @@ from .models import (
     VendorBill,
     VendorZohoBill,
     VendorZohoProduct,
+    VendorZohoConsolidatedProduct,
     JournalBill,
     JournalZohoBill,
     JournalZohoProduct,
@@ -372,3 +373,53 @@ class ExpenseZohoProductAdmin(BaseOrgScopedAdmin):
             label = obj.zohoBill.bill_no or str(obj.zohoBill_id)
             return mark_safe(f'<a href="{url}">{label}</a>')
         return "-"
+
+
+# -----------------------------
+# Consolidated Products
+# -----------------------------
+
+@admin.register(VendorZohoConsolidatedProduct)
+class VendorZohoConsolidatedProductAdmin(BaseOrgScopedAdmin):
+    list_display = (
+        "organization",
+        "zohoBill_link",
+        "consolidated_item_name",
+        "original_items_count",
+        "consolidated_amount",
+        "created_at",
+    )
+    search_fields = (
+        "consolidated_item_name",
+        "zohoBill__bill_no",
+        "zohoBill__selectBill__billmunshiName",
+        "organization__name",
+    )
+    list_filter = ("organization", "created_at")
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("organization", "zohoBill", "chart_of_accounts", "taxes")
+
+    fieldsets = (
+        ('Consolidated Item Details', {
+            'fields': ('consolidated_item_name', 'consolidated_item_details', 'original_items_count')
+        }),
+        ('Financial Information', {
+            'fields': ('total_quantity', 'consolidated_rate', 'consolidated_amount')
+        }),
+        ('Tax and Account Settings', {
+            'fields': ('chart_of_accounts', 'taxes', 'itc_eligibility', 'reverse_charge_tax_id')
+        }),
+        ('Metadata', {
+            'fields': ('zohoBill', 'organization', 'consolidation_notes', 'created_at', 'updated_at')
+        }),
+    )
+
+    @admin.display(description="Zoho Bill")
+    def zohoBill_link(self, obj):
+        if obj.zohoBill_id:
+            url = admin_change_url_for_instance(obj.zohoBill)
+            label = obj.zohoBill.bill_no or str(obj.zohoBill_id)
+            return mark_safe(f'<a href="{url}">{label}</a>')
+        return "-"
+
+

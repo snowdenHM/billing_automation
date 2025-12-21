@@ -28,6 +28,7 @@ from .models import (
     TallyExpenseBill,
     TallyExpenseAnalyzedBill,
     TallyExpenseAnalyzedProduct,
+    TallyExpenseConsolidatedProduct,
     Ledger,
     ParentLedger,
     TallyConfig,
@@ -56,6 +57,168 @@ logger = logging.getLogger(__name__)
 
 # ============================================================================
 # Helper Functions
+
+def check_duplicate_tally_expense_bill(bill, organization):
+    """
+    Check if a Tally expense bill is a duplicate based on invoice number and vendor information.
+    Returns tuple (is_duplicate, duplicate_bills, similarity_score)
+    """
+    logger.info(f"Checking for duplicates of Tally expense bill {bill.id} in organization {organization.id}")
+
+    if not bill.analysed_data:
+        # If bill hasn't been analyzed yet, we can't check for duplicates
+        return False, [], 0.0
+
+    analyzed_data = bill.analysed_data
+    current_invoice_number = analyzed_data.get('invoiceNumber', '').strip()
+    current_vendor_name = analyzed_data.get('from', {}).get('name', '').strip()
+    current_total = analyzed_data.get('total', 0)
+    current_date = analyzed_data.get('dateIssued', '')
+
+    if not current_invoice_number and not current_vendor_name:
+        # Can't check duplicates without key identifying information
+        return False, [], 0.0
+
+    # Find potentially duplicate bills in the same organization
+    potential_duplicates = TallyExpenseBill.objects.filter(
+        organization=organization,
+        status__in=[TallyExpenseBill.BillStatus.ANALYSED, TallyExpenseBill.BillStatus.VERIFIED, TallyExpenseBill.BillStatus.SYNCED]
+    ).exclude(id=bill.id)
+
+    duplicate_bills = []
+    max_similarity = 0.0
+
+    for other_bill in potential_duplicates:
+        if not other_bill.analysed_data:
+            continue
+
+        other_data = other_bill.analysed_data
+        other_invoice_number = other_data.get('invoiceNumber', '').strip()
+        other_vendor_name = other_data.get('from', {}).get('name', '').strip()
+        other_total = other_data.get('total', 0)
+        other_date = other_data.get('dateIssued', '')
+
+        similarity_score = 0.0
+        match_reasons = []
+
+        # Check exact invoice number match
+        if (current_invoice_number and other_invoice_number and
+            current_invoice_number.lower() == other_invoice_number.lower()):
+            similarity_score += 40.0
+            match_reasons.append('exact_invoice_number')
+
+        # Check vendor name similarity
+        if current_vendor_name and other_vendor_name:
+            vendor_similarity = _calculate_tally_expense_string_similarity(current_vendor_name.lower(), other_vendor_name.lower())
+            if vendor_similarity > 0.8:
+                similarity_score += 25.0 * vendor_similarity
+                match_reasons.append('vendor_name_match')
+
+        # Check total amount match
+        if current_total and other_total:
+            try:
+                current_amount = float(current_total)
+                other_amount = float(other_total)
+                if abs(current_amount - other_amount) < 0.01:  # Allow for minor rounding differences
+                    similarity_score += 20.0
+                    match_reasons.append('exact_amount')
+                elif abs(current_amount - other_amount) / max(current_amount, other_amount) < 0.05:  # 5% difference
+                    similarity_score += 10.0
+                    match_reasons.append('similar_amount')
+            except (ValueError, TypeError):
+                pass
+
+        # Check date similarity
+        if current_date and other_date and current_date == other_date:
+            similarity_score += 15.0
+            match_reasons.append('same_date')
+
+        # Consider it a potential duplicate if similarity is high
+        if similarity_score >= 60.0:  # Threshold for considering as duplicate
+            duplicate_bills.append({
+                'bill': other_bill,
+                'similarity_score': similarity_score,
+                'match_reasons': match_reasons,
+                'invoice_number': other_invoice_number,
+                'vendor_name': other_vendor_name,
+                'total': other_total,
+                'date': other_date
+            })
+            max_similarity = max(max_similarity, similarity_score)
+
+    is_duplicate = len(duplicate_bills) > 0
+    logger.info(f"Tally expense duplicate check complete. Found {len(duplicate_bills)} potential duplicates with max similarity {max_similarity}")
+
+    return is_duplicate, duplicate_bills, max_similarity
+
+
+def _calculate_tally_expense_string_similarity(str1, str2):
+    """Calculate similarity between two strings using enhanced logic for Indian business names."""
+    if not str1 or not str2:
+        return 0.0
+
+    str1_clean = str1.lower().strip()
+    str2_clean = str2.lower().strip()
+
+    # Exact match
+    if str1_clean == str2_clean:
+        return 1.0
+
+    # Common business abbreviations for Indian companies
+    abbreviations = {
+        'ltd': 'limited',
+        'pvt': 'private',
+        'llp': 'limited liability partnership',
+        'co': 'company',
+        'corp': 'corporation',
+        'inc': 'incorporated',
+        'enterprises': 'ent',
+        'industries': 'ind',
+        'services': 'svc',
+        'technologies': 'tech',
+        'systems': 'sys',
+        'solutions': 'sol'
+    }
+
+    # Normalize abbreviations
+    for abbrev, full in abbreviations.items():
+        str1_clean = str1_clean.replace(full, abbrev).replace(abbrev, abbrev)
+        str2_clean = str2_clean.replace(full, abbrev).replace(abbrev, abbrev)
+
+    # Word-based similarity
+    str1_words = set(str1_clean.split())
+    str2_words = set(str2_clean.split())
+
+    if not str1_words or not str2_words:
+        return 0.0
+
+    # Calculate Jaccard similarity (intersection over union)
+    intersection = str1_words.intersection(str2_words)
+    union = str1_words.union(str2_words)
+    word_similarity = len(intersection) / len(union) if union else 0.0
+
+    # Character-level similarity using simple edit distance approach
+    max_len = max(len(str1_clean), len(str2_clean))
+    min_len = min(len(str1_clean), len(str2_clean))
+
+    if max_len == 0:
+        return 1.0
+
+    # Simple character overlap calculation
+    common_chars = 0
+    for char in set(str1_clean):
+        common_chars += min(str1_clean.count(char), str2_clean.count(char))
+
+    char_similarity = (2 * common_chars) / (len(str1_clean) + len(str2_clean))
+
+    # Bonus for similar length
+    length_similarity = min_len / max_len
+
+    # Weighted combination - prioritize word similarity for business names
+    final_similarity = (word_similarity * 0.6) + (char_similarity * 0.3) + (length_similarity * 0.1)
+
+    return min(final_similarity, 1.0)
+
 
 class OrganizationAPIKeyOrBearerToken(BasePermission):
     """
@@ -432,6 +595,43 @@ def process_expense_analysis_data(bill, json_data, organization):
 
             if product_instances:
                 TallyExpenseAnalyzedProduct.objects.bulk_create(product_instances)
+                logger.info(f"Successfully created {len(product_instances)} products for expense bill {analyzed_bill.id}")
+
+                # ✅ AUTO-CREATE CONSOLIDATED PRODUCT FOR MULTI-ITEM BILLS
+                if len(product_instances) > 1:
+                    try:
+                        # Delete existing consolidated product if exists
+                        TallyExpenseConsolidatedProduct.objects.filter(expense_bill=analyzed_bill).delete()
+
+                        # Calculate consolidated data
+                        total_amount = sum(p.amount for p in product_instances)
+                        items_count = len(product_instances)
+
+                        # Create detailed breakdown
+                        item_details = []
+                        for product in product_instances:
+                            item_details.append(f'• {product.item_details} (Amount: ₹{product.amount})')
+
+                        consolidated_details = f'Consolidated {items_count} expense entries:\n' + '\n'.join(item_details)
+
+                        # Create consolidated product
+                        consolidated_product = TallyExpenseConsolidatedProduct.objects.create(
+                            expense_bill=analyzed_bill,
+                            organization=organization,
+                            item_details=consolidated_details,
+                            amount=total_amount,
+                            debit_or_credit=TallyExpenseConsolidatedProduct.DebitCredit.DEBIT,  # Default for expenses
+                            original_entries_count=items_count,
+                            consolidation_notes=f'Auto-created during analysis for {items_count} expense entries'
+                        )
+
+                        logger.info(f"✅ Auto-created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
+
+                    except Exception as e:
+                        logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")
+                        # Don't raise - consolidated product creation failure shouldn't break the main flow
+                else:
+                    logger.info(f"ℹ️ Skipping consolidated expense product creation - bill has only {len(product_instances)} item(s)")
 
             # Update bill status
             bill.status = TallyExpenseBill.BillStatus.ANALYSED
@@ -729,8 +929,75 @@ def expense_bills_upload(request, org_id):
 
     try:
         with transaction.atomic():
+            # Check for potential duplicates based on file characteristics
+            upload_warnings = []
+
             for uploaded_file in files:
                 file_extension = uploaded_file.name.lower().split('.')[-1]
+
+                # Check for potential file-level duplicates (same name, similar size)
+                similar_files = TallyExpenseBill.objects.filter(
+                    organization=organization,
+                    file__isnull=False
+                ).exclude(status=TallyExpenseBill.BillStatus.DRAFT)
+
+                potential_duplicate_files = []
+                for existing_bill in similar_files:
+                    if existing_bill.file and existing_bill.file.name:
+                        existing_filename = os.path.basename(existing_bill.file.name)
+                        uploaded_filename = uploaded_file.name
+
+                        # Check for exact filename match
+                        if existing_filename.lower() == uploaded_filename.lower():
+                            potential_duplicate_files.append({
+                                'bill': existing_bill,
+                                'match_type': 'exact_filename',
+                                'reason': 'Same filename detected'
+                            })
+                        # Check for similar filename (without extension or with slight differences)
+                        elif (existing_filename.lower().replace('.pdf', '').replace('.jpg', '').replace('.png', '') ==
+                              uploaded_filename.lower().replace('.pdf', '').replace('.jpg', '').replace('.png', '')):
+                            potential_duplicate_files.append({
+                                'bill': existing_bill,
+                                'match_type': 'similar_filename',
+                                'reason': 'Similar filename detected'
+                            })
+                        # Check file size similarity (within 5% difference)
+                        elif (existing_bill.file and existing_bill.file.name and
+                              hasattr(existing_bill.file.storage, 'exists') and
+                              existing_bill.file.storage.exists(existing_bill.file.name) and
+                              hasattr(existing_bill.file, 'size') and hasattr(uploaded_file, 'size')):
+                            try:
+                                existing_size = existing_bill.file.size
+                                uploaded_size = uploaded_file.size
+
+                                if (existing_size > 0 and uploaded_size > 0 and
+                                    abs(existing_size - uploaded_size) / max(existing_size, uploaded_size) < 0.05):
+                                    potential_duplicate_files.append({
+                                        'bill': existing_bill,
+                                        'match_type': 'similar_size',
+                                        'reason': 'Similar file size detected'
+                                    })
+
+                            except (FileNotFoundError, OSError) as e:
+                                # Handle file access errors gracefully
+                                print(f"[TALLY EXPENSE DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {str(e)}")
+                                continue
+
+                if potential_duplicate_files:
+                    upload_warnings.append({
+                        'uploaded_file': uploaded_file.name,
+                        'potential_duplicates': len(potential_duplicate_files),
+                        'warning': f'File "{uploaded_file.name}" may be a duplicate of existing expense bills',
+                        'existing_bills': [
+                            {
+                                'bill_name': dup['bill'].bill_munshi_name,
+                                'bill_id': str(dup['bill'].id),
+                                'match_type': dup['match_type'],
+                                'reason': dup['reason']
+                            } for dup in potential_duplicate_files[:3]  # Limit to first 3 matches
+                        ]
+                    })
 
                 # Handle PDF splitting for multiple invoice files
                 if (file_type == TallyExpenseBill.BillType.MULTI and
@@ -750,13 +1017,107 @@ def expense_bills_upload(request, org_id):
                     )
                     created_bills.append(bill)
 
+        # Auto-analyze uploaded bills and check for duplicates
+        analysis_results = []
+        all_duplicate_warnings = []
+
+        for bill in created_bills:
+            # Auto-analyze the bill if it's in Draft status
+            if bill.status == TallyExpenseBill.BillStatus.DRAFT:
+                try:
+                    logger.info(f"Auto-analyzing Tally expense bill: {bill.bill_munshi_name}")
+
+                    # Analyze with AI
+                    analysis_result = analyze_expense_bill_with_ai(bill, organization)
+
+                    if analysis_result.get('success', True):  # Assume success if not explicitly failed
+                        # Check for duplicates after analysis
+                        is_duplicate, duplicate_bills, max_similarity = check_duplicate_tally_expense_bill(bill, organization)
+
+                        analysis_data = {
+                            'bill_id': str(bill.id),
+                            'bill_name': bill.bill_munshi_name,
+                            'analysis_successful': True,
+                            'duplicate_detected': is_duplicate
+                        }
+
+                        if is_duplicate:
+                            duplicate_warnings = []
+                            for dup in duplicate_bills:
+                                duplicate_warnings.append({
+                                    "duplicate_bill_id": str(dup['bill'].id),
+                                    "duplicate_bill_name": dup['bill'].bill_munshi_name,
+                                    "similarity_score": round(dup['similarity_score'], 2),
+                                    "match_reasons": dup['match_reasons'],
+                                    "invoice_number": dup['invoice_number'],
+                                    "vendor_name": dup['vendor_name'],
+                                    "total": dup['total'],
+                                    "date": dup['date'],
+                                    "status": dup['bill'].status
+                                })
+
+                            analysis_data.update({
+                                "duplicate_count": len(duplicate_bills),
+                                "max_similarity": round(max_similarity, 2),
+                                "duplicate_bills": duplicate_warnings,
+                                "warning_message": f"⚠️ DUPLICATE DETECTED: Tally Expense Bill '{bill.bill_munshi_name}' appears to be {round(max_similarity, 1)}% similar to {len(duplicate_bills)} existing bill(s)."
+                            })
+
+                            all_duplicate_warnings.extend(duplicate_warnings)
+                            logger.warning(f"Tally expense duplicate detected for {bill.bill_munshi_name} - {len(duplicate_bills)} similar bills found")
+
+                        analysis_results.append(analysis_data)
+                        logger.info(f"Successfully analyzed Tally expense bill: {bill.bill_munshi_name}")
+                    else:
+                        analysis_results.append({
+                            'bill_id': str(bill.id),
+                            'bill_name': bill.bill_munshi_name,
+                            'analysis_successful': False,
+                            'error': analysis_result.get('error', 'Unknown analysis error'),
+                            'duplicate_detected': False
+                        })
+
+                except Exception as analysis_error:
+                    logger.error(f"Auto-analysis failed for Tally expense bill {bill.bill_munshi_name}: {str(analysis_error)}")
+                    analysis_results.append({
+                        'bill_id': str(bill.id),
+                        'bill_name': bill.bill_munshi_name,
+                        'analysis_successful': False,
+                        'error': str(analysis_error),
+                        'duplicate_detected': False
+                    })
+
         response_serializer = TallyExpenseBillSerializer(created_bills, many=True, context={'request': request})
-        return Response({
-            'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} bill(s)',
+
+        response_data = {
+            'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} expense bill(s)',
             'files_uploaded': len(files),
             'bills_created': len(created_bills),
-            'bills': response_serializer.data
-        }, status=status.HTTP_201_CREATED)
+            'bills': response_serializer.data,
+            'auto_analysis_results': analysis_results
+        }
+
+        # Add comprehensive warnings
+        warnings_count = len(upload_warnings) + len(all_duplicate_warnings)
+        if upload_warnings or all_duplicate_warnings:
+            warning_messages = []
+
+            if upload_warnings:
+                warning_messages.append(f"📁 FILE WARNING: {len(upload_warnings)} file(s) may be duplicates based on filename/size")
+                response_data['upload_warnings'] = upload_warnings
+
+            if all_duplicate_warnings:
+                warning_messages.append(f"🔍 CONTENT WARNING: {len(all_duplicate_warnings)} duplicate(s) detected after analyzing Tally expense bill content")
+                response_data['duplicate_warnings'] = all_duplicate_warnings
+
+            response_data.update({
+                'total_warnings': warnings_count,
+                'warning_message': " | ".join(warning_messages) + " | Please review carefully before proceeding."
+            })
+
+            logger.warning(f"Tally expense bills - Total warnings generated: {warnings_count} (Upload: {len(upload_warnings)}, Content: {len(all_duplicate_warnings)})")
+
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
     except Exception as e:
         logger.error(f"Error uploading expense bills: {str(e)}")
@@ -820,10 +1181,53 @@ def expense_bill_analyze(request, org_id):
             analyzed_bill = process_existing_expense_analysis_data(bill, bill.analysed_data, organization)
         else:
             logger.info(f"Running new OpenAI analysis for expense bill {bill_id}")
-            analyzed_bill = analyze_expense_bill_with_ai(bill, organization)
+            analysis_result = analyze_expense_bill_with_ai(bill, organization)
+            if isinstance(analysis_result, dict) and not analysis_result.get('success'):
+                return Response({
+                    'error': 'Expense Bill Analysis Failed',
+                    'message': 'The expense bill analysis could not be completed. This might be due to poor image quality, unsupported file format, or AI service issues.',
+                    'details': analysis_result.get('error', 'Unknown error'),
+                    'error_code': 'EXPENSE_ANALYSIS_FAILED'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            analyzed_bill = analysis_result if not isinstance(analysis_result, dict) else analysis_result.get('analyzed_bill')
 
-        serializer = TallyExpenseAnalyzedBillSerializer(analyzed_bill)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        # Check for duplicate bills after analysis
+        is_duplicate, duplicate_bills, max_similarity = check_duplicate_tally_expense_bill(bill, organization)
+
+        response_data = {
+            "detail": "Tally expense bill analyzed successfully",
+            "analyzed_bill": TallyExpenseAnalyzedBillSerializer(analyzed_bill).data
+        }
+
+        # Add duplicate warnings if found
+        if is_duplicate:
+            duplicate_warnings = []
+            for dup in duplicate_bills:
+                duplicate_warnings.append({
+                    "duplicate_bill_id": str(dup['bill'].id),
+                    "duplicate_bill_name": dup['bill'].bill_munshi_name,
+                    "similarity_score": round(dup['similarity_score'], 2),
+                    "match_reasons": dup['match_reasons'],
+                    "invoice_number": dup['invoice_number'],
+                    "vendor_name": dup['vendor_name'],
+                    "total": dup['total'],
+                    "date": dup['date'],
+                    "status": dup['bill'].status
+                })
+
+            response_data.update({
+                "duplicate_warning": True,
+                "duplicate_count": len(duplicate_bills),
+                "max_similarity": round(max_similarity, 2),
+                "duplicate_bills": duplicate_warnings,
+                "warning_message": f"⚠️ DUPLICATE DETECTED: Found {len(duplicate_bills)} similar Tally expense bill(s) in your organization. "
+                                  f"This bill appears to be {round(max_similarity, 1)}% similar to existing bills. "
+                                  "Please review carefully before proceeding to avoid duplicate entries."
+            })
+
+            logger.warning(f"Duplicate Tally expense bill detected for {bill.bill_munshi_name} - {len(duplicate_bills)} similar bills found")
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
     except Exception as e:
         logger.error(f"Expense bill analysis failed: {str(e)}")
@@ -918,6 +1322,43 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
             # Bulk create products
             if created_products:
                 TallyExpenseAnalyzedProduct.objects.bulk_create(created_products)
+                logger.info(f"Successfully created {len(created_products)} expense products for bill {analyzed_bill.id}")
+
+                # ✅ AUTO-CREATE CONSOLIDATED PRODUCT FOR MULTI-ITEM BILLS
+                if len(created_products) > 1:
+                    try:
+                        # Delete existing consolidated product if exists
+                        TallyExpenseConsolidatedProduct.objects.filter(expense_bill=analyzed_bill).delete()
+
+                        # Calculate consolidated data
+                        total_amount = sum(p.amount for p in created_products)
+                        items_count = len(created_products)
+
+                        # Create detailed breakdown
+                        item_details = []
+                        for product in created_products:
+                            item_details.append(f'• {product.item_details} (Amount: ₹{product.amount})')
+
+                        consolidated_details = f'Consolidated {items_count} expense entries:\n' + '\n'.join(item_details)
+
+                        # Create consolidated product
+                        consolidated_product = TallyExpenseConsolidatedProduct.objects.create(
+                            expense_bill=analyzed_bill,
+                            organization=organization,
+                            item_details=consolidated_details,
+                            amount=total_amount,
+                            debit_or_credit=TallyExpenseConsolidatedProduct.DebitCredit.DEBIT,  # Default for expenses
+                            original_entries_count=items_count,
+                            consolidation_notes=f'Auto-created during existing data processing for {items_count} expense entries'
+                        )
+
+                        logger.info(f"✅ Auto-created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
+
+                    except Exception as e:
+                        logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")
+                        # Don't raise - consolidated product creation failure shouldn't break the main flow
+                else:
+                    logger.info(f"ℹ️ Skipping consolidated expense product creation - bill has only {len(created_products)} item(s)")
 
             # Update bill status
             bill.status = TallyExpenseBill.BillStatus.ANALYSED
@@ -938,13 +1379,13 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
 @extend_schema(
     summary="Get Expense Bill Detail",
     description="Get detailed information about a specific expense bill including analysis data",
-    responses={200: TallyExpenseBillSerializer},
+    responses={200: "TallyExpenseBillDetailSerializer"},
     tags=['Tally Expense Bills']
 )
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsOrgAdmin])
 def expense_bill_detail(request, org_id, bill_id):
-    """Get expense bill detail including analysis data"""
+    """Get expense bill detail including analysis data using proper serializer"""
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response(
@@ -957,101 +1398,18 @@ def expense_bill_detail(request, org_id, bill_id):
         )
 
     try:
-        # Fetch the TallyExpenseBill
+        # Fetch the TallyExpenseBill using the new serializer
         bill = TallyExpenseBill.objects.get(
             id=bill_id,
             organization=organization
         )
-        # Get a random bill with 'Analysed' status
-        next_bill_id = None
-        analysed_bills = TallyExpenseBill.objects.filter(
-            organization=organization,
-            status=TallyExpenseBill.BillStatus.ANALYSED
-        ).exclude(id=bill_id).values_list('id', flat=True)
 
-        if analysed_bills:
-            next_bill_id = str(random.choice(list(analysed_bills)))
+        # Use the enhanced serializer with analyzed data
+        from .serializers import TallyExpenseBillDetailSerializer
+        serializer = TallyExpenseBillDetailSerializer(bill, context={'request': request})
 
-        # Get the related TallyExpenseAnalyzedBill if it exists
-        try:
-            analyzed_bill = TallyExpenseAnalyzedBill.objects.select_related(
-                'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes'
-            ).prefetch_related(
-                'products__chart_of_accounts'
-            ).get(selected_bill=bill, organization=organization)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
-            # Get vendor ledger
-            vendor_ledger = analyzed_bill.vendor
-
-            # Get analyzed bill products
-            analyzed_bill_products = analyzed_bill.products.all()
-
-            # Format bill date
-            bill_date_str = analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
-
-            # Get organization name as team_slug
-            team_slug = organization.name if hasattr(organization, 'name') else str(organization.id)
-
-            # Structure the analyzed data in expense format
-            bill_data = {
-                "name": vendor_ledger.name if vendor_ledger else "No Ledger",
-                "voucher": analyzed_bill.voucher or "",
-                "bill_no": analyzed_bill.bill_no,
-                "bill_date": bill_date_str,
-                "due_date": analyzed_bill.due_date.strftime('%d-%m-%Y') if analyzed_bill.due_date else None,
-                "total": float(analyzed_bill.total or 0),
-                "vendor_debit_or_credit": analyzed_bill.vendor_debit_or_credit,
-                "vendor_amount": float(analyzed_bill.vendor_amount or 0),
-                "company_id": team_slug,
-                "taxes": {
-                    "igst": {
-                        "amount": float(analyzed_bill.igst or 0),
-                        "ledger": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "No Tax Ledger",
-                        "debit_or_credit": analyzed_bill.igst_debit_or_credit,
-                    },
-                    "cgst": {
-                        "amount": float(analyzed_bill.cgst or 0),
-                        "ledger": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "No Tax Ledger",
-                        "debit_or_credit": analyzed_bill.cgst_debit_or_credit,
-                    },
-                    "sgst": {
-                        "amount": float(analyzed_bill.sgst or 0),
-                        "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
-                        "debit_or_credit": analyzed_bill.sgst_debit_or_credit,
-                    }
-                },
-                "expense_items": [
-                    {
-                        "item_id": str(item.id),
-                        "item_details": item.item_details,
-                        "chart_of_accounts": str(item.chart_of_accounts) if item.chart_of_accounts else "No COA Ledger",
-                        "amount": float(item.amount or 0),
-                        "debit_or_credit": item.debit_or_credit,
-                    }
-                    for item in analyzed_bill_products
-                ],
-            }
-
-            # Include the base bill information
-            bill_serializer = TallyExpenseBillSerializer(bill, context={'request': request})
-
-            response_data = {
-                "bill": bill_serializer.data,
-                "analyzed_data": bill_data,
-                "analyzed_bill": analyzed_bill.id,
-                "next_bill": next_bill_id
-            }
-
-            return Response(response_data)
-
-        except TallyExpenseAnalyzedBill.DoesNotExist:
-            # If no analyzed bill exists, return just the base bill info
-            bill_serializer = TallyExpenseBillSerializer(bill, context={'request': request})
-            return Response({
-                "bill": bill_serializer.data,
-                "analyzed_data": None,
-                "message": "Bill has not been analyzed yet"
-            })
 
     except TallyExpenseBill.DoesNotExist:
         return Response(
@@ -1240,6 +1598,59 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
         expense_items = analyzed_data.get('expense_items', [])
         if expense_items:
             update_analyzed_expense_products(analyzed_bill, expense_items, organization)
+
+        # 🔄 Handle consolidate_prod array from frontend (similar to Zoho implementation)
+        consolidate_prod_data = analyzed_data.get('consolidate_prod', [])
+        if consolidate_prod_data:
+            try:
+                # Handle consolidated product updates/creation
+                for idx, consolidated_data in enumerate(consolidate_prod_data):
+                    consolidated_id = consolidated_data.get('id')
+                    if consolidated_id:
+                        # Update existing consolidated product
+                        try:
+                            consolidated_product = TallyExpenseConsolidatedProduct.objects.get(
+                                id=consolidated_id,
+                                expense_bill=analyzed_bill
+                            )
+
+                            # Update fields from frontend
+                            consolidated_product.item_details = consolidated_data.get('item_details', consolidated_product.item_details)
+                            consolidated_product.amount = consolidated_data.get('amount', consolidated_product.amount)
+                            consolidated_product.debit_or_credit = consolidated_data.get('debit_or_credit', consolidated_product.debit_or_credit)
+
+                            # Handle foreign key fields
+                            chart_of_accounts_id = consolidated_data.get('chart_of_accounts')
+                            if chart_of_accounts_id:
+                                consolidated_product.chart_of_accounts_id = chart_of_accounts_id
+
+                            consolidated_product.save()
+
+                        except TallyExpenseConsolidatedProduct.DoesNotExist:
+                            consolidated_id = None  # Fall through to create new
+
+                    if not consolidated_id:
+                        # Create new consolidated product
+                        TallyExpenseConsolidatedProduct.objects.create(
+                            expense_bill=analyzed_bill,
+                            organization=organization,
+                            item_details=consolidated_data.get('item_details', 'New consolidated expense from verification'),
+                            amount=consolidated_data.get('amount', 0),
+                            debit_or_credit=consolidated_data.get('debit_or_credit', 'debit'),
+                            chart_of_accounts_id=consolidated_data.get('chart_of_accounts'),
+                            original_entries_count=1,
+                            consolidation_notes='Created from frontend verification'
+                        )
+
+            except Exception as consolidate_error:
+                logger.error(f"Error processing consolidate_prod array: {consolidate_error}")
+                # Don't fail the entire request, just log the error
+
+        # Handle consolidation flag
+        consolidate_flag = analyzed_data.get('consolidate', False)
+        if consolidate_flag != getattr(analyzed_bill, 'consolidate', False):
+            analyzed_bill.consolidate = consolidate_flag
+            analyzed_bill.save()
 
         return analyzed_bill
 
@@ -1785,33 +2196,56 @@ def expense_bills_sync_list(request, org_id):
 
 
 def prepare_expense_sync_data(analyzed_bill, organization):
-    """Prepare expense bill data for Tally sync using structured format"""
+    """Prepare expense bill data for Tally sync using structured format with consolidation support"""
     vendor_ledger = analyzed_bill.vendor
-    analyzed_bill_products = analyzed_bill.products.all()
     bill_date_str = analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
 
     # Initialize DR and CR ledgers for expense sync
     dr_ledger = []
     cr_ledger = []
 
-    # Process expense line items based on their debit_or_credit field
-    total_debit = 0
-    total_credit = 0
+    # 🔄 SIMPLE CONSOLIDATION CHECK: Use consolidate flag to decide which data to use
+    if hasattr(analyzed_bill, 'consolidate') and analyzed_bill.consolidate:
+        # ✅ USE CONSOLIDATED TABLE DATA
+        try:
+            consolidated_expense = analyzed_bill.consolidated_product
+            logger.info(f"Using consolidated data for expense bill {analyzed_bill.bill_no}")
 
-    for item in analyzed_bill_products:
-        if item.amount and item.amount > 0:
-            ledger_entry = {
-                "LEDGERNAME": str(item.chart_of_accounts) if item.chart_of_accounts else "No COA Ledger",
-                "AMOUNT": float(item.amount)
-            }
+            # Add consolidated expense entry
+            if consolidated_expense.amount and consolidated_expense.amount > 0:
+                consolidated_entry = {
+                    "LEDGERNAME": str(consolidated_expense.chart_of_accounts) if consolidated_expense.chart_of_accounts else "General Expenses",
+                    "AMOUNT": float(consolidated_expense.amount)
+                }
+                # Use the debit_or_credit from consolidated product
+                if consolidated_expense.debit_or_credit == 'debit':
+                    dr_ledger.append(consolidated_entry)
+                elif consolidated_expense.debit_or_credit == 'credit':
+                    cr_ledger.append(consolidated_entry)
 
-            # Simple rule: debit goes to DR_LEDGER, credit goes to CR_LEDGER
-            if item.debit_or_credit == 'debit':
-                dr_ledger.append(ledger_entry)
-                total_debit += float(item.amount)
-            elif item.debit_or_credit == 'credit':
-                cr_ledger.append(ledger_entry)
-                total_credit += float(item.amount)
+        except Exception as e:
+            logger.error(f"Error accessing consolidated expense for bill {analyzed_bill.bill_no}: {e}")
+            # Fallback to individual products if consolidated data fails
+            analyzed_bill.consolidate = False  # Reset flag for this request
+
+    if not hasattr(analyzed_bill, 'consolidate') or not analyzed_bill.consolidate:
+        # ✅ USE INDIVIDUAL EXPENSE PRODUCTS (Original logic)
+        analyzed_bill_products = analyzed_bill.products.all()
+        logger.info(f"Using individual expense entries for bill {analyzed_bill.bill_no} ({analyzed_bill_products.count()} entries)")
+
+        # Process expense line items based on their debit_or_credit field
+        for item in analyzed_bill_products:
+            if item.amount and item.amount > 0:
+                ledger_entry = {
+                    "LEDGERNAME": str(item.chart_of_accounts) if item.chart_of_accounts else "No COA Ledger",
+                    "AMOUNT": float(item.amount)
+                }
+
+                # Simple rule: debit goes to DR_LEDGER, credit goes to CR_LEDGER
+                if item.debit_or_credit == 'debit':
+                    dr_ledger.append(ledger_entry)
+                elif item.debit_or_credit == 'credit':
+                    cr_ledger.append(ledger_entry)
 
     # Process IGST based on debit_or_credit field
     if analyzed_bill.igst and analyzed_bill.igst > 0 and analyzed_bill.igst_taxes:
@@ -1821,10 +2255,8 @@ def prepare_expense_sync_data(analyzed_bill, organization):
         }
         if analyzed_bill.igst_debit_or_credit == 'debit':
             dr_ledger.append(igst_entry)
-            total_debit += float(analyzed_bill.igst)
         elif analyzed_bill.igst_debit_or_credit == 'credit':
             cr_ledger.append(igst_entry)
-            total_credit += float(analyzed_bill.igst)
 
     # Process CGST based on debit_or_credit field
     if analyzed_bill.cgst and analyzed_bill.cgst > 0 and analyzed_bill.cgst_taxes:
@@ -1834,10 +2266,8 @@ def prepare_expense_sync_data(analyzed_bill, organization):
         }
         if analyzed_bill.cgst_debit_or_credit == 'debit':
             dr_ledger.append(cgst_entry)
-            total_debit += float(analyzed_bill.cgst)
         elif analyzed_bill.cgst_debit_or_credit == 'credit':
             cr_ledger.append(cgst_entry)
-            total_credit += float(analyzed_bill.cgst)
 
     # Process SGST based on debit_or_credit field
     if analyzed_bill.sgst and analyzed_bill.sgst > 0 and analyzed_bill.sgst_taxes:
@@ -1847,12 +2277,47 @@ def prepare_expense_sync_data(analyzed_bill, organization):
         }
         if analyzed_bill.sgst_debit_or_credit == 'debit':
             dr_ledger.append(sgst_entry)
-            total_debit += float(analyzed_bill.sgst)
         elif analyzed_bill.sgst_debit_or_credit == 'credit':
             cr_ledger.append(sgst_entry)
-            total_credit += float(analyzed_bill.sgst)
 
     # Process vendor based on vendor_debit_or_credit field using vendor_amount
+    if vendor_ledger and analyzed_bill.vendor_amount and analyzed_bill.vendor_amount > 0:
+        vendor_entry = {
+            "LEDGERNAME": vendor_ledger.name,
+            "AMOUNT": float(analyzed_bill.vendor_amount)
+        }
+
+        # Add vendor to appropriate ledger based on vendor_debit_or_credit
+        if analyzed_bill.vendor_debit_or_credit == 'debit':
+            dr_ledger.append(vendor_entry)
+        elif analyzed_bill.vendor_debit_or_credit == 'credit':
+            cr_ledger.append(vendor_entry)
+
+    # Build expense sync payload with structured format similar to vendor bills
+    vendor_name = vendor_ledger.name if vendor_ledger and vendor_ledger.name else "Unknown Vendor"
+
+    # Construct the expense bill URL
+    bill_url = f"https://billmunshi.com/tally/expense-bill/{analyzed_bill.selected_bill.id}"
+
+    # Create the notes message
+    notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
+
+    bill_data = {
+        "id": analyzed_bill.id,
+        "voucher": analyzed_bill.voucher or "",
+        "bill_no": analyzed_bill.bill_no,
+        "bill_date": bill_date_str,
+        "total": float(analyzed_bill.total or 0),
+        "name": vendor_name,
+        "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "No Ledger",
+        "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
+        "DR_LEDGER": dr_ledger,
+        "CR_LEDGER": cr_ledger,
+        "notes": notes_message,
+        "created_at": analyzed_bill.created_at
+    }
+
+    return {"data": bill_data}
     if vendor_ledger and analyzed_bill.vendor_amount and analyzed_bill.vendor_amount > 0:
         vendor_entry = {
             "LEDGERNAME": vendor_ledger.name,
