@@ -65,15 +65,15 @@ def create_consolidated_vendor_product(zoho_bill, organization):
     if not products.exists():
         return None
 
-    # Calculate consolidated data
+    # Calculate consolidated data using correct field names
     total_quantity = sum(float(p.quantity or 0) for p in products)
-    total_amount = sum(float(p.total or 0) for p in products)
+    total_amount = sum(float(p.amount or 0) for p in products)  # Fixed: use 'amount' not 'total'
     items_count = products.count()
 
-    # Create detailed breakdown
+    # Create detailed breakdown using correct field names
     item_details = []
     for product in products:
-        item_details.append(f"• {product.name} (Qty: {product.quantity}, Rate: ₹{product.rate})")
+        item_details.append(f"• {product.item_name} (Qty: {product.quantity}, Rate: ₹{product.rate})")  # Fixed: use 'item_name' not 'name'
 
     consolidated_details = f"Consolidated {items_count} items:\n" + "\n".join(item_details)
 
@@ -87,13 +87,13 @@ def create_consolidated_vendor_product(zoho_bill, organization):
             tax_rate = float(product.taxes.percentage or 0)
             if tax_id in tax_usage:
                 tax_usage[tax_id]['count'] += 1
-                tax_usage[tax_id]['amount'] += float(product.total or 0)
+                tax_usage[tax_id]['amount'] += float(product.amount or 0)  # Fixed: use 'amount' not 'total'
             else:
                 tax_usage[tax_id] = {
                     'tax': product.taxes,
                     'rate': tax_rate,
                     'count': 1,
-                    'amount': float(product.total or 0)
+                    'amount': float(product.amount or 0)  # Fixed: use 'amount' not 'total'
                 }
 
         # Use tax with highest amount (most significant)
@@ -109,16 +109,18 @@ def create_consolidated_vendor_product(zoho_bill, organization):
             chart_id = product.chart_of_accounts.id
             if chart_id in chart_usage:
                 chart_usage[chart_id]['count'] += 1
-                chart_usage[chart_id]['amount'] += float(product.total or 0)
+                chart_usage[chart_id]['amount'] += float(product.amount or 0)  # Fixed: use 'amount' not 'total'
             else:
                 chart_usage[chart_id] = {
                     'chart': product.chart_of_accounts,
                     'count': 1,
-                    'amount': float(product.total or 0)
+                    'amount': float(product.amount or 0)  # Fixed: use 'amount' not 'total'
                 }
 
         # Use chart of accounts with highest amount
         if chart_usage:
+            most_significant_chart = max(chart_usage.values(), key=lambda x: x['amount'])
+            chart_of_accounts_to_use = most_significant_chart['chart']
             most_significant_chart = max(chart_usage.values(), key=lambda x: x['amount'])
             chart_of_accounts_to_use = most_significant_chart['chart']
 
@@ -177,7 +179,7 @@ def get_line_items_for_sync(zoho_bill):
             # Fallback to creating consolidated data on the fly
             products = zoho_bill.products.all()
             if products.exists():
-                total_amount = sum(float(p.total or 0) for p in products)
+                total_amount = sum(float(p.amount or 0) for p in products)  # Fixed: use 'amount' not 'total'
                 return [{
                     "name": f"Multiple items consolidated ({products.count()} products)",
                     "description": f"Consolidated from {products.count()} individual items",
@@ -193,12 +195,12 @@ def get_line_items_for_sync(zoho_bill):
         line_items = []
         for product in zoho_bill.products.all():
             line_items.append({
-                "name": product.name,
-                "description": product.name,
+                "name": product.item_name,  # Fixed: use 'item_name' not 'name'
+                "description": product.item_name,  # Fixed: use 'item_name' not 'name'
                 "rate": str(product.rate),
                 "quantity": str(product.quantity),
                 "unit": "unit",
-                "item_total": str(product.total),
+                "item_total": str(product.amount),  # Fixed: use 'amount' not 'total'
                 "tax_id": product.taxes.taxId if product.taxes else None,
                 "account_id": product.chart_of_accounts.accountId if product.chart_of_accounts else None,
                 "is_consolidated": False
@@ -1619,16 +1621,12 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                                         zohoBill=updated_bill
                                     )
 
-                                    # Update fields from frontend
-                                    consolidated_product.item_name = consolidated_data.get('item_name', consolidated_product.item_name)
-                                    consolidated_product.item_details = consolidated_data.get('item_details', consolidated_product.item_details)
-                                    consolidated_product.price = consolidated_data.get('rate', consolidated_product.price)
-                                    consolidated_product.quantity = consolidated_data.get('quantity', consolidated_product.quantity)
-                                    consolidated_product.amount = consolidated_data.get('amount', consolidated_product.amount)
-                                    consolidated_product.product_gst = consolidated_data.get('product_gst', consolidated_product.product_gst)
-                                    consolidated_product.igst = consolidated_data.get('igst', consolidated_product.igst)
-                                    consolidated_product.cgst = consolidated_data.get('cgst', consolidated_product.cgst)
-                                    consolidated_product.sgst = consolidated_data.get('sgst', consolidated_product.sgst)
+                                    # Update fields from frontend using CORRECT field names
+                                    consolidated_product.consolidated_item_name = consolidated_data.get('item_name', consolidated_product.consolidated_item_name)
+                                    consolidated_product.consolidated_item_details = consolidated_data.get('item_details', consolidated_product.consolidated_item_details)
+                                    consolidated_product.consolidated_rate = consolidated_data.get('rate', consolidated_product.consolidated_rate)
+                                    consolidated_product.total_quantity = consolidated_data.get('quantity', consolidated_product.total_quantity)
+                                    consolidated_product.consolidated_amount = consolidated_data.get('amount', consolidated_product.consolidated_amount)
 
                                     # Handle foreign key fields
                                     chart_of_accounts_id = consolidated_data.get('chart_of_accounts')
@@ -1639,6 +1637,10 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                                     if taxes_id:
                                         consolidated_product.taxes_id = taxes_id
 
+                                    # Handle other fields
+                                    consolidated_product.itc_eligibility = consolidated_data.get('itc_eligibility', consolidated_product.itc_eligibility)
+                                    consolidated_product.reverse_charge_tax_id = consolidated_data.get('reverse_charge_tax_id', consolidated_product.reverse_charge_tax_id)
+
                                     consolidated_product.save()
                                     logger.error(f"[DEBUG] vendor_bill_verify_view - Updated consolidated product {consolidated_id}")
 
@@ -1647,21 +1649,19 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                                     consolidated_id = None  # Fall through to create new
 
                             if not consolidated_id:
-                                # Create new consolidated product
+                                # Create new consolidated product using CORRECT field names
                                 consolidated_product = VendorZohoConsolidatedProduct.objects.create(
                                     zohoBill=updated_bill,
                                     organization=organization,
-                                    item_name=consolidated_data.get('item_name', 'Consolidated Product'),
-                                    item_details=consolidated_data.get('item_details', 'New consolidated product from verification'),
-                                    price=consolidated_data.get('rate', 0),
-                                    quantity=consolidated_data.get('quantity', 1),
-                                    amount=consolidated_data.get('amount', 0),
-                                    product_gst=consolidated_data.get('product_gst', '18%'),
-                                    igst=consolidated_data.get('igst', 0),
-                                    cgst=consolidated_data.get('cgst', 0),
-                                    sgst=consolidated_data.get('sgst', 0),
+                                    consolidated_item_name=consolidated_data.get('item_name', 'Consolidated Product'),
+                                    consolidated_item_details=consolidated_data.get('item_details', 'New consolidated product from verification'),
+                                    consolidated_rate=consolidated_data.get('rate', 0),
+                                    total_quantity=consolidated_data.get('quantity', 1),
+                                    consolidated_amount=consolidated_data.get('amount', 0),
                                     chart_of_accounts_id=consolidated_data.get('chart_of_accounts'),
                                     taxes_id=consolidated_data.get('taxes'),
+                                    itc_eligibility=consolidated_data.get('itc_eligibility', 'eligible'),
+                                    reverse_charge_tax_id=consolidated_data.get('reverse_charge_tax_id', False),
                                     original_items_count=1,
                                     consolidation_notes='Created from frontend verification'
                                 )
