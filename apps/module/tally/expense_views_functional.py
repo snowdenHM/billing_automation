@@ -1603,44 +1603,29 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
         consolidate_prod_data = analyzed_data.get('consolidate_prod', [])
         if consolidate_prod_data:
             try:
-                # Handle consolidated product updates/creation
+                # 🔄 FIRST: Clear existing consolidated products to prevent duplicates
+                existing_consolidated = TallyExpenseConsolidatedProduct.objects.filter(expense_bill=analyzed_bill)
+                if existing_consolidated.exists():
+                    existing_count = existing_consolidated.count()
+                    existing_consolidated.delete()
+                    logger.info(f"Deleted {existing_count} existing consolidated products before creating new ones")
+
+                # Handle consolidated product creation (always create new after clearing)
                 for idx, consolidated_data in enumerate(consolidate_prod_data):
-                    consolidated_id = consolidated_data.get('id')
-                    if consolidated_id:
-                        # Update existing consolidated product
-                        try:
-                            consolidated_product = TallyExpenseConsolidatedProduct.objects.get(
-                                id=consolidated_id,
-                                expense_bill=analyzed_bill
-                            )
+                    logger.info(f"Creating consolidated expense product {idx + 1}: {consolidated_data.get('item_details', 'Unnamed')}")
 
-                            # Update fields from frontend
-                            consolidated_product.item_details = consolidated_data.get('item_details', consolidated_product.item_details)
-                            consolidated_product.amount = consolidated_data.get('amount', consolidated_product.amount)
-                            consolidated_product.debit_or_credit = consolidated_data.get('debit_or_credit', consolidated_product.debit_or_credit)
-
-                            # Handle foreign key fields
-                            chart_of_accounts_id = consolidated_data.get('chart_of_accounts')
-                            if chart_of_accounts_id:
-                                consolidated_product.chart_of_accounts_id = chart_of_accounts_id
-
-                            consolidated_product.save()
-
-                        except TallyExpenseConsolidatedProduct.DoesNotExist:
-                            consolidated_id = None  # Fall through to create new
-
-                    if not consolidated_id:
-                        # Create new consolidated product
-                        TallyExpenseConsolidatedProduct.objects.create(
-                            expense_bill=analyzed_bill,
-                            organization=organization,
-                            item_details=consolidated_data.get('item_details', 'New consolidated expense from verification'),
-                            amount=consolidated_data.get('amount', 0),
-                            debit_or_credit=consolidated_data.get('debit_or_credit', 'debit'),
-                            chart_of_accounts_id=consolidated_data.get('chart_of_accounts'),
-                            original_entries_count=1,
-                            consolidation_notes='Created from frontend verification'
-                        )
+                    # Create new consolidated product (since we cleared existing ones)
+                    TallyExpenseConsolidatedProduct.objects.create(
+                        expense_bill=analyzed_bill,
+                        organization=organization,
+                        item_details=consolidated_data.get('item_details', 'Consolidated expense from verification'),
+                        amount=consolidated_data.get('amount', 0),
+                        debit_or_credit=consolidated_data.get('debit_or_credit', 'debit'),
+                        chart_of_accounts_id=consolidated_data.get('chart_of_accounts'),
+                        original_entries_count=1,
+                        consolidation_notes='Created from frontend verification'
+                    )
+                    logger.info(f"Created new consolidated expense product for item {idx + 1}")
 
             except Exception as consolidate_error:
                 logger.error(f"Error processing consolidate_prod array: {consolidate_error}")

@@ -1414,49 +1414,29 @@ def journal_bill_verify_view(request, org_id, bill_id):
                     logger.info(f"[DEBUG] journal_bill_verify_view - Processing consolidate_prod array with {len(consolidate_prod_data)} items")
 
                     try:
-                        # Handle consolidated product updates/creation
+                        # 🔄 FIRST: Clear existing consolidated products to prevent duplicates
+                        existing_consolidated = updated_bill.consolidated_products.all()
+                        if existing_consolidated.exists():
+                            existing_count = existing_consolidated.count()
+                            existing_consolidated.delete()
+                            logger.info(f"[DEBUG] journal_bill_verify_view - Deleted {existing_count} existing consolidated products before creating new ones")
+
+                        # Handle consolidated product creation (always create new after clearing)
                         for idx, consolidated_data in enumerate(consolidate_prod_data):
-                            logger.info(f"[DEBUG] journal_bill_verify_view - Processing consolidated journal entry {idx}: {consolidated_data}")
+                            logger.info(f"[DEBUG] journal_bill_verify_view - Creating consolidated journal entry {idx + 1}: {consolidated_data.get('item_details', 'Unnamed')}")
 
-                            consolidated_id = consolidated_data.get('id')
-                            if consolidated_id:
-                                # Update existing consolidated product
-                                try:
-                                    consolidated_product = JournalZohoConsolidatedProduct.objects.get(
-                                        id=consolidated_id,
-                                        zohoBill=updated_bill
-                                    )
-
-                                    # Update fields from frontend
-                                    consolidated_product.consolidated_item_details = consolidated_data.get('item_details', consolidated_product.consolidated_item_details)
-                                    consolidated_product.consolidated_amount = consolidated_data.get('amount', consolidated_product.consolidated_amount)
-                                    consolidated_product.debit_or_credit = consolidated_data.get('debit_or_credit', consolidated_product.debit_or_credit)
-
-                                    # Handle foreign key fields
-                                    chart_of_accounts_id = consolidated_data.get('chart_of_accounts')
-                                    if chart_of_accounts_id:
-                                        consolidated_product.chart_of_accounts_id = chart_of_accounts_id
-
-                                    consolidated_product.save()
-                                    logger.info(f"[DEBUG] journal_bill_verify_view - Updated consolidated journal entry {consolidated_id}")
-
-                                except JournalZohoConsolidatedProduct.DoesNotExist:
-                                    logger.info(f"[DEBUG] journal_bill_verify_view - Consolidated journal entry {consolidated_id} not found, creating new one")
-                                    consolidated_id = None  # Fall through to create new
-
-                            if not consolidated_id:
-                                # Create new consolidated product
-                                consolidated_product = JournalZohoConsolidatedProduct.objects.create(
-                                    zohoBill=updated_bill,
-                                    organization=organization,
-                                    consolidated_item_details=consolidated_data.get('item_details', 'New consolidated journal entry from verification'),
-                                    consolidated_amount=consolidated_data.get('amount', 0),
-                                    debit_or_credit=consolidated_data.get('debit_or_credit', 'debit'),
-                                    chart_of_accounts_id=consolidated_data.get('chart_of_accounts'),
-                                    original_entries_count=1,
-                                    consolidation_notes='Created from frontend verification'
-                                )
-                                logger.info(f"[DEBUG] journal_bill_verify_view - Created new consolidated journal entry {consolidated_product.id}")
+                            # Create new consolidated product (since we cleared existing ones)
+                            consolidated_product = JournalZohoConsolidatedProduct.objects.create(
+                                zohoBill=updated_bill,
+                                organization=organization,
+                                consolidated_item_details=consolidated_data.get('item_details', 'Consolidated journal entry from verification'),
+                                consolidated_amount=consolidated_data.get('amount', 0),
+                                debit_or_credit=consolidated_data.get('debit_or_credit', 'debit'),
+                                chart_of_accounts_id=consolidated_data.get('chart_of_accounts'),
+                                original_entries_count=1,
+                                consolidation_notes='Created from frontend verification'
+                            )
+                            logger.info(f"[DEBUG] journal_bill_verify_view - Created new consolidated journal entry {consolidated_product.id}")
 
                     except Exception as consolidate_error:
                         logger.error(f"[DEBUG] journal_bill_verify_view - Error processing consolidate_prod array: {consolidate_error}")

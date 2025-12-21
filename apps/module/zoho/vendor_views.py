@@ -1669,17 +1669,9 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                         # Don't fail the entire request for consolidation errors
                 elif updated_bill.consolidate and consolidate_prod_data:
                     logger.info(f"Skipping auto-consolidation for bill {updated_bill.id} - consolidate_prod array was provided")
-                else:
-                    # Remove consolidated products if consolidation is disabled
-                    try:
-                        consolidated_products = updated_bill.consolidated_products.all()
-                        if consolidated_products.exists():
-                            count = consolidated_products.count()
-                            consolidated_products.delete()
-                            logger.info(f"Deleted {count} consolidated product(s) as consolidation was disabled")
-                    except Exception as delete_error:
-                        logger.error(f"Error deleting consolidated products: {str(delete_error)}")
-                        # Don't fail the entire request
+                # NOTE: We don't delete consolidated products when consolidate=false
+                # The consolidate flag only controls VIEW/SYNC behavior, not data persistence
+                # Users should be able to switch between individual and consolidated views without losing data
 
                 # Log summary only if products were processed
                 if products_data is not None:

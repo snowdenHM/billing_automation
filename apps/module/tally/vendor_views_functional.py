@@ -1743,56 +1743,35 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
         consolidate_prod_data = analyzed_data.get('consolidate_prod', [])
         if consolidate_prod_data:
             try:
-                # Handle consolidated product updates/creation
+                # 🔄 FIRST: Clear existing consolidated products to prevent duplicates
+                existing_consolidated = TallyVendorConsolidatedProduct.objects.filter(vendor_bill_analyzed=analyzed_bill)
+                if existing_consolidated.exists():
+                    existing_count = existing_consolidated.count()
+                    existing_consolidated.delete()
+                    logger.info(f"Deleted {existing_count} existing consolidated products before creating new ones")
+
+                # Handle consolidated product creation (always create new after clearing)
                 for idx, consolidated_data in enumerate(consolidate_prod_data):
-                    consolidated_id = consolidated_data.get('id')
-                    if consolidated_id:
-                        # Update existing consolidated product
-                        try:
-                            consolidated_product = TallyVendorConsolidatedProduct.objects.get(
-                                id=consolidated_id,
-                                vendor_bill_analyzed=analyzed_bill
-                            )
+                    logger.info(f"Creating consolidated vendor product {idx + 1}: {consolidated_data.get('item_name', 'Unnamed')}")
 
-                            # Update fields from frontend
-                            consolidated_product.item_name = consolidated_data.get('item_name', consolidated_product.item_name)
-                            consolidated_product.item_details = consolidated_data.get('item_details', consolidated_product.item_details)
-                            consolidated_product.price = consolidated_data.get('price', consolidated_product.price)
-                            consolidated_product.quantity = consolidated_data.get('quantity', consolidated_product.quantity)
-                            consolidated_product.amount = consolidated_data.get('amount', consolidated_product.amount)
-                            consolidated_product.product_gst = consolidated_data.get('product_gst', consolidated_product.product_gst)
-                            consolidated_product.igst = consolidated_data.get('igst', consolidated_product.igst)
-                            consolidated_product.cgst = consolidated_data.get('cgst', consolidated_product.cgst)
-                            consolidated_product.sgst = consolidated_data.get('sgst', consolidated_product.sgst)
-
-                            # Handle foreign key fields
-                            taxes_id = consolidated_data.get('taxes')
-                            if taxes_id:
-                                consolidated_product.taxes_id = taxes_id
-
-                            consolidated_product.save()
-
-                        except TallyVendorConsolidatedProduct.DoesNotExist:
-                            consolidated_id = None  # Fall through to create new
-
-                    if not consolidated_id:
-                        # Create new consolidated product
-                        TallyVendorConsolidatedProduct.objects.create(
-                            vendor_bill_analyzed=analyzed_bill,
-                            organization=organization,
-                            item_name=consolidated_data.get('item_name', 'Consolidated Product'),
-                            item_details=consolidated_data.get('item_details', 'New consolidated product from verification'),
-                            price=consolidated_data.get('price', 0),
-                            quantity=consolidated_data.get('quantity', 1),
-                            amount=consolidated_data.get('amount', 0),
-                            product_gst=consolidated_data.get('product_gst', '18%'),
-                            igst=consolidated_data.get('igst', 0),
-                            cgst=consolidated_data.get('cgst', 0),
-                            sgst=consolidated_data.get('sgst', 0),
-                            taxes_id=consolidated_data.get('taxes'),
-                            original_items_count=1,
-                            consolidation_notes='Created from frontend verification'
-                        )
+                    # Create new consolidated product (since we cleared existing ones)
+                    TallyVendorConsolidatedProduct.objects.create(
+                        vendor_bill_analyzed=analyzed_bill,
+                        organization=organization,
+                        item_name=consolidated_data.get('item_name', 'Consolidated Product'),
+                        item_details=consolidated_data.get('item_details', 'Consolidated product from verification'),
+                        price=consolidated_data.get('price', 0),
+                        quantity=consolidated_data.get('quantity', 1),
+                        amount=consolidated_data.get('amount', 0),
+                        product_gst=consolidated_data.get('product_gst', '18%'),
+                        igst=consolidated_data.get('igst', 0),
+                        cgst=consolidated_data.get('cgst', 0),
+                        sgst=consolidated_data.get('sgst', 0),
+                        taxes_id=consolidated_data.get('taxes'),
+                        original_items_count=1,
+                        consolidation_notes='Created from frontend verification'
+                    )
+                    logger.info(f"Created new consolidated vendor product for item {idx + 1}")
 
             except Exception as consolidate_error:
                 logger.error(f"Error processing consolidate_prod array: {consolidate_error}")
