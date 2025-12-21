@@ -264,6 +264,41 @@ class ZohoExpenseBillDetailSerializer(serializers.Serializer):
     zoho_bill = ExpenseZohoBillSerializer(read_only=True)
     next_bill = serializers.CharField(read_only=True, allow_null=True)
 
+    def to_representation(self, instance):
+        """Override to ensure organization context is passed to nested serializers"""
+        data = super().to_representation(instance)
+
+        # If we have a zoho_bill, re-serialize it with proper context to ensure consolidate_prod arrays
+        if hasattr(instance, 'zoho_bill') and instance.zoho_bill:
+            # Get organization from the zoho_bill instance
+            organization = getattr(instance.zoho_bill, 'organization', None)
+
+            # Create context with organization for nested serializer
+            nested_context = self.context.copy() if self.context else {}
+            if organization:
+                nested_context['organization'] = organization
+
+            # Re-serialize zoho_bill with organization context
+            zoho_bill_serializer = ExpenseZohoBillSerializer(
+                instance.zoho_bill,
+                context=nested_context
+            )
+            data['zoho_bill'] = zoho_bill_serializer.data
+
+            # Add debug logging
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"[EXPENSE DETAIL SERIALIZER] Re-serialized zoho_bill with organization context for bill {instance.zoho_bill.id}")
+
+            # Check if consolidate_prod was included
+            if 'consolidate_prod' in data['zoho_bill']:
+                consolidate_count = len(data['zoho_bill']['consolidate_prod'])
+                logger.info(f"[EXPENSE DETAIL SERIALIZER] consolidate_prod array included with {consolidate_count} items")
+            else:
+                logger.warning(f"[EXPENSE DETAIL SERIALIZER] consolidate_prod array missing from zoho_bill")
+
+        return data
+
     class Meta:
         ref_name = "ZohoExpenseBillDetail"
 
@@ -405,5 +440,4 @@ class ZohoExpenseBillVerifySerializer(serializers.Serializer):
 
     class Meta:
         ref_name = "ZohoExpenseBillVerify"
-
 
