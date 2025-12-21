@@ -170,31 +170,21 @@ class ExpenseZohoBillSerializer(serializers.ModelSerializer):
 
             # Always include consolidated product data if it exists (regardless of consolidate flag)
             # Return as array for verification flexibility (frontend can add/update multiple consolidated items)
-            try:
-                # Check if consolidated_product attribute exists and has a related object
-                if hasattr(instance, 'consolidated_product'):
-                    consolidated_product = instance.consolidated_product
-                    if consolidated_product:
-                        consolidated_serializer = ExpenseZohoConsolidatedProductSerializer(
-                            consolidated_product,
-                            context=products_context
-                        )
-                        # 🔄 Return as ARRAY for frontend verification flexibility
-                        data['consolidate_prod'] = [consolidated_serializer.data]
-                        # Debug logging
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.info(f"[EXPENSE SERIALIZER] Added consolidated_prod for bill {instance.id}")
-                    else:
-                        data['consolidate_prod'] = []
-                else:
-                    data['consolidate_prod'] = []
-            except (ExpenseZohoConsolidatedProduct.DoesNotExist, AttributeError) as e:
-                # No consolidated product exists, return empty array
-                data['consolidate_prod'] = []
+            consolidated_products = instance.consolidated_products.all()
+            if consolidated_products.exists():
+                consolidated_serializer = ExpenseZohoConsolidatedProductSerializer(
+                    consolidated_products,
+                    many=True,
+                    context=products_context
+                )
+                # 🔄 Return as ARRAY for frontend verification flexibility
+                data['consolidate_prod'] = consolidated_serializer.data
+                # Debug logging
                 import logging
                 logger = logging.getLogger(__name__)
-                logger.info(f"[EXPENSE SERIALIZER] No consolidated product for bill {instance.id}: {str(e)}")
+                logger.info(f"[EXPENSE SERIALIZER] Added {len(consolidated_products)} consolidated_prod items for bill {instance.id}")
+            else:
+                data['consolidate_prod'] = []
 
         return data
 

@@ -124,32 +124,37 @@ def create_consolidated_vendor_product(zoho_bill, organization):
             most_significant_chart = max(chart_usage.values(), key=lambda x: x['amount'])
             chart_of_accounts_to_use = most_significant_chart['chart']
 
-    # Create or update consolidated product
-    consolidated_product, created = VendorZohoConsolidatedProduct.objects.get_or_create(
-        zohoBill=zoho_bill,
-        organization=organization,
-        defaults={
-            'consolidated_item_name': f"Multiple items consolidated ({items_count} products)",
-            'consolidated_item_details': consolidated_details,
-            'total_quantity': 1,  # Single consolidated item
-            'consolidated_rate': total_amount,
-            'consolidated_amount': total_amount,
-            'chart_of_accounts': chart_of_accounts_to_use,
-            'taxes': tax_to_use,
-            'original_items_count': items_count,
-            'consolidation_notes': f"Consolidated from {items_count} individual items. Tax strategy: highest amount. Chart strategy: highest amount."
-        }
-    )
+    # Create or update consolidated product - with ForeignKey, we can have multiple
+    # Check if there's already a consolidated product for this bill
+    existing_consolidated = VendorZohoConsolidatedProduct.objects.filter(
+        zohoBill=zoho_bill
+    ).first()
 
-    if not created:
+    if existing_consolidated:
         # Update existing consolidated product
-        consolidated_product.consolidated_item_details = consolidated_details
-        consolidated_product.consolidated_amount = total_amount
-        consolidated_product.consolidated_rate = total_amount
-        consolidated_product.chart_of_accounts = chart_of_accounts_to_use
-        consolidated_product.taxes = tax_to_use
-        consolidated_product.original_items_count = items_count
-        consolidated_product.save()
+        existing_consolidated.consolidated_item_details = consolidated_details
+        existing_consolidated.consolidated_amount = total_amount
+        existing_consolidated.consolidated_rate = total_amount
+        existing_consolidated.chart_of_accounts = chart_of_accounts_to_use
+        existing_consolidated.taxes = tax_to_use
+        existing_consolidated.original_items_count = items_count
+        existing_consolidated.save()
+        consolidated_product = existing_consolidated
+    else:
+        # Create new consolidated product
+        consolidated_product = VendorZohoConsolidatedProduct.objects.create(
+            zohoBill=zoho_bill,
+            organization=organization,
+            consolidated_item_name=f"Multiple items consolidated ({items_count} products)",
+            consolidated_item_details=consolidated_details,
+            total_quantity=1,  # Single consolidated item
+            consolidated_rate=total_amount,
+            consolidated_amount=total_amount,
+            chart_of_accounts=chart_of_accounts_to_use,
+            taxes=tax_to_use,
+            original_items_count=items_count,
+            consolidation_notes=f"Consolidated from {items_count} individual items. Tax strategy: highest amount. Chart strategy: highest amount."
+        )
 
     return consolidated_product
 
@@ -162,7 +167,7 @@ def get_line_items_for_sync(zoho_bill):
     if zoho_bill.consolidate:
         # Use consolidated product if exists
         try:
-            consolidated = zoho_bill.consolidated_product
+            consolidated = zoho_bill.consolidated_products.first()  # Get first consolidated product
             return [{
                 "name": consolidated.consolidated_item_name,
                 "description": consolidated.consolidated_item_details[:500],  # Zoho API limit
@@ -1231,10 +1236,11 @@ def vendor_bill_detail_view(request, org_id, bill_id):
         # Get the related VendorZohoBill if it exists
         try:
             zoho_bill = VendorZohoBill.objects.select_related(
-                'vendor', 'tds_tcs_id', 'consolidated_product'
+                'vendor', 'tds_tcs_id'
             ).prefetch_related(
                 'products__chart_of_accounts',
-                'products__taxes'
+                'products__taxes',
+                'consolidated_products'  # Updated to use ForeignKey relationship
             ).get(selectBill=bill, organization=organization)
 
             # Attach zoho_bill to the bill object for the serializer
@@ -1608,7 +1614,7 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                     logger.error(f"[DEBUG] vendor_bill_verify_view - Processing consolidate_prod array with {len(consolidate_prod_data)} items")
 
                     try:
-                        # Handle consolidated product updates/creation
+                        # Handle consolidated product updates/creation with ForeignKey relationship
                         for idx, consolidated_data in enumerate(consolidate_prod_data):
                             logger.error(f"[DEBUG] vendor_bill_verify_view - Processing consolidated product {idx}: {consolidated_data}")
 
@@ -1649,7 +1655,7 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                                     consolidated_id = None  # Fall through to create new
 
                             if not consolidated_id:
-                                # Create new consolidated product using CORRECT field names
+                                # Create new consolidated product - ForeignKey allows multiple
                                 consolidated_product = VendorZohoConsolidatedProduct.objects.create(
                                     zohoBill=updated_bill,
                                     organization=organization,
@@ -1691,13 +1697,16 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                         logger.error(f"Error during consolidation: {str(consolidation_error)}")
                         # Don't fail the entire request for consolidation errors
                 else:
-                    # Remove consolidated product if consolidation is disabled
+                    # Remove consolidated products if consolidation is disabled
                     try:
-                        consolidated_product = updated_bill.consolidated_product
-                        consolidated_product.delete()
-                        logger.info(f"Deleted consolidated product as consolidation was disabled")
-                    except VendorZohoConsolidatedProduct.DoesNotExist:
-                        pass  # No consolidated product exists, which is fine
+                        consolidated_products = updated_bill.consolidated_products.all()
+                        if consolidated_products.exists():
+                            count = consolidated_products.count()
+                            consolidated_products.delete()
+                            logger.info(f"Deleted {count} consolidated product(s) as consolidation was disabled")
+                    except Exception as delete_error:
+                        logger.error(f"Error deleting consolidated products: {str(delete_error)}")
+                        # Don't fail the entire request
 
                 # Log summary only if products were processed
                 if products_data is not None:

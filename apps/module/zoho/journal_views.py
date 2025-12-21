@@ -1092,7 +1092,7 @@ def journal_bill_detail_view(request, org_id, bill_id):
         try:
             zoho_bill = JournalZohoBill.objects.select_related('vendor').prefetch_related(
                 'products__chart_of_accounts',
-                'consolidated_product'  # 🔄 Add consolidated product to prefetch
+                'consolidated_products'  # Updated to use ForeignKey relationship
             ).get(selectBill=bill, organization=organization)
 
             logger.info(f"[DEBUG] journal_bill_detail_view - Found JournalZohoBill: {zoho_bill.id}")
@@ -1715,25 +1715,28 @@ def journal_bill_sync_view(request, org_id, bill_id):
             # ✅ USE CONSOLIDATED PRODUCT DATA
             logger.info(f"[DEBUG] journal_bill_sync_view - Using consolidated journal data for bill {bill_id}")
             try:
-                consolidated_product = zoho_bill.consolidated_product
+                consolidated_products = zoho_bill.consolidated_products.all()
+                if consolidated_products.exists():
+                    for consolidated_product in consolidated_products:
+                        # Get chart of account for the consolidated line item
+                        chart_of_account = consolidated_product.chart_of_accounts
 
-                # Get chart of account for the consolidated line item
-                chart_of_account = consolidated_product.chart_of_accounts
-
-                if chart_of_account:
-                    line_item = {
-                        "description": consolidated_product.consolidated_item_details or "Consolidated Journal Items",
-                        "account_id": str(chart_of_account.accountId),
-                        "amount": float(consolidated_product.consolidated_amount) if consolidated_product.consolidated_amount else 0,
-                        "debit_or_credit": getattr(consolidated_product, 'debit_or_credit', 'debit')
-                    }
-                    bill_data["line_items"].append(line_item)
-                    logger.info(f"[DEBUG] Added consolidated line item: {line_item}")
+                        if chart_of_account:
+                            line_item = {
+                                "description": consolidated_product.consolidated_item_details or "Consolidated Journal Items",
+                                "account_id": str(chart_of_account.accountId),
+                                "amount": float(consolidated_product.consolidated_amount) if consolidated_product.consolidated_amount else 0,
+                                "debit_or_credit": getattr(consolidated_product, 'debit_or_credit', 'debit')
+                            }
+                            bill_data["line_items"].append(line_item)
+                            logger.info(f"[DEBUG] Added consolidated line item: {line_item}")
+                        else:
+                            logger.warning(f"No chart of account found for consolidated product")
                 else:
-                    logger.warning(f"No chart of account found for consolidated product")
+                    logger.warning(f"No consolidated products found for journal bill {bill_id}")
 
             except Exception as e:
-                logger.error(f"[DEBUG] journal_bill_sync_view - Error accessing consolidated product, falling back to individual products: {e}")
+                logger.error(f"[DEBUG] journal_bill_sync_view - Error accessing consolidated products, falling back to individual products: {e}")
                 # Fallback to individual products
                 zoho_bill.consolidate = False
 

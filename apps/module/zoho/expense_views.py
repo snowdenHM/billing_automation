@@ -1092,7 +1092,7 @@ def expense_bill_detail_view(request, org_id, bill_id):
             zoho_bill = ExpenseZohoBill.objects.select_related('selectBill').prefetch_related(
                 'products__chart_of_accounts',
                 'products__taxes',
-                'consolidated_product'  # 🔄 Add consolidated product to prefetch
+                'consolidated_products'  # Updated to use ForeignKey relationship
             ).get(selectBill=bill, organization=organization)
 
             logger.info(f"[DEBUG] expense_bill_detail_view - Found ExpenseZohoBill: {zoho_bill.id}")

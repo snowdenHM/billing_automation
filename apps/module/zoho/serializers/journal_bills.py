@@ -171,16 +171,17 @@ class JournalZohoBillSerializer(serializers.ModelSerializer):
 
             # Always include consolidated product data if it exists (regardless of consolidate flag)
             # Return as array for verification flexibility (frontend can add/update multiple consolidated items)
-            try:
-                consolidated_product = instance.consolidated_product
+            consolidated_products = instance.consolidated_products.all()
+            if consolidated_products.exists():
                 consolidated_serializer = JournalZohoConsolidatedProductSerializer(
-                    consolidated_product,
+                    consolidated_products,
+                    many=True,
                     context=products_context
                 )
                 # 🔄 Return as ARRAY for frontend verification flexibility
-                data['consolidate_prod'] = [consolidated_serializer.data]
-            except JournalZohoConsolidatedProduct.DoesNotExist:
-                # No consolidated product exists, return empty array
+                data['consolidate_prod'] = consolidated_serializer.data
+            else:
+                # No consolidated products exist, return empty array
                 data['consolidate_prod'] = []
 
         return data

@@ -420,7 +420,7 @@ class VendorZohoConsolidatedProduct(BaseTeamModel):
     Contains aggregated data from multiple VendorZohoProduct entries.
     """
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
-    zohoBill = models.OneToOneField("VendorZohoBill", on_delete=models.CASCADE, related_name="consolidated_product")
+    zohoBill = models.ForeignKey("VendorZohoBill", on_delete=models.CASCADE, related_name="consolidated_products")
 
     # Consolidated item details
     consolidated_item_name = models.CharField(
@@ -706,7 +706,7 @@ class JournalZohoConsolidatedProduct(BaseTeamModel):
     )
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
-    zohoBill = models.OneToOneField("JournalZohoBill", on_delete=models.CASCADE, related_name="consolidated_product")
+    zohoBill = models.ForeignKey("JournalZohoBill", on_delete=models.CASCADE, related_name="consolidated_products")
 
     # Consolidated item details
     consolidated_item_details = models.TextField(
@@ -920,7 +920,7 @@ class ExpenseZohoConsolidatedProduct(BaseTeamModel):
     Contains aggregated data from multiple ExpenseZohoProduct entries.
     """
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
-    zohoBill = models.OneToOneField("ExpenseZohoBill", on_delete=models.CASCADE, related_name="consolidated_product")
+    zohoBill = models.ForeignKey("ExpenseZohoBill", on_delete=models.CASCADE, related_name="consolidated_products")
 
     # Consolidated item details
     consolidated_item_details = models.TextField(
