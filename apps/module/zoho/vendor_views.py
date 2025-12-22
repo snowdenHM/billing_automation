@@ -2312,21 +2312,17 @@ def move_bill_between_modules_view(request, org_id):
                         zoho_common_data = {
                             'selectBill': new_bill,
                             'organization': organization,
-                            'bill_no': getattr(source_zoho_bill, 'bill_no', '') or
-                                      getattr(source_zoho_bill, 'reference_number', '') or
-                                      getattr(source_zoho_bill, 'journal_number', ''),
-                            'bill_date': getattr(source_zoho_bill, 'bill_date', None) or
-                                        getattr(source_zoho_bill, 'expense_date', None) or
-                                        getattr(source_zoho_bill, 'journal_date', None),
+                            'bill_no': str(getattr(source_zoho_bill, 'bill_no', ''))[:50],
+                            'bill_date': getattr(source_zoho_bill, 'bill_date', None),
                             'due_date': getattr(source_zoho_bill, 'due_date', None),
-                            'total': str(getattr(source_zoho_bill, 'total', 0)),
-                            'igst': str(getattr(source_zoho_bill, 'igst', 0)),
-                            'cgst': str(getattr(source_zoho_bill, 'cgst', 0)),
-                            'sgst': str(getattr(source_zoho_bill, 'sgst', 0)),
+                            'total': str(getattr(source_zoho_bill, 'total', 0))[:50],
+                            'igst': str(getattr(source_zoho_bill, 'igst', 0))[:50],
+                            'cgst': str(getattr(source_zoho_bill, 'cgst', 0))[:50],
+                            'sgst': str(getattr(source_zoho_bill, 'sgst', 0))[:50],
                             'discount_type': getattr(source_zoho_bill, 'discount_type', 'Percentage'),
                             'discount_amount': getattr(source_zoho_bill, 'discount_amount', 0),
                             'adjustment_amount': getattr(source_zoho_bill, 'adjustment_amount', 0),
-                            'note': f"Moved from {from_module} module - " + getattr(source_zoho_bill, 'note', ''),
+                            'note': (f"Moved from {from_module} - " + getattr(source_zoho_bill, 'note', ''))[:100],
                             'consolidate': getattr(source_zoho_bill, 'consolidate', False)
                         }
 
@@ -2339,14 +2335,14 @@ def move_bill_between_modules_view(request, org_id):
                         zoho_common_data = {
                             'selectBill': new_bill,
                             'organization': organization,
-                            'bill_no': getattr(source_zoho_bill, 'bill_no', ''),
+                            'bill_no': str(getattr(source_zoho_bill, 'bill_no', ''))[:50],
                             'bill_date': getattr(source_zoho_bill, 'bill_date', None),
                             'due_date': getattr(source_zoho_bill, 'due_date', None),
-                            'total': str(getattr(source_zoho_bill, 'total', 0)),
-                            'igst': str(getattr(source_zoho_bill, 'igst', 0)),
-                            'cgst': str(getattr(source_zoho_bill, 'cgst', 0)),
-                            'sgst': str(getattr(source_zoho_bill, 'sgst', 0)),
-                            'note': f"Moved from {from_module} module - " + getattr(source_zoho_bill, 'note', ''),
+                            'total': str(getattr(source_zoho_bill, 'total', 0))[:50],
+                            'igst': str(getattr(source_zoho_bill, 'igst', 0))[:50],
+                            'cgst': str(getattr(source_zoho_bill, 'cgst', 0))[:50],
+                            'sgst': str(getattr(source_zoho_bill, 'sgst', 0))[:50],
+                            'note': (f"Moved from {from_module} - " + getattr(source_zoho_bill, 'note', ''))[:100],
                             'consolidate': getattr(source_zoho_bill, 'consolidate', False)
                         }
 
@@ -2359,14 +2355,14 @@ def move_bill_between_modules_view(request, org_id):
                         zoho_common_data = {
                             'selectBill': new_bill,
                             'organization': organization,
-                            'bill_no': getattr(source_zoho_bill, 'bill_no', ''),
+                            'bill_no': str(getattr(source_zoho_bill, 'bill_no', ''))[:50],
                             'bill_date': getattr(source_zoho_bill, 'bill_date', None),
                             'due_date': getattr(source_zoho_bill, 'due_date', None),
-                            'total': str(getattr(source_zoho_bill, 'total', 0)),
-                            'igst': str(getattr(source_zoho_bill, 'igst', 0)),
-                            'cgst': str(getattr(source_zoho_bill, 'cgst', 0)),
-                            'sgst': str(getattr(source_zoho_bill, 'sgst', 0)),
-                            'note': f"Moved from {from_module} module - " + getattr(source_zoho_bill, 'note', ''),
+                            'total': str(getattr(source_zoho_bill, 'total', 0))[:50],
+                            'igst': str(getattr(source_zoho_bill, 'igst', 0))[:50],
+                            'cgst': str(getattr(source_zoho_bill, 'cgst', 0))[:50],
+                            'sgst': str(getattr(source_zoho_bill, 'sgst', 0))[:50],
+                            'note': (f"Moved from {from_module} - " + getattr(source_zoho_bill, 'note', ''))[:100],
                             'consolidate': getattr(source_zoho_bill, 'consolidate', False)
                         }
 
@@ -2382,22 +2378,22 @@ def move_bill_between_modules_view(request, org_id):
                                 VendorZohoProduct.objects.create(
                                     zohoBill=new_zoho_bill,
                                     organization=organization,
-                                    item_name=getattr(product, 'item_name', '') or getattr(product, 'item_details', ''),
-                                    item_details=getattr(product, 'item_details', ''),
-                                    rate=getattr(product, 'rate', 0),
-                                    quantity=getattr(product, 'quantity', 0),
-                                    amount=getattr(product, 'amount', 0),
+                                    item_name=str(getattr(product, 'item_name', '') or getattr(product, 'item_details', ''))[:1000],
+                                    item_details=str(getattr(product, 'item_details', ''))[:2000],
+                                    rate=str(getattr(product, 'rate', 0))[:50],
+                                    quantity=str(getattr(product, 'quantity', 0))[:50],
+                                    amount=str(getattr(product, 'amount', 0))[:50],
                                     chart_of_accounts=getattr(product, 'chart_of_accounts', None),
                                     taxes=getattr(product, 'taxes', None),
-                                    itc_eligibility=getattr(product, 'itc_eligibility', 'eligible'),
+                                    itc_eligibility=str(getattr(product, 'itc_eligibility', 'eligible'))[:100],
                                     reverse_charge_tax_id=getattr(product, 'reverse_charge_tax_id', False)
                                 )
                             elif to_module == 'expense':
                                 ExpenseZohoProduct.objects.create(
                                     zohoBill=new_zoho_bill,
                                     organization=organization,
-                                    item_details=getattr(product, 'item_details', ''),
-                                    amount=getattr(product, 'amount', 0),
+                                    item_details=str(getattr(product, 'item_details', ''))[:2000],
+                                    amount=str(getattr(product, 'amount', 0))[:50],
                                     chart_of_accounts=getattr(product, 'chart_of_accounts', None),
                                     taxes=getattr(product, 'taxes', None)
                                 )
@@ -2406,8 +2402,8 @@ def move_bill_between_modules_view(request, org_id):
                                 JournalZohoProduct.objects.create(
                                     zohoBill=new_zoho_bill,
                                     organization=organization,
-                                    item_details=getattr(product, 'item_details', ''),
-                                    amount=getattr(product, 'amount', 0),
+                                    item_details=str(getattr(product, 'item_details', ''))[:2000],
+                                    amount=str(getattr(product, 'amount', 0))[:50],
                                     chart_of_accounts=getattr(product, 'chart_of_accounts', None),
                                     debit_or_credit='debit'  # Default to debit
                                 )
@@ -2419,14 +2415,14 @@ def move_bill_between_modules_view(request, org_id):
                                 VendorZohoConsolidatedProduct.objects.create(
                                     zohoBill=new_zoho_bill,
                                     organization=organization,
-                                    consolidated_item_name=getattr(consolidated, 'consolidated_item_name', '') or 'Consolidated Items',
-                                    consolidated_item_details=getattr(consolidated, 'consolidated_item_details', ''),
+                                    consolidated_item_name=str(getattr(consolidated, 'consolidated_item_name', '') or 'Consolidated Items')[:500],
+                                    consolidated_item_details=str(getattr(consolidated, 'consolidated_item_details', '')),
                                     total_quantity=getattr(consolidated, 'total_quantity', 1),
                                     consolidated_rate=getattr(consolidated, 'consolidated_rate', 0),
                                     consolidated_amount=getattr(consolidated, 'consolidated_amount', 0),
                                     chart_of_accounts=getattr(consolidated, 'chart_of_accounts', None),
                                     taxes=getattr(consolidated, 'taxes', None),
-                                    itc_eligibility=getattr(consolidated, 'itc_eligibility', 'eligible'),
+                                    itc_eligibility=str(getattr(consolidated, 'itc_eligibility', 'eligible'))[:100],
                                     reverse_charge_tax_id=getattr(consolidated, 'reverse_charge_tax_id', False),
                                     original_items_count=getattr(consolidated, 'original_items_count', None) or getattr(consolidated, 'original_entries_count', 1),
                                     consolidation_notes=f"Moved from {from_module} module"
@@ -2435,7 +2431,7 @@ def move_bill_between_modules_view(request, org_id):
                                 ExpenseZohoConsolidatedProduct.objects.create(
                                     zohoBill=new_zoho_bill,
                                     organization=organization,
-                                    consolidated_item_details=getattr(consolidated, 'consolidated_item_details', ''),
+                                    consolidated_item_details=str(getattr(consolidated, 'consolidated_item_details', '')),
                                     consolidated_amount=getattr(consolidated, 'consolidated_amount', 0),
                                     chart_of_accounts=getattr(consolidated, 'chart_of_accounts', None),
                                     taxes=getattr(consolidated, 'taxes', None),
@@ -2446,7 +2442,7 @@ def move_bill_between_modules_view(request, org_id):
                                 JournalZohoConsolidatedProduct.objects.create(
                                     zohoBill=new_zoho_bill,
                                     organization=organization,
-                                    consolidated_item_details=getattr(consolidated, 'consolidated_item_details', ''),
+                                    consolidated_item_details=str(getattr(consolidated, 'consolidated_item_details', '')),
                                     consolidated_amount=getattr(consolidated, 'consolidated_amount', 0),
                                     chart_of_accounts=getattr(consolidated, 'chart_of_accounts', None),
                                     debit_or_credit=getattr(consolidated, 'debit_or_credit', 'debit'),
