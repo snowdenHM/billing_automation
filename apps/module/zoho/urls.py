@@ -21,6 +21,8 @@ from .vendor_views import (
     vendor_bill_verify_view as vendor_bill_verify_main,
     vendor_bill_sync_view as vendor_bill_sync_main,
     vendor_bill_delete_view,
+    # Bill Moving Between Modules
+    move_bill_between_modules_view,
 )
 # Import Zoho settings and sync views from main views.py
 from .views import (
@@ -73,6 +75,11 @@ urlpatterns = [
         path('taxes/sync/', taxes_sync_view, name='taxes_sync'),
         path('tds-tcs/', tds_tcs_list_view, name='tds_tcs_list'),
         path('tds-tcs/sync/', tds_tcs_sync_view, name='tds_tcs_sync'),
+
+        # ============================================================================
+        # Bill Moving Between Modules API Endpoints
+        # ============================================================================
+        path('bills/<str:bill_id>/move/', move_bill_between_modules_view, name='move_bill_between_modules'),
 
         # ============================================================================
         # Vendor Bills API Endpoints
