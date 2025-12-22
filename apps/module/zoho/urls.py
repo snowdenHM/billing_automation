@@ -79,7 +79,7 @@ urlpatterns = [
         # ============================================================================
         # Bill Moving Between Modules API Endpoints
         # ============================================================================
-        path('bills/<str:bill_id>/move/', move_bill_between_modules_view, name='move_bill_between_modules'),
+        path('bills/move/', move_bill_between_modules_view, name='move_bill_between_modules'),
 
         # ============================================================================
         # Vendor Bills API Endpoints

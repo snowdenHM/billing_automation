@@ -33,9 +33,6 @@ from .models import (
     VendorZohoBill,
     VendorZohoProduct,
     VendorZohoConsolidatedProduct,
-    ZohoChartOfAccount,
-    ZohoTaxes,
-    ZohoTdsTcs,
     # Import models for all modules to support moving
     ExpenseBill,
     ExpenseZohoBill,
@@ -2118,8 +2115,8 @@ def vendor_bill_delete_view(request, org_id, bill_id):
 # ============================================================================
 
 @extend_schema(
-    summary="Move Bill Between Modules",
-    description="Move a bill from one module to another (vendor ↔ expense ↔ journal). Preserves analysis data to save LLM tokens.",
+    summary="Move Bills Between Modules",
+    description="Move multiple bills from one module to another (vendor ↔ expense ↔ journal). Preserves analysis data to save LLM tokens.",
     request={
         'type': 'object',
         'properties': {
@@ -2132,32 +2129,50 @@ def vendor_bill_delete_view(request, org_id, bill_id):
                 'type': 'string',
                 'enum': ['vendor', 'expense', 'journal'],
                 'description': 'Destination module'
+            },
+            'bill_ids': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Array of bill IDs to move'
             }
         },
-        'required': ['from', 'to']
+        'required': ['from', 'to', 'bill_ids']
     },
     responses={
         200: {
             'type': 'object',
             'properties': {
                 'message': {'type': 'string'},
-                'moved_bill_id': {'type': 'string'},
+                'total_bills': {'type': 'integer'},
+                'successful_moves': {'type': 'integer'},
+                'failed_moves': {'type': 'integer'},
+                'moved_bills': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'original_bill_id': {'type': 'string'},
+                            'new_bill_id': {'type': 'string'},
+                            'status': {'type': 'string'}
+                        }
+                    }
+                },
                 'from_module': {'type': 'string'},
                 'to_module': {'type': 'string'},
                 'preserved_analysis': {'type': 'boolean'},
-                'new_status': {'type': 'string'}
+                'errors': {'type': 'array'}
             }
         },
         400: {'description': 'Invalid request or bill status'},
-        404: {'description': 'Bill not found'}
+        404: {'description': 'Bills not found'}
     },
-    tags=['Zoho Ops']
+    tags=['Zoho Bill Management']
 )
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def move_bill_between_modules_view(request, org_id, bill_id):
+def move_bill_between_modules_view(request, org_id):
     """
-    Move bill between vendor/expense/journal modules while preserving analysis data
+    Move multiple bills between vendor/expense/journal modules while preserving analysis data
     Only works for Draft/Analysed status bills to prevent data corruption
     """
     organization = get_organization_from_request(request, org_id=org_id)
@@ -2167,6 +2182,7 @@ def move_bill_between_modules_view(request, org_id, bill_id):
     # Validate request data
     from_module = request.data.get('from', '').lower()
     to_module = request.data.get('to', '').lower()
+    bill_ids = request.data.get('bill_ids', [])
 
     valid_modules = ['vendor', 'expense', 'journal']
 
@@ -2191,283 +2207,316 @@ def move_bill_between_modules_view(request, org_id, bill_id):
             'modules': {'from': from_module, 'to': to_module}
         }, status=status.HTTP_400_BAD_REQUEST)
 
-    try:
-        with transaction.atomic():
-            # Get source bill and zoho bill based on from_module
-            source_bill = None
-            source_zoho_bill = None
+    if not bill_ids or not isinstance(bill_ids, list):
+        return Response({
+            'error': 'Missing Bill IDs',
+            'detail': 'bill_ids must be provided as an array of bill IDs',
+            'example': {'bill_ids': ['bill-id-1', 'bill-id-2']}
+        }, status=status.HTTP_400_BAD_REQUEST)
 
-            if from_module == 'vendor':
-                source_bill = VendorBill.objects.get(id=bill_id, organization=organization)
-                try:
-                    source_zoho_bill = VendorZohoBill.objects.prefetch_related(
-                        'products', 'consolidated_products'
-                    ).get(selectBill=source_bill, organization=organization)
-                except VendorZohoBill.DoesNotExist:
-                    source_zoho_bill = None
+    # Track results
+    moved_bills = []
+    errors = []
+    successful_moves = 0
+    failed_moves = 0
 
-            elif from_module == 'expense':
-                source_bill = ExpenseBill.objects.get(id=bill_id, organization=organization)
-                try:
-                    source_zoho_bill = ExpenseZohoBill.objects.prefetch_related(
-                        'products', 'consolidated_products'
-                    ).get(selectBill=source_bill, organization=organization)
-                except ExpenseZohoBill.DoesNotExist:
-                    source_zoho_bill = None
+    for bill_id in bill_ids:
+        try:
+            with transaction.atomic():
+                # Get source bill and zoho bill based on from_module
+                source_bill = None
+                source_zoho_bill = None
 
-            elif from_module == 'journal':
-                source_bill = JournalBill.objects.get(id=bill_id, organization=organization)
-                try:
-                    source_zoho_bill = JournalZohoBill.objects.prefetch_related(
-                        'products', 'consolidated_products'
-                    ).get(selectBill=source_bill, organization=organization)
-                except JournalZohoBill.DoesNotExist:
-                    source_zoho_bill = None
+                if from_module == 'vendor':
+                    try:
+                        source_bill = VendorBill.objects.get(id=bill_id, organization=organization)
+                        try:
+                            source_zoho_bill = VendorZohoBill.objects.prefetch_related(
+                                'products', 'consolidated_products'
+                            ).get(selectBill=source_bill, organization=organization)
+                        except VendorZohoBill.DoesNotExist:
+                            source_zoho_bill = None
+                    except VendorBill.DoesNotExist:
+                        errors.append({
+                            'bill_id': bill_id,
+                            'error': f'Vendor bill with ID {bill_id} not found'
+                        })
+                        failed_moves += 1
+                        continue
 
-            if not source_bill:
-                return Response({
-                    'error': 'Bill Not Found',
-                    'detail': f'No bill found with ID {bill_id} in {from_module} module',
-                    'bill_id': bill_id,
-                    'module': from_module
-                }, status=status.HTTP_404_NOT_FOUND)
+                elif from_module == 'expense':
+                    try:
+                        source_bill = ExpenseBill.objects.get(id=bill_id, organization=organization)
+                        try:
+                            source_zoho_bill = ExpenseZohoBill.objects.prefetch_related(
+                                'products', 'consolidated_products'
+                            ).get(selectBill=source_bill, organization=organization)
+                        except ExpenseZohoBill.DoesNotExist:
+                            source_zoho_bill = None
+                    except ExpenseBill.DoesNotExist:
+                        errors.append({
+                            'bill_id': bill_id,
+                            'error': f'Expense bill with ID {bill_id} not found'
+                        })
+                        failed_moves += 1
+                        continue
 
-            # Check bill status - only allow Draft or Analysed
-            if source_bill.status not in ['Draft', 'Analysed']:
-                return Response({
-                    'error': 'Invalid Bill Status',
-                    'detail': f'Bill must be in Draft or Analysed status to move. Current status: {source_bill.status}',
-                    'current_status': source_bill.status,
-                    'allowed_statuses': ['Draft', 'Analysed'],
-                    'solution': 'Only unverified bills can be moved between modules'
-                }, status=status.HTTP_400_BAD_REQUEST)
+                elif from_module == 'journal':
+                    try:
+                        source_bill = JournalBill.objects.get(id=bill_id, organization=organization)
+                        try:
+                            source_zoho_bill = JournalZohoBill.objects.prefetch_related(
+                                'products', 'consolidated_products'
+                            ).get(selectBill=source_bill, organization=organization)
+                        except JournalZohoBill.DoesNotExist:
+                            source_zoho_bill = None
+                    except JournalBill.DoesNotExist:
+                        errors.append({
+                            'bill_id': bill_id,
+                            'error': f'Journal bill with ID {bill_id} not found'
+                        })
+                        failed_moves += 1
+                        continue
 
-            # Create new bill in destination module
-            new_bill = None
-            new_zoho_bill = None
+                # Check bill status - only allow Draft or Analysed
+                if source_bill.status not in ['Draft', 'Analysed']:
+                    errors.append({
+                        'bill_id': bill_id,
+                        'error': f'Bill must be in Draft or Analysed status to move. Current status: {source_bill.status}'
+                    })
+                    failed_moves += 1
+                    continue
 
-            # Common bill data to transfer
-            common_data = {
-                'organization': organization,
-                'uploaded_by': source_bill.uploaded_by,
-                'fileType': source_bill.fileType,
-                'status': source_bill.status,
-                'process': source_bill.process,
-                'analysed_data': source_bill.analysed_data,
-                'file': source_bill.file  # Copy file reference
-            }
+                # Create new bill in destination module
+                new_bill = None
+                new_zoho_bill = None
 
-            # Create bill based on destination module
-            if to_module == 'vendor':
-                new_bill = VendorBill.objects.create(**common_data)
+                # Common bill data to transfer
+                common_data = {
+                    'organization': organization,
+                    'uploaded_by': source_bill.uploaded_by,
+                    'fileType': source_bill.fileType,
+                    'status': source_bill.status,
+                    'process': source_bill.process,
+                    'analysed_data': source_bill.analysed_data,
+                    'file': source_bill.file  # Copy file reference
+                }
 
-                # Transfer Zoho bill data if exists
-                if source_zoho_bill:
-                    # Create common zoho bill data
-                    zoho_common_data = {
-                        'selectBill': new_bill,
-                        'organization': organization,
-                        'bill_no': getattr(source_zoho_bill, 'bill_no', '') or
-                                  getattr(source_zoho_bill, 'reference_number', '') or
-                                  getattr(source_zoho_bill, 'journal_number', ''),
-                        'bill_date': getattr(source_zoho_bill, 'bill_date', None) or
-                                    getattr(source_zoho_bill, 'expense_date', None) or
-                                    getattr(source_zoho_bill, 'journal_date', None),
-                        'due_date': getattr(source_zoho_bill, 'due_date', None),
-                        'total': str(getattr(source_zoho_bill, 'total', 0)),
-                        'igst': str(getattr(source_zoho_bill, 'igst', 0)),
-                        'cgst': str(getattr(source_zoho_bill, 'cgst', 0)),
-                        'sgst': str(getattr(source_zoho_bill, 'sgst', 0)),
-                        'discount_type': getattr(source_zoho_bill, 'discount_type', 'Percentage'),
-                        'discount_amount': getattr(source_zoho_bill, 'discount_amount', 0),
-                        'adjustment_amount': getattr(source_zoho_bill, 'adjustment_amount', 0),
-                        'note': f"Moved from {from_module} module - " + getattr(source_zoho_bill, 'note', ''),
-                        'consolidate': getattr(source_zoho_bill, 'consolidate', False)
-                    }
+                # Create bill based on destination module
+                if to_module == 'vendor':
+                    new_bill = VendorBill.objects.create(**common_data)
 
-                    new_zoho_bill = VendorZohoBill.objects.create(**zoho_common_data)
-
-            elif to_module == 'expense':
-                new_bill = ExpenseBill.objects.create(**common_data)
-
-                if source_zoho_bill:
-                    zoho_common_data = {
-                        'selectBill': new_bill,
-                        'organization': organization,
-                        'reference_number': getattr(source_zoho_bill, 'bill_no', '') or
-                                          getattr(source_zoho_bill, 'reference_number', '') or
-                                          getattr(source_zoho_bill, 'journal_number', ''),
-                        'expense_date': getattr(source_zoho_bill, 'bill_date', None) or
-                                       getattr(source_zoho_bill, 'expense_date', None) or
-                                       getattr(source_zoho_bill, 'journal_date', None),
-                        'total': str(getattr(source_zoho_bill, 'total', 0)),
-                        'igst': str(getattr(source_zoho_bill, 'igst', 0)),
-                        'cgst': str(getattr(source_zoho_bill, 'cgst', 0)),
-                        'sgst': str(getattr(source_zoho_bill, 'sgst', 0)),
-                        'discount_amount': getattr(source_zoho_bill, 'discount_amount', 0),
-                        'adjustment_amount': getattr(source_zoho_bill, 'adjustment_amount', 0),
-                        'note': f"Moved from {from_module} module - " + getattr(source_zoho_bill, 'note', ''),
-                        'consolidate': getattr(source_zoho_bill, 'consolidate', False)
-                    }
-
-                    new_zoho_bill = ExpenseZohoBill.objects.create(**zoho_common_data)
-
-            elif to_module == 'journal':
-                new_bill = JournalBill.objects.create(**common_data)
-
-                if source_zoho_bill:
-                    total_amount = str(getattr(source_zoho_bill, 'total', 0))
-                    zoho_common_data = {
-                        'selectBill': new_bill,
-                        'organization': organization,
-                        'journal_number': getattr(source_zoho_bill, 'bill_no', '') or
-                                        getattr(source_zoho_bill, 'reference_number', '') or
-                                        getattr(source_zoho_bill, 'journal_number', ''),
-                        'journal_date': getattr(source_zoho_bill, 'bill_date', None) or
-                                       getattr(source_zoho_bill, 'expense_date', None) or
-                                       getattr(source_zoho_bill, 'journal_date', None),
-                        'total_debit': total_amount,
-                        'total_credit': total_amount,
-                        'note': f"Moved from {from_module} module - " + getattr(source_zoho_bill, 'note', ''),
-                        'consolidate': getattr(source_zoho_bill, 'consolidate', False)
-                    }
-
-                    new_zoho_bill = JournalZohoBill.objects.create(**zoho_common_data)
-
-            # Transfer products/line items if they exist and bill was analysed
-            if source_zoho_bill and source_bill.status == 'Analysed' and new_zoho_bill:
-                try:
-                    # Transfer individual products
-                    source_products = source_zoho_bill.products.all() if hasattr(source_zoho_bill, 'products') else []
-                    for product in source_products:
-                        product_data = {
+                    # Transfer Zoho bill data if exists
+                    if source_zoho_bill:
+                        # Create common zoho bill data
+                        zoho_common_data = {
+                            'selectBill': new_bill,
                             'organization': organization,
-                            'rate': getattr(product, 'rate', 0),
-                            'quantity': getattr(product, 'quantity', 0),
-                            'amount': getattr(product, 'amount', 0),
-                            'chart_of_accounts': getattr(product, 'chart_of_accounts', None),
-                            'taxes': getattr(product, 'taxes', None),
-                            'itc_eligibility': getattr(product, 'itc_eligibility', 'eligible'),
-                            'reverse_charge_tax_id': getattr(product, 'reverse_charge_tax_id', False)
+                            'bill_no': getattr(source_zoho_bill, 'bill_no', '') or
+                                      getattr(source_zoho_bill, 'reference_number', '') or
+                                      getattr(source_zoho_bill, 'journal_number', ''),
+                            'bill_date': getattr(source_zoho_bill, 'bill_date', None) or
+                                        getattr(source_zoho_bill, 'expense_date', None) or
+                                        getattr(source_zoho_bill, 'journal_date', None),
+                            'due_date': getattr(source_zoho_bill, 'due_date', None),
+                            'total': str(getattr(source_zoho_bill, 'total', 0)),
+                            'igst': str(getattr(source_zoho_bill, 'igst', 0)),
+                            'cgst': str(getattr(source_zoho_bill, 'cgst', 0)),
+                            'sgst': str(getattr(source_zoho_bill, 'sgst', 0)),
+                            'discount_type': getattr(source_zoho_bill, 'discount_type', 'Percentage'),
+                            'discount_amount': getattr(source_zoho_bill, 'discount_amount', 0),
+                            'adjustment_amount': getattr(source_zoho_bill, 'adjustment_amount', 0),
+                            'note': f"Moved from {from_module} module - " + getattr(source_zoho_bill, 'note', ''),
+                            'consolidate': getattr(source_zoho_bill, 'consolidate', False)
                         }
 
-                        if to_module == 'vendor':
-                            VendorZohoProduct.objects.create(
-                                zohoBill=new_zoho_bill,
-                                item_name=getattr(product, 'item_name', '') or getattr(product, 'expense_description', ''),
-                                item_details=getattr(product, 'item_details', '') or getattr(product, 'expense_details', ''),
-                                **product_data
-                            )
-                        elif to_module == 'expense':
-                            ExpenseZohoProduct.objects.create(
-                                zohoBill=new_zoho_bill,
-                                expense_description=getattr(product, 'item_name', '') or getattr(product, 'expense_description', ''),
-                                expense_details=getattr(product, 'item_details', '') or getattr(product, 'expense_details', ''),
-                                **product_data
-                            )
-                        elif to_module == 'journal':
-                            # Journal has different structure - create debit/credit entries
-                            JournalZohoProduct.objects.create(
-                                zohoBill=new_zoho_bill,
-                                account_description=getattr(product, 'item_name', '') or getattr(product, 'expense_description', ''),
-                                account_details=getattr(product, 'item_details', '') or getattr(product, 'expense_details', ''),
-                                debit_amount=getattr(product, 'amount', 0),
-                                credit_amount=0,  # Default to debit
-                                chart_of_accounts=getattr(product, 'chart_of_accounts', None),
-                                organization=organization
-                            )
+                        new_zoho_bill = VendorZohoBill.objects.create(**zoho_common_data)
 
-                    # Transfer consolidated products if they exist
-                    source_consolidated = source_zoho_bill.consolidated_products.all() if hasattr(source_zoho_bill, 'consolidated_products') else []
-                    for consolidated in source_consolidated:
-                        consolidated_data = {
+                elif to_module == 'expense':
+                    new_bill = ExpenseBill.objects.create(**common_data)
+
+                    if source_zoho_bill:
+                        zoho_common_data = {
+                            'selectBill': new_bill,
                             'organization': organization,
-                            'consolidated_rate': getattr(consolidated, 'consolidated_rate', 0),
-                            'total_quantity': getattr(consolidated, 'total_quantity', 1),
-                            'consolidated_amount': getattr(consolidated, 'consolidated_amount', 0),
-                            'chart_of_accounts': getattr(consolidated, 'chart_of_accounts', None),
-                            'taxes': getattr(consolidated, 'taxes', None),
-                            'itc_eligibility': getattr(consolidated, 'itc_eligibility', 'eligible'),
-                            'reverse_charge_tax_id': getattr(consolidated, 'reverse_charge_tax_id', False),
-                            'original_items_count': getattr(consolidated, 'original_items_count', 1),
-                            'consolidation_notes': f"Moved from {from_module} - " + (getattr(consolidated, 'consolidation_notes', '') or '')
+                            'reference_number': getattr(source_zoho_bill, 'bill_no', '') or
+                                              getattr(source_zoho_bill, 'reference_number', '') or
+                                              getattr(source_zoho_bill, 'journal_number', ''),
+                            'expense_date': getattr(source_zoho_bill, 'bill_date', None) or
+                                           getattr(source_zoho_bill, 'expense_date', None) or
+                                           getattr(source_zoho_bill, 'journal_date', None),
+                            'total': str(getattr(source_zoho_bill, 'total', 0)),
+                            'igst': str(getattr(source_zoho_bill, 'igst', 0)),
+                            'cgst': str(getattr(source_zoho_bill, 'cgst', 0)),
+                            'sgst': str(getattr(source_zoho_bill, 'sgst', 0)),
+                            'discount_amount': getattr(source_zoho_bill, 'discount_amount', 0),
+                            'adjustment_amount': getattr(source_zoho_bill, 'adjustment_amount', 0),
+                            'note': f"Moved from {from_module} module - " + getattr(source_zoho_bill, 'note', ''),
+                            'consolidate': getattr(source_zoho_bill, 'consolidate', False)
                         }
 
-                        if to_module == 'vendor':
-                            VendorZohoConsolidatedProduct.objects.create(
-                                zohoBill=new_zoho_bill,
-                                consolidated_item_name=getattr(consolidated, 'consolidated_item_name', '') or
-                                                        getattr(consolidated, 'consolidated_expense_name', ''),
-                                consolidated_item_details=getattr(consolidated, 'consolidated_item_details', '') or
-                                                         getattr(consolidated, 'consolidated_expense_details', ''),
-                                **consolidated_data
-                            )
-                        elif to_module == 'expense':
-                            ExpenseZohoConsolidatedProduct.objects.create(
-                                zohoBill=new_zoho_bill,
-                                consolidated_expense_name=getattr(consolidated, 'consolidated_item_name', '') or
-                                                          getattr(consolidated, 'consolidated_expense_name', ''),
-                                consolidated_expense_details=getattr(consolidated, 'consolidated_item_details', '') or
-                                                            getattr(consolidated, 'consolidated_expense_details', ''),
-                                **consolidated_data
-                            )
-                        elif to_module == 'journal':
-                            JournalZohoConsolidatedProduct.objects.create(
-                                zohoBill=new_zoho_bill,
-                                consolidated_account_name=getattr(consolidated, 'consolidated_item_name', '') or
-                                                          getattr(consolidated, 'consolidated_expense_name', ''),
-                                consolidated_account_details=getattr(consolidated, 'consolidated_item_details', '') or
-                                                            getattr(consolidated, 'consolidated_expense_details', ''),
-                                consolidated_debit_amount=getattr(consolidated, 'consolidated_amount', 0),
-                                consolidated_credit_amount=0,  # Default to debit
-                                chart_of_accounts=getattr(consolidated, 'chart_of_accounts', None),
-                                organization=organization,
-                                original_items_count=getattr(consolidated, 'original_items_count', 1),
-                                consolidation_notes=f"Moved from {from_module} - " + (getattr(consolidated, 'consolidation_notes', '') or '')
-                            )
+                        new_zoho_bill = ExpenseZohoBill.objects.create(**zoho_common_data)
 
-                except Exception as product_transfer_error:
-                    logger.warning(f"Failed to transfer products during move: {product_transfer_error}")
-                    # Don't fail the entire move operation, just log the warning
+                elif to_module == 'journal':
+                    new_bill = JournalBill.objects.create(**common_data)
 
-            # Delete source bill and related data
-            if source_zoho_bill:
-                # Delete products and consolidated products (cascade should handle this, but being explicit)
-                if hasattr(source_zoho_bill, 'products'):
-                    source_zoho_bill.products.all().delete()
-                if hasattr(source_zoho_bill, 'consolidated_products'):
-                    source_zoho_bill.consolidated_products.all().delete()
-                source_zoho_bill.delete()
+                    if source_zoho_bill:
+                        total_amount = str(getattr(source_zoho_bill, 'total', 0))
+                        zoho_common_data = {
+                            'selectBill': new_bill,
+                            'organization': organization,
+                            'journal_number': getattr(source_zoho_bill, 'bill_no', '') or
+                                            getattr(source_zoho_bill, 'reference_number', '') or
+                                            getattr(source_zoho_bill, 'journal_number', ''),
+                            'journal_date': getattr(source_zoho_bill, 'bill_date', None) or
+                                           getattr(source_zoho_bill, 'expense_date', None) or
+                                           getattr(source_zoho_bill, 'journal_date', None),
+                            'total_debit': total_amount,
+                            'total_credit': total_amount,
+                            'note': f"Moved from {from_module} module - " + getattr(source_zoho_bill, 'note', ''),
+                            'consolidate': getattr(source_zoho_bill, 'consolidate', False)
+                        }
 
-            source_bill.delete()
+                        new_zoho_bill = JournalZohoBill.objects.create(**zoho_common_data)
 
-            logger.info(f"Successfully moved bill {bill_id} from {from_module} to {to_module} module")
+                # Transfer products/line items if they exist and bill was analysed
+                if source_zoho_bill and source_bill.status == 'Analysed' and new_zoho_bill:
+                    try:
+                        # Transfer individual products
+                        source_products = source_zoho_bill.products.all() if hasattr(source_zoho_bill, 'products') else []
+                        for product in source_products:
+                            product_data = {
+                                'organization': organization,
+                                'rate': getattr(product, 'rate', 0),
+                                'quantity': getattr(product, 'quantity', 0),
+                                'amount': getattr(product, 'amount', 0),
+                                'chart_of_accounts': getattr(product, 'chart_of_accounts', None),
+                                'taxes': getattr(product, 'taxes', None),
+                                'itc_eligibility': getattr(product, 'itc_eligibility', 'eligible'),
+                                'reverse_charge_tax_id': getattr(product, 'reverse_charge_tax_id', False)
+                            }
 
-            return Response({
-                'message': f'Bill successfully moved from {from_module} to {to_module}',
-                'moved_bill_id': str(new_bill.id),
-                'from_module': from_module,
-                'to_module': to_module,
-                'preserved_analysis': bool(source_bill.analysed_data),
-                'new_status': new_bill.status,
-                'llm_tokens_saved': bool(source_bill.analysed_data),  # Indicates if LLM re-analysis was avoided
-                'products_transferred': source_zoho_bill is not None and source_bill.status == 'Analysed'
+                            if to_module == 'vendor':
+                                VendorZohoProduct.objects.create(
+                                    zohoBill=new_zoho_bill,
+                                    item_name=getattr(product, 'item_name', '') or getattr(product, 'expense_description', ''),
+                                    item_details=getattr(product, 'item_details', '') or getattr(product, 'expense_details', ''),
+                                    **product_data
+                                )
+                            elif to_module == 'expense':
+                                ExpenseZohoProduct.objects.create(
+                                    zohoBill=new_zoho_bill,
+                                    expense_description=getattr(product, 'item_name', '') or getattr(product, 'expense_description', ''),
+                                    expense_details=getattr(product, 'item_details', '') or getattr(product, 'expense_details', ''),
+                                    **product_data
+                                )
+                            elif to_module == 'journal':
+                                # Journal has different structure - create debit/credit entries
+                                JournalZohoProduct.objects.create(
+                                    zohoBill=new_zoho_bill,
+                                    account_description=getattr(product, 'item_name', '') or getattr(product, 'expense_description', ''),
+                                    account_details=getattr(product, 'item_details', '') or getattr(product, 'expense_details', ''),
+                                    debit_amount=getattr(product, 'amount', 0),
+                                    credit_amount=0,  # Default to debit
+                                    chart_of_accounts=getattr(product, 'chart_of_accounts', None),
+                                    organization=organization
+                                )
+
+                        # Transfer consolidated products if they exist
+                        source_consolidated = source_zoho_bill.consolidated_products.all() if hasattr(source_zoho_bill, 'consolidated_products') else []
+                        for consolidated in source_consolidated:
+                            consolidated_data = {
+                                'organization': organization,
+                                'consolidated_rate': getattr(consolidated, 'consolidated_rate', 0),
+                                'total_quantity': getattr(consolidated, 'total_quantity', 1),
+                                'consolidated_amount': getattr(consolidated, 'consolidated_amount', 0),
+                                'chart_of_accounts': getattr(consolidated, 'chart_of_accounts', None),
+                                'taxes': getattr(consolidated, 'taxes', None),
+                                'itc_eligibility': getattr(consolidated, 'itc_eligibility', 'eligible'),
+                                'reverse_charge_tax_id': getattr(consolidated, 'reverse_charge_tax_id', False),
+                                'original_items_count': getattr(consolidated, 'original_items_count', 1),
+                                'consolidation_notes': f"Moved from {from_module} - " + (getattr(consolidated, 'consolidation_notes', '') or '')
+                            }
+
+                            if to_module == 'vendor':
+                                VendorZohoConsolidatedProduct.objects.create(
+                                    zohoBill=new_zoho_bill,
+                                    consolidated_item_name=getattr(consolidated, 'consolidated_item_name', '') or
+                                                            getattr(consolidated, 'consolidated_expense_name', ''),
+                                    consolidated_item_details=getattr(consolidated, 'consolidated_item_details', '') or
+                                                             getattr(consolidated, 'consolidated_expense_details', ''),
+                                    **consolidated_data
+                                )
+                            elif to_module == 'expense':
+                                ExpenseZohoConsolidatedProduct.objects.create(
+                                    zohoBill=new_zoho_bill,
+                                    consolidated_expense_name=getattr(consolidated, 'consolidated_item_name', '') or
+                                                              getattr(consolidated, 'consolidated_expense_name', ''),
+                                    consolidated_expense_details=getattr(consolidated, 'consolidated_item_details', '') or
+                                                                getattr(consolidated, 'consolidated_expense_details', ''),
+                                    **consolidated_data
+                                )
+                            elif to_module == 'journal':
+                                JournalZohoConsolidatedProduct.objects.create(
+                                    zohoBill=new_zoho_bill,
+                                    consolidated_account_name=getattr(consolidated, 'consolidated_item_name', '') or
+                                                              getattr(consolidated, 'consolidated_expense_name', ''),
+                                    consolidated_account_details=getattr(consolidated, 'consolidated_item_details', '') or
+                                                                getattr(consolidated, 'consolidated_expense_details', ''),
+                                    consolidated_debit_amount=getattr(consolidated, 'consolidated_amount', 0),
+                                    consolidated_credit_amount=0,  # Default to debit
+                                    chart_of_accounts=getattr(consolidated, 'chart_of_accounts', None),
+                                    organization=organization,
+                                    original_items_count=getattr(consolidated, 'original_items_count', 1),
+                                    consolidation_notes=f"Moved from {from_module} - " + (getattr(consolidated, 'consolidation_notes', '') or '')
+                                )
+
+                    except Exception as product_transfer_error:
+                        logger.warning(f"Failed to transfer products for bill {bill_id}: {product_transfer_error}")
+                        # Don't fail the entire move operation, just log the warning
+
+                # Delete source bill and related data
+                if source_zoho_bill:
+                    # Delete products and consolidated products (cascade should handle this, but being explicit)
+                    if hasattr(source_zoho_bill, 'products'):
+                        source_zoho_bill.products.all().delete()
+                    if hasattr(source_zoho_bill, 'consolidated_products'):
+                        source_zoho_bill.consolidated_products.all().delete()
+                    source_zoho_bill.delete()
+
+                source_bill.delete()
+
+                # Track successful move
+                moved_bills.append({
+                    'original_bill_id': str(bill_id),
+                    'new_bill_id': str(new_bill.id),
+                    'status': 'success'
+                })
+                successful_moves += 1
+
+                logger.info(f"Successfully moved bill {bill_id} from {from_module} to {to_module} module")
+
+        except Exception as e:
+            logger.error(f"Error moving bill {bill_id}: {str(e)}")
+            errors.append({
+                'bill_id': bill_id,
+                'error': f'Failed to move bill: {str(e)}'
             })
+            failed_moves += 1
 
-    except (VendorBill.DoesNotExist, ExpenseBill.DoesNotExist, JournalBill.DoesNotExist) as e:
-        return Response({
-            'error': 'Bill Not Found',
-            'detail': f'Bill with ID {bill_id} not found in {from_module} module',
-            'bill_id': bill_id,
-            'module': from_module
-        }, status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
-        logger.error(f"Error moving bill {bill_id}: {str(e)}")
-        import traceback
-        logger.error(f"Move operation traceback: {traceback.format_exc()}")
-        return Response({
-            'error': 'Move Operation Failed',
-            'detail': f'Failed to move bill between modules: {str(e)}',
-            'solution': 'Please try again or contact support if the issue persists'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    # Prepare response
+    total_bills = len(bill_ids)
+
+    return Response({
+        'message': f'Batch move completed: {successful_moves} successful, {failed_moves} failed',
+        'total_bills': total_bills,
+        'successful_moves': successful_moves,
+        'failed_moves': failed_moves,
+        'moved_bills': moved_bills,
+        'from_module': from_module,
+        'to_module': to_module,
+        'preserved_analysis': successful_moves > 0,  # Indicates if LLM re-analysis was avoided
+        'llm_tokens_saved': successful_moves > 0,
+        'errors': errors
+    })
 
