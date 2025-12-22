@@ -29,6 +29,11 @@ from .models import (
     TallyVendorAnalyzedBill,
     TallyVendorAnalyzedProduct,
     TallyVendorConsolidatedProduct,
+    # Import expense models for bill moving
+    TallyExpenseBill,
+    TallyExpenseAnalyzedBill,
+    TallyExpenseAnalyzedProduct,
+    TallyExpenseConsolidatedProduct,
     Ledger,
     ParentLedger,
     TallyConfig
@@ -2499,6 +2504,19 @@ def prepare_sync_data(analyzed_bill, organization):
 
     return {"data": bill_data}
 
+
+# ============================================================================
+# Bill Moving Between Modules Functionality (Tally)
+# ============================================================================
+
+def get_organization_from_request_tally(request, org_id):
+    """
+    Helper function to get organization from request for Tally operations
+    """
+    try:
+        return Organization.objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return None
 
 @extend_schema(
     summary="Sync Bill to External System",
