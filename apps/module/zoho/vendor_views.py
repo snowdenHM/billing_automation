@@ -2151,7 +2151,7 @@ def vendor_bill_delete_view(request, org_id, bill_id):
         400: {'description': 'Invalid request or bill status'},
         404: {'description': 'Bill not found'}
     },
-    tags=['Zoho Bill Management']
+    tags=['Zoho Ops']
 )
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
