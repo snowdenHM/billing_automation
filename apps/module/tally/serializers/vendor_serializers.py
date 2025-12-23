@@ -218,3 +218,44 @@ class BillSyncResponseSerializer(serializers.Serializer):
     vendor = serializers.DictField()
     customer_id = serializers.UUIDField(allow_null=True)
     transactions = serializers.ListField(child=serializers.DictField())
+
+
+class TallyVendorBillDetailSerializer(serializers.ModelSerializer):
+    """Enhanced Tally vendor bill serializer with analyzed data"""
+
+    uploaded_by_username = serializers.CharField(source='uploaded_by.username', read_only=True)
+    organization_name = serializers.CharField(source='organization.name', read_only=True)
+    analyzed_bill = serializers.SerializerMethodField()
+    next_bill = serializers.SerializerMethodField()
+
+    def get_analyzed_bill(self, obj):
+        """Get analyzed bill data if exists"""
+        try:
+            from ..models import TallyVendorAnalyzedBill
+            analyzed_bill = TallyVendorAnalyzedBill.objects.filter(selected_bill=obj).first()
+            if analyzed_bill:
+                return TallyVendorAnalyzedBillSerializer(analyzed_bill).data
+        except:
+            pass
+        return None
+
+    def get_next_bill(self, obj):
+        """Get next bill to process"""
+        next_bills = TallyVendorBill.objects.filter(
+            organization=obj.organization,
+            status=TallyVendorBill.BillStatus.ANALYSED
+        ).exclude(id=obj.id).values_list('id', flat=True)
+
+        if next_bills:
+            import random
+            return str(random.choice(list(next_bills)))
+        return None
+
+    class Meta:
+        model = TallyVendorBill
+        fields = [
+            'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
+            'status', 'process', 'uploaded_by', 'uploaded_by_username',
+            'organization_name', 'created_at', 'updated_at', 'analyzed_bill', 'next_bill'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'uploaded_by_username', 'organization_name', 'analyzed_bill', 'next_bill']

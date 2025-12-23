@@ -2,6 +2,7 @@ from .ledger_serializers import LedgerSerializer, ParentLedgerSerializer, Ledger
 from .config_serializers import TallyConfigSerializer
 from .vendor_serializers import (
     TallyVendorBillSerializer,
+    TallyVendorBillDetailSerializer,
     TallyVendorAnalyzedBillSerializer,
     TallyVendorAnalyzedProductSerializer,
     VendorBillUploadSerializer,
@@ -29,6 +30,7 @@ __all__ = [
     'StockItemBulkCreateSerializer',
     'TallyConfigSerializer',
     'TallyVendorBillSerializer',
+    'TallyVendorBillDetailSerializer',
     'TallyVendorAnalyzedBillSerializer',
     'TallyVendorAnalyzedProductSerializer',
     'VendorBillUploadSerializer',
