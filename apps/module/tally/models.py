@@ -521,6 +521,15 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
         choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT
     )
 
+    # TDS Fields
+    tds = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    tds_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="tds_tally_expense_analysed_bills"
+    )
+    tds_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT
+    )
+
     note = models.CharField(max_length=100, blank=True, null=True, default="Enter Your Description")
 
     # Line Items Consolidation Setting

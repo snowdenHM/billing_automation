@@ -1583,6 +1583,17 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
             if 'debit_or_credit' in sgst_data:
                 analyzed_bill.sgst_debit_or_credit = sgst_data['debit_or_credit']
 
+            # Handle TDS data
+            tds_data = taxes_data.get('tds', {})
+            if 'amount' in tds_data:
+                analyzed_bill.tds = round(float(tds_data['amount']), 2)
+            if 'ledger' in tds_data and tds_data['ledger'] != "No Tax Ledger":
+                tds_ledger = find_or_create_expense_tax_ledger(tds_data['ledger'], 'TDS', organization)
+                if tds_ledger:
+                    analyzed_bill.tds_taxes = tds_ledger
+            if 'debit_or_credit' in tds_data:
+                analyzed_bill.tds_debit_or_credit = tds_data['debit_or_credit']
+
         # Determine GST type based on updated amounts
         if analyzed_bill.igst and analyzed_bill.igst > 0:
             analyzed_bill.gst_type = TallyExpenseAnalyzedBill.GSTType.IGST
@@ -1919,6 +1930,10 @@ def get_structured_expense_bill_data(analyzed_bill, organization):
             "sgst": {
                 "amount": float(analyzed_bill.sgst or 0),
                 "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
+            },
+            "tds": {
+                "amount": float(analyzed_bill.tds or 0),
+                "ledger": str(analyzed_bill.tds_taxes) if analyzed_bill.tds_taxes else "No Tax Ledger",
             }
         },
         "expense_items": [
@@ -2265,6 +2280,17 @@ def prepare_expense_sync_data(analyzed_bill, organization):
         elif analyzed_bill.sgst_debit_or_credit == 'credit':
             cr_ledger.append(sgst_entry)
 
+    # Process TDS based on debit_or_credit field
+    if analyzed_bill.tds and analyzed_bill.tds > 0 and analyzed_bill.tds_taxes:
+        tds_entry = {
+            "LEDGERNAME": str(analyzed_bill.tds_taxes),
+            "AMOUNT": float(analyzed_bill.tds)
+        }
+        if analyzed_bill.tds_debit_or_credit == 'debit':
+            dr_ledger.append(tds_entry)
+        elif analyzed_bill.tds_debit_or_credit == 'credit':
+            cr_ledger.append(tds_entry)
+
     # Process vendor based on vendor_debit_or_credit field using vendor_amount
     if vendor_ledger and analyzed_bill.vendor_amount and analyzed_bill.vendor_amount > 0:
         vendor_entry = {
@@ -2288,9 +2314,9 @@ def prepare_expense_sync_data(analyzed_bill, organization):
     notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
 
     bill_data = {
-        "id": analyzed_bill.id,
+        "id": str(analyzed_bill.id),
         "voucher": analyzed_bill.voucher or "",
-        "bill_no": analyzed_bill.bill_no,
+        "bill_no": analyzed_bill.bill_no or "",
         "bill_date": bill_date_str,
         "total": float(analyzed_bill.total or 0),
         "name": vendor_name,
@@ -2299,60 +2325,7 @@ def prepare_expense_sync_data(analyzed_bill, organization):
         "DR_LEDGER": dr_ledger,
         "CR_LEDGER": cr_ledger,
         "notes": notes_message,
-        "created_at": analyzed_bill.created_at
-    }
-
-    return {"data": bill_data}
-    if vendor_ledger and analyzed_bill.vendor_amount and analyzed_bill.vendor_amount > 0:
-        vendor_entry = {
-            "LEDGERNAME": vendor_ledger.name,
-            "AMOUNT": float(analyzed_bill.vendor_amount)
-        }
-
-        # Add vendor to appropriate ledger based on vendor_debit_or_credit
-        if analyzed_bill.vendor_debit_or_credit == 'debit':
-            dr_ledger.append(vendor_entry)
-            total_debit += float(analyzed_bill.vendor_amount)
-        elif analyzed_bill.vendor_debit_or_credit == 'credit':
-            cr_ledger.append(vendor_entry)
-            total_credit += float(analyzed_bill.vendor_amount)
-
-    # Ensure debit and credit are balanced - remove automatic vendor balancing
-    # since vendor is now explicitly handled based on vendor_debit_or_credit
-    # The previous logic is commented out:
-    # if total_debit > 0 and total_credit == 0:
-    #     cr_ledger.append({
-    #         "LEDGERNAME": vendor_ledger.name if vendor_ledger else "No Vendor Ledger",
-    #         "AMOUNT": total_debit
-    #     })
-    # elif total_credit > 0 and total_debit == 0:
-    #     dr_ledger.append({
-    #         "LEDGERNAME": vendor_ledger.name if vendor_ledger else "No Vendor Ledger",
-    #         "AMOUNT": total_credit
-    #     })
-
-    # Build expense sync payload with structured format similar to vendor bills
-    vendor_name = vendor_ledger.name if vendor_ledger and vendor_ledger.name else "Unknown Vendor"
-    
-    # Construct the expense bill URL
-    bill_url = f"https://billmunshi.com/tally/expense-bill/{analyzed_bill.selected_bill.id}"
-    
-    # Create the notes message
-    notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
-    
-    bill_data = {
-        "id": analyzed_bill.id,
-        "voucher": analyzed_bill.voucher or "",
-        "bill_no": analyzed_bill.bill_no,
-        "bill_date": bill_date_str,
-        "total": float(analyzed_bill.total or 0),
-        "name": vendor_name,
-        "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "No Ledger",
-        "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
-        "DR_LEDGER": dr_ledger,
-        "CR_LEDGER": cr_ledger,
-        "notes": notes_message,
-        "created_at": analyzed_bill.created_at
+        "created_at": analyzed_bill.created_at.isoformat() if analyzed_bill.created_at else None
     }
 
     return {"data": bill_data}

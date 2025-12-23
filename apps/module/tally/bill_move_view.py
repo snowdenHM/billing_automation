@@ -167,7 +167,7 @@ def move_tally_bills_between_modules_view(request, org_id):
                         try:
                             source_analyzed_bill = TallyExpenseAnalyzedBill.objects.prefetch_related(
                                 'products', 'consolidated_product'
-                            ).get(expense_bill=source_bill, organization=organization)
+                            ).get(selected_bill=source_bill, organization=organization)
                         except TallyExpenseAnalyzedBill.DoesNotExist:
                             source_analyzed_bill = None
                     except TallyExpenseBill.DoesNotExist:
@@ -211,12 +211,10 @@ def move_tally_bills_between_modules_view(request, org_id):
                         analyzed_common_data = {
                             'selected_bill': new_bill,
                             'organization': organization,
-                            'company_id': str(getattr(source_analyzed_bill, 'company_id', ''))[:100],
-                            'party_name': str(getattr(source_analyzed_bill, 'party_name', ''))[:100],
+                            'vendor': getattr(source_analyzed_bill, 'vendor', None),
                             'bill_no': str(getattr(source_analyzed_bill, 'bill_no', ''))[:50],
                             'bill_date': getattr(source_analyzed_bill, 'bill_date', None),
                             'due_date': getattr(source_analyzed_bill, 'due_date', None),
-                            'reference': str(getattr(source_analyzed_bill, 'reference', ''))[:100],
                             'total': getattr(source_analyzed_bill, 'total', 0),
                             'igst': getattr(source_analyzed_bill, 'igst', 0),
                             'cgst': getattr(source_analyzed_bill, 'cgst', 0),
@@ -232,18 +230,17 @@ def move_tally_bills_between_modules_view(request, org_id):
 
                     if source_analyzed_bill:
                         analyzed_common_data = {
-                            'expense_bill': new_bill,
+                            'selected_bill': new_bill,
                             'organization': organization,
-                            'company_id': str(getattr(source_analyzed_bill, 'company_id', ''))[:100],
-                            'party_name': str(getattr(source_analyzed_bill, 'party_name', ''))[:100],
+                            'vendor': getattr(source_analyzed_bill, 'vendor', None),
                             'bill_no': str(getattr(source_analyzed_bill, 'bill_no', ''))[:50],
                             'bill_date': getattr(source_analyzed_bill, 'bill_date', None),
                             'due_date': getattr(source_analyzed_bill, 'due_date', None),
-                            'reference': str(getattr(source_analyzed_bill, 'reference', ''))[:100],
                             'total': getattr(source_analyzed_bill, 'total', 0),
                             'igst': getattr(source_analyzed_bill, 'igst', 0),
                             'cgst': getattr(source_analyzed_bill, 'cgst', 0),
                             'sgst': getattr(source_analyzed_bill, 'sgst', 0),
+                            'tds': getattr(source_analyzed_bill, 'tds', 0),
                             'note': (f"Moved from {from_module} - " + str(getattr(source_analyzed_bill, 'note', '')))[:100],
                             'consolidate': getattr(source_analyzed_bill, 'consolidate', False)
                         }
@@ -274,20 +271,11 @@ def move_tally_bills_between_modules_view(request, org_id):
                                 )
                             elif to_module == 'expense':
                                 TallyExpenseAnalyzedProduct.objects.create(
-                                    expense_bill_analyzed=new_analyzed_bill,
-                                    organization=organization,
-                                    item_name=str(getattr(product, 'item_name', ''))[:100],
-                                    item_details=str(getattr(product, 'item_details', '')),
-                                    price=getattr(product, 'price', 0),
-                                    quantity=getattr(product, 'quantity', 0),
+                                    expense_bill=new_analyzed_bill,
+                                    item_details=str(getattr(product, 'item_details', '') or getattr(product, 'item_name', '')),
+                                    chart_of_accounts=getattr(product, 'ledger', None) or getattr(product, 'stock_item', None),
                                     amount=getattr(product, 'amount', 0),
-                                    product_gst=str(getattr(product, 'product_gst', ''))[:20],
-                                    igst=getattr(product, 'igst', 0),
-                                    cgst=getattr(product, 'cgst', 0),
-                                    sgst=getattr(product, 'sgst', 0),
-                                    ledger=getattr(product, 'ledger', None),
-                                    taxes=getattr(product, 'taxes', None),
-                                    debit_credit=getattr(product, 'debit_credit', 'debit')
+                                    debit_or_credit=getattr(product, 'debit_credit', 'debit') or 'debit'
                                 )
 
                         # Transfer consolidated products if they exist
@@ -320,20 +308,11 @@ def move_tally_bills_between_modules_view(request, org_id):
                             elif to_module == 'expense':
                                 TallyExpenseConsolidatedProduct.objects.create(
                                     expense_bill=new_analyzed_bill,
-                                    organization=organization,
-                                    item_name=str(getattr(source_consolidated, 'item_name', ''))[:500],
-                                    item_details=str(getattr(source_consolidated, 'item_details', '')),
-                                    price=getattr(source_consolidated, 'price', 0),
-                                    quantity=getattr(source_consolidated, 'quantity', 1),
+                                    item_details=str(getattr(source_consolidated, 'item_details', '') or getattr(source_consolidated, 'item_name', '')),
+                                    chart_of_accounts=getattr(source_consolidated, 'chart_of_accounts', None) or getattr(source_consolidated, 'stock_item', None),
                                     amount=getattr(source_consolidated, 'amount', 0),
-                                    product_gst=str(getattr(source_consolidated, 'product_gst', ''))[:20],
-                                    igst=getattr(source_consolidated, 'igst', 0),
-                                    cgst=getattr(source_consolidated, 'cgst', 0),
-                                    sgst=getattr(source_consolidated, 'sgst', 0),
-                                    ledger=getattr(source_consolidated, 'ledger', None),
-                                    taxes=getattr(source_consolidated, 'taxes', None),
-                                    debit_credit=getattr(source_consolidated, 'debit_credit', 'debit'),
-                                    original_items_count=getattr(source_consolidated, 'original_items_count', 1),
+                                    debit_or_credit=getattr(source_consolidated, 'debit_or_credit', 'debit') or getattr(source_consolidated, 'debit_credit', 'debit') or 'debit',
+                                    original_entries_count=getattr(source_consolidated, 'original_entries_count', 1) or getattr(source_consolidated, 'original_items_count', 1) or 1,
                                     consolidation_notes=f"Moved from {from_module} module"
                                 )
 
