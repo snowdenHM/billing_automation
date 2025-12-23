@@ -568,15 +568,24 @@ def process_analysis_data(bill, json_data, organization):
 
         # Create analyzed bill
         with transaction.atomic():
+            # Round decimal values to 2 decimal places to avoid validation errors
+            from decimal import Decimal, ROUND_HALF_UP
+
+            total_val = safe_float_convert(relevant_data.get('total', 0))
+            igst_rounded = Decimal(str(igst_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            cgst_rounded = Decimal(str(cgst_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            sgst_rounded = Decimal(str(sgst_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            total_rounded = Decimal(str(total_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
             analyzed_bill = TallyVendorAnalyzedBill.objects.create(
                 selected_bill=bill,
                 vendor=vendor,
                 bill_no=invoice_number,
                 bill_date=bill_date,
-                igst=igst_val,
-                cgst=cgst_val,
-                sgst=sgst_val,
-                total=safe_float_convert(relevant_data.get('total', 0)),
+                igst=igst_rounded,
+                cgst=cgst_rounded,
+                sgst=sgst_rounded,
+                total=total_rounded,
                 note="AI Analyzed Bill",
                 organization=organization,
                 gst_type=gst_type
@@ -588,12 +597,21 @@ def process_analysis_data(bill, json_data, organization):
             if isinstance(items, list):
                 for item in items:
                     if isinstance(item, dict):
+                        # Handle decimal precision for product amounts
+                        price_val = safe_float_convert(item.get('price', 0))
+                        quantity_val = safe_int_convert(item.get('quantity', 0))
+                        amount_val = price_val * quantity_val
+
+                        # Round to 2 decimal places
+                        price_rounded = Decimal(str(price_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        amount_rounded = Decimal(str(amount_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
                         product = TallyVendorAnalyzedProduct(
                             vendor_bill_analyzed=analyzed_bill,
                             item_details=str(item.get('description', '')),
-                            price=safe_float_convert(item.get('price', 0)),
-                            quantity=safe_int_convert(item.get('quantity', 0)),
-                            amount=safe_float_convert(item.get('price', 0)) * safe_int_convert(item.get('quantity', 0)),
+                            price=price_rounded,
+                            quantity=quantity_val,
+                            amount=amount_rounded,
                             organization=organization
                         )
                         product_instances.append(product)
@@ -608,9 +626,12 @@ def process_analysis_data(bill, json_data, organization):
                         # Delete existing consolidated product if exists
                         TallyVendorConsolidatedProduct.objects.filter(vendor_bill_analyzed=analyzed_bill).delete()
 
-                        # Calculate consolidated data
+                        # Calculate consolidated data with proper decimal handling
                         total_amount = sum(p.amount for p in product_instances)
                         items_count = len(product_instances)
+
+                        # Round values to 2 decimal places
+                        total_rounded = Decimal(str(total_amount)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
                         # Create detailed breakdown
                         item_details = []
@@ -625,13 +646,13 @@ def process_analysis_data(bill, json_data, organization):
                             organization=organization,
                             item_name=f"Consolidated Items - {invoice_number} ({items_count} items)",
                             item_details=consolidated_details,
-                            price=total_amount,  # Total as rate
+                            price=total_rounded,  # Total as rate
                             quantity=1,  # Always 1 for consolidated
-                            amount=total_amount,
-                            product_gst="18%",  # Default GST rate
-                            igst=igst_val,
-                            cgst=cgst_val,
-                            sgst=sgst_val,
+                            amount=total_rounded,
+                            product_gst="",  # Empty - let user select GST rate
+                            igst=igst_rounded,
+                            cgst=cgst_rounded,
+                            sgst=sgst_rounded,
                             original_items_count=items_count,
                             consolidation_notes=f'Auto-created during analysis for {items_count} items'
                         )

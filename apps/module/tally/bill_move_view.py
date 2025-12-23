@@ -272,6 +272,7 @@ def move_tally_bills_between_modules_view(request, org_id):
                             elif to_module == 'expense':
                                 TallyExpenseAnalyzedProduct.objects.create(
                                     expense_bill=new_analyzed_bill,
+                                    organization=organization,
                                     item_details=str(getattr(product, 'item_details', '') or getattr(product, 'item_name', '')),
                                     chart_of_accounts=getattr(product, 'ledger', None) or getattr(product, 'stock_item', None),
                                     amount=getattr(product, 'amount', 0),
@@ -308,6 +309,7 @@ def move_tally_bills_between_modules_view(request, org_id):
                             elif to_module == 'expense':
                                 TallyExpenseConsolidatedProduct.objects.create(
                                     expense_bill=new_analyzed_bill,
+                                    organization=organization,
                                     item_details=str(getattr(source_consolidated, 'item_details', '') or getattr(source_consolidated, 'item_name', '')),
                                     chart_of_accounts=getattr(source_consolidated, 'chart_of_accounts', None) or getattr(source_consolidated, 'stock_item', None),
                                     amount=getattr(source_consolidated, 'amount', 0),
