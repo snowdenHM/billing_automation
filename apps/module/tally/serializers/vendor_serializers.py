@@ -93,6 +93,7 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
     products = TallyVendorAnalyzedProductSerializer(many=True, read_only=True)
     vendor_name = serializers.CharField(source='vendor.name', read_only=True)
     selected_bill_name = serializers.CharField(source='selected_bill.bill_munshi_name', read_only=True)
+    consolidated_product = serializers.SerializerMethodField()
 
     # Use SafeDecimalField for all decimal fields that might have invalid values
     total = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
@@ -100,15 +101,39 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
     cgst = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
     sgst = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
 
+    def get_consolidated_product(self, obj):
+        """Get consolidated product data if exists"""
+        try:
+            consolidated_product = obj.consolidated_product
+            from ..models import TallyVendorConsolidatedProduct
+
+            return {
+                'id': str(consolidated_product.id),
+                'item_name': consolidated_product.item_name,
+                'item_details': consolidated_product.item_details,
+                'price': float(consolidated_product.price or 0),
+                'quantity': consolidated_product.quantity or 1,
+                'amount': float(consolidated_product.amount or 0),
+                'product_gst': consolidated_product.product_gst or "",
+                'igst': float(consolidated_product.igst or 0),
+                'cgst': float(consolidated_product.cgst or 0),
+                'sgst': float(consolidated_product.sgst or 0),
+                'original_items_count': consolidated_product.original_items_count or 0,
+                'consolidation_notes': consolidated_product.consolidation_notes or "",
+                'created_at': consolidated_product.created_at.isoformat() if consolidated_product.created_at else None
+            }
+        except:
+            return None
+
     class Meta:
         model = TallyVendorAnalyzedBill
         fields = [
             'id', 'selected_bill', 'selected_bill_name', 'vendor', 'vendor_name',
             'bill_no', 'bill_date', 'total', 'igst', 'igst_taxes',
             'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes', 'gst_type',
-            'note', 'products', 'created_at'
+            'note', 'consolidate', 'products', 'consolidated_product', 'created_at'
         ]
-        read_only_fields = ['id', 'created_at', 'vendor_name', 'selected_bill_name', 'products']
+        read_only_fields = ['id', 'created_at', 'vendor_name', 'selected_bill_name', 'products', 'consolidated_product']
 
 
 class VendorBillUploadSerializer(serializers.Serializer):
