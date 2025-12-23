@@ -13,6 +13,7 @@ from .vendor_serializers import (
 )
 from .expense_serializers import (
     TallyExpenseBillSerializer,
+    TallyExpenseBillDetailSerializer,
     TallyExpenseAnalyzedBillSerializer,
     TallyExpenseAnalyzedProductSerializer,
     ExpenseBillUploadSerializer,
@@ -39,6 +40,7 @@ __all__ = [
     'BillSyncRequestSerializer',
     'BillSyncResponseSerializer',
     'TallyExpenseBillSerializer',
+    'TallyExpenseBillDetailSerializer',
     'TallyExpenseAnalyzedBillSerializer',
     'TallyExpenseAnalyzedProductSerializer',
     'ExpenseBillUploadSerializer',

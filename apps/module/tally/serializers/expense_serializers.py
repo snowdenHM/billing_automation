@@ -79,15 +79,36 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
     products = TallyExpenseAnalyzedProductSerializer(many=True, read_only=True)
     vendor_name = serializers.CharField(source='vendor.name', read_only=True)
     selected_bill_name = serializers.CharField(source='selected_bill.bill_munshi_name', read_only=True)
+    consolidated_product = serializers.SerializerMethodField()
+
+    def get_consolidated_product(self, obj):
+        """Get consolidated product data if exists"""
+        try:
+            consolidated_product = obj.consolidated_product
+            from ..models import TallyExpenseConsolidatedProduct
+
+            return {
+                'id': str(consolidated_product.id),
+                'item_details': consolidated_product.item_details,
+                'chart_of_accounts': str(consolidated_product.chart_of_accounts) if consolidated_product.chart_of_accounts else None,
+                'amount': float(consolidated_product.amount or 0),
+                'debit_or_credit': consolidated_product.debit_or_credit or "debit",
+                'original_entries_count': consolidated_product.original_entries_count or 0,
+                'consolidation_notes': consolidated_product.consolidation_notes or "",
+                'created_at': consolidated_product.created_at.isoformat() if consolidated_product.created_at else None
+            }
+        except:
+            return None
 
     class Meta:
         model = TallyExpenseAnalyzedBill
         fields = [
             'id', 'selected_bill', 'selected_bill_name', 'vendor', 'vendor_name',
             'voucher', 'bill_no', 'bill_date', 'total', 'igst', 'igst_taxes',
-            'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes', 'tds', 'tds_taxes', 'note', 'products', 'created_at'
+            'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes', 'tds', 'tds_taxes', 'note',
+            'consolidate', 'products', 'consolidated_product', 'created_at'
         ]
-        read_only_fields = ['id', 'created_at', 'vendor_name', 'selected_bill_name', 'products']
+        read_only_fields = ['id', 'created_at', 'vendor_name', 'selected_bill_name', 'products', 'consolidated_product']
 
 
 class ExpenseBillUploadSerializer(serializers.Serializer):
@@ -201,3 +222,44 @@ class ExpenseBillSyncResponseSerializer(serializers.Serializer):
     DR_LEDGER = serializers.ListField(child=serializers.DictField())
     CR_LEDGER = serializers.ListField(child=serializers.DictField())
     note = serializers.CharField()
+
+
+class TallyExpenseBillDetailSerializer(serializers.ModelSerializer):
+    """Enhanced Tally expense bill serializer with analyzed data"""
+
+    uploaded_by_username = serializers.CharField(source='uploaded_by.username', read_only=True)
+    organization_name = serializers.CharField(source='organization.name', read_only=True)
+    analyzed_bill = serializers.SerializerMethodField()
+    next_bill = serializers.SerializerMethodField()
+
+    def get_analyzed_bill(self, obj):
+        """Get analyzed bill data if exists"""
+        try:
+            from ..models import TallyExpenseAnalyzedBill
+            analyzed_bill = TallyExpenseAnalyzedBill.objects.filter(selected_bill=obj).first()
+            if analyzed_bill:
+                return TallyExpenseAnalyzedBillSerializer(analyzed_bill).data
+        except:
+            pass
+        return None
+
+    def get_next_bill(self, obj):
+        """Get next bill to process"""
+        next_bills = TallyExpenseBill.objects.filter(
+            organization=obj.organization,
+            status=TallyExpenseBill.BillStatus.ANALYSED
+        ).exclude(id=obj.id).values_list('id', flat=True)
+
+        if next_bills:
+            import random
+            return str(random.choice(list(next_bills)))
+        return None
+
+    class Meta:
+        model = TallyExpenseBill
+        fields = [
+            'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
+            'status', 'process', 'uploaded_by', 'uploaded_by_username',
+            'organization_name', 'created_at', 'updated_at', 'analyzed_bill', 'next_bill'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'uploaded_by_username', 'organization_name', 'analyzed_bill', 'next_bill']
