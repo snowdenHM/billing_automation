@@ -115,6 +115,8 @@ def check_duplicate_tally_vendor_bill(bill, organization):
         if current_vendor_name and other_vendor_name:
             vendor_similarity = _calculate_tally_string_similarity(current_vendor_name.lower(), other_vendor_name.lower())
             if vendor_similarity > 0.8:
+                similarity_score += 30.0 * vendor_similarity
+                match_reasons.append('vendor_similarity')
                 similarity_score += 25.0 * vendor_similarity
                 match_reasons.append('vendor_name_match')
 
@@ -817,6 +819,20 @@ def process_pdf_splitting(pdf_file, organization, file_type, uploaded_by):
             )
 
             if page_images:
+                page_image = page_images[0]
+                # Save page as separate image file
+                image_io = BytesIO()
+                page_image.save(image_io, format='JPEG')
+                image_content = ContentFile(image_io.getvalue(), name=f"page_{page_num + 1}_{unique_id}.jpg")
+                
+                # Create separate bill for this page
+                bill = TallyVendorBill.objects.create(
+                    file=image_content,
+                    organization=organization,
+                    file_type=file_type,
+                    uploaded_by=uploaded_by
+                )
+                created_bills.append(bill)
                 image_io = BytesIO()
                 page_images[0].save(image_io, format='JPEG')
                 image_io.seek(0)
@@ -1798,52 +1814,53 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
             if consolidate_prod_array:
                 logger.info(f"Found {len(consolidate_prod_array)} items in consolidate_prod array")
                 
-                # Process consolidated products from consolidate_prod array
-                for consolidated_product_data in consolidate_prod_array:
-                    try:
-                        # Find or create tax ledger
-                        tax_ledger = None
-                        tax_ledger_name = consolidated_product_data.get('tax_ledger')
-                        if tax_ledger_name and tax_ledger_name != "No Tax Ledger":
-                            tax_ledger = find_or_create_tax_ledger(tax_ledger_name, 'purchase', organization)
+                try:
+                    # 🔄 FIRST: Clear existing consolidated products to prevent duplicates (like Zoho)
+                    existing_consolidated = TallyVendorConsolidatedProduct.objects.filter(vendor_bill_analyzed=analyzed_bill)
+                    if existing_consolidated.exists():
+                        existing_count = existing_consolidated.count()
+                        existing_consolidated.delete()
+                        logger.info(f"Deleted {existing_count} existing consolidated products before creating new ones")
+                    
+                    # Handle consolidated product creation (always create new after clearing)
+                    for idx, consolidated_product_data in enumerate(consolidate_prod_array):
+                        logger.info(f"Creating consolidated product {idx + 1}: {consolidated_product_data.get('item_name', 'Unnamed')}")
                         
-                        # Create or update consolidated product
-                        consolidated_data = {
-                            'vendor_bill_analyzed': analyzed_bill,
-                            'organization': organization,
-                            'consolidated_item_name': consolidated_product_data.get('item_name', 'Consolidated Items'),
-                            'consolidated_item_details': consolidated_product_data.get('item_details', ''),
-                            'total_quantity': int(consolidated_product_data.get('quantity', 1)),
-                            'consolidated_rate': float(consolidated_product_data.get('price', 0) or consolidated_product_data.get('rate', 0)),
-                            'consolidated_amount': float(consolidated_product_data.get('amount', 0)),
-                            'taxes': tax_ledger,
-                            'product_gst': consolidated_product_data.get('product_gst', ''),
-                            'igst': float(consolidated_product_data.get('igst', 0)),
-                            'cgst': float(consolidated_product_data.get('cgst', 0)),
-                            'sgst': float(consolidated_product_data.get('sgst', 0)),
-                            'original_items_count': consolidated_product_data.get('original_items_count', 1),
-                            'consolidation_notes': "Updated via verification"
-                        }
-                        
-                        # Check if consolidated product already exists
-                        existing_consolidated = TallyVendorConsolidatedProduct.objects.filter(
-                            vendor_bill_analyzed=analyzed_bill
-                        ).first()
-                        
-                        if existing_consolidated:
-                            # Update existing consolidated product
-                            for key, value in consolidated_data.items():
-                                if key not in ['vendor_bill_analyzed', 'organization']:  # Skip FK fields
-                                    setattr(existing_consolidated, key, value)
-                            existing_consolidated.save()
-                            logger.info(f"Updated existing consolidated product: {existing_consolidated.id}")
-                        else:
-                            # Create new consolidated product
-                            consolidated_product = TallyVendorConsolidatedProduct.objects.create(**consolidated_data)
-                            logger.info(f"Created new consolidated product: {consolidated_product.id}")
-                        
-                    except Exception as e:
-                        logger.error(f"Error processing consolidated product: {str(e)}")
+                        try:
+                            # Find or create tax ledger
+                            tax_ledger = None
+                            tax_ledger_name = consolidated_product_data.get('tax_ledger')
+                            if tax_ledger_name and tax_ledger_name != "No Tax Ledger":
+                                tax_ledger = find_or_create_tax_ledger(tax_ledger_name, 'purchase', organization)
+                            
+                            # Create new consolidated product (Tally now uses ForeignKey, multiple supported)
+                            consolidated_product = TallyVendorConsolidatedProduct.objects.create(
+                                vendor_bill_analyzed=analyzed_bill,
+                                organization=organization,
+                                item_name=consolidated_product_data.get('item_name', 'Consolidated Items'),
+                                item_details=consolidated_product_data.get('item_details', ''),
+                                quantity=int(consolidated_product_data.get('quantity', 1)),
+                                price=float(consolidated_product_data.get('price', 0) or consolidated_product_data.get('rate', 0)),
+                                amount=float(consolidated_product_data.get('amount', 0)),
+                                taxes=tax_ledger,
+                                product_gst=consolidated_product_data.get('product_gst', ''),
+                                igst=float(consolidated_product_data.get('igst', 0)),
+                                cgst=float(consolidated_product_data.get('cgst', 0)),
+                                sgst=float(consolidated_product_data.get('sgst', 0)),
+                                original_items_count=consolidated_product_data.get('original_items_count', 1),
+                                consolidation_notes='Created from frontend verification'
+                            )
+                            logger.info(f"Created new consolidated product {consolidated_product.id}")
+                            
+                            # Since Tally now uses ForeignKey, multiple consolidated products are supported
+                            # We can create each consolidated product from the array
+                            
+                        except Exception as consolidate_item_error:
+                            logger.error(f"Error creating consolidated product {idx + 1}: {consolidate_item_error}")
+                            continue
+                            
+                except Exception as consolidate_error:
+                    logger.error(f"Error processing consolidate_prod array: {consolidate_error}")
                 
                 # Clear individual products since we're in consolidation mode
                 existing_individual_products = analyzed_bill.products.all()
@@ -1878,15 +1895,15 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                             if tax_ledger_name and tax_ledger_name != "No Tax Ledger":
                                 tax_ledger = find_or_create_tax_ledger(tax_ledger_name, 'purchase', organization)
                             
-                            # Create or update consolidated product
+                            # Create new consolidated product (since we allow multiple now)
                             consolidated_data = {
                                 'vendor_bill_analyzed': analyzed_bill,
                                 'organization': organization,
-                                'consolidated_item_name': consolidated_product_from_payload.get('item_name', 'Consolidated Items'),
-                                'consolidated_item_details': consolidated_product_from_payload.get('item_details', ''),
-                                'total_quantity': int(consolidated_product_from_payload.get('quantity', 1)),
-                                'consolidated_rate': float(consolidated_product_from_payload.get('price', 0) or consolidated_product_from_payload.get('rate', 0)),
-                                'consolidated_amount': float(consolidated_product_from_payload.get('amount', 0)),
+                                'item_name': consolidated_product_from_payload.get('item_name', 'Consolidated Items'),
+                                'item_details': consolidated_product_from_payload.get('item_details', ''),
+                                'quantity': int(consolidated_product_from_payload.get('quantity', 1)),
+                                'price': float(consolidated_product_from_payload.get('price', 0) or consolidated_product_from_payload.get('rate', 0)),
+                                'amount': float(consolidated_product_from_payload.get('amount', 0)),
                                 'taxes': tax_ledger,
                                 'product_gst': consolidated_product_from_payload.get('product_gst', ''),
                                 'igst': float(consolidated_product_from_payload.get('igst', 0)),
@@ -1896,22 +1913,9 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                                 'consolidation_notes': "Updated via verification (fallback from products array)"
                             }
                             
-                            # Check if consolidated product already exists
-                            existing_consolidated = TallyVendorConsolidatedProduct.objects.filter(
-                                vendor_bill_analyzed=analyzed_bill
-                            ).first()
-                            
-                            if existing_consolidated:
-                                # Update existing consolidated product
-                                for key, value in consolidated_data.items():
-                                    if key not in ['vendor_bill_analyzed', 'organization']:
-                                        setattr(existing_consolidated, key, value)
-                                existing_consolidated.save()
-                                logger.info(f"Updated existing consolidated product (fallback): {existing_consolidated.id}")
-                            else:
-                                # Create new consolidated product
-                                consolidated_product = TallyVendorConsolidatedProduct.objects.create(**consolidated_data)
-                                logger.info(f"Created new consolidated product (fallback): {consolidated_product.id}")
+                            # Create new consolidated product (since we allow multiple now)
+                            consolidated_product = TallyVendorConsolidatedProduct.objects.create(**consolidated_data)
+                            logger.info(f"Created new consolidated product (fallback): {consolidated_product.id}")
                             
                             # Clear individual products since we're in consolidation mode
                             existing_individual_products = analyzed_bill.products.all()
@@ -2545,8 +2549,8 @@ def prepare_sync_data(analyzed_bill, organization):
     if hasattr(analyzed_bill, 'consolidate') and analyzed_bill.consolidate:
         # ✅ USE CONSOLIDATED TABLE DATA
         try:
-            consolidated_product = analyzed_bill.consolidated_product
-            logger.info(f"Using consolidated data for bill {analyzed_bill.bill_no}")
+            consolidated_products = analyzed_bill.consolidated_products.all()
+            logger.info(f"Using consolidated data for bill {analyzed_bill.bill_no} ({consolidated_products.count()} consolidated products)")
 
             # Get individual products for GST rate calculation
             individual_products = analyzed_bill.products.all()
@@ -2562,7 +2566,10 @@ def prepare_sync_data(analyzed_bill, organization):
                 else:
                     # If no product_gst values, try to calculate from tax amounts
                     # This is a fallback calculation based on tax percentages
-                    total_base_amount = float(consolidated_product.consolidated_amount or 0)
+                    total_base_amount = 0
+                    for consolidated_product in consolidated_products:
+                        total_base_amount += float(consolidated_product.amount or 0)
+                    
                     total_tax = float(analyzed_bill.igst or 0) + float(analyzed_bill.cgst or 0) + float(analyzed_bill.sgst or 0)
 
                     if total_base_amount > 0 and total_tax > 0:
@@ -2587,33 +2594,34 @@ def prepare_sync_data(analyzed_bill, organization):
             else:
                 logger.warning(f"No individual products found for consolidated bill {analyzed_bill.bill_no}, using default GST rate")
 
-            # Use consolidated product data in same format
-            if allow_product_sync:
-                product_data = {
-                    "id": str(consolidated_product.id),
-                    "item_name": consolidated_product.item_name,  # ✅ Direct field
-                    "item_details": consolidated_product.item_details,  # ✅ Direct field
-                    "tax_ledger": str(consolidated_product.taxes) if consolidated_product.taxes else "PURCHAGE GST",
-                    "price": float(consolidated_product.price or 0),  # ✅ Direct field
-                    "quantity": int(consolidated_product.quantity or 1),  # ✅ Direct field
-                    "amount": float(consolidated_product.amount or 0),  # ✅ Direct field
-                    "product_gst": consolidated_product.product_gst or product_gst_rate,  # ✅ Direct field with fallback
-                    "igst": float(consolidated_product.igst or 0),  # ✅ Direct field
-                    "cgst": float(consolidated_product.cgst or 0),  # ✅ Direct field
-                    "sgst": float(consolidated_product.sgst or 0),  # ✅ Direct field
-                }
-            else:
-                product_data = {
-                    "id": str(consolidated_product.id),
-                    "tax_ledger": str(consolidated_product.taxes) if consolidated_product.taxes else "PURCHAGE GST",
-                    "product_gst": consolidated_product.product_gst or product_gst_rate,  # ✅ Direct field with fallback
-                    "amount": float(consolidated_product.amount or 0),  # ✅ Direct field
-                    "igst": float(consolidated_product.igst or 0),  # ✅ Direct field
-                    "cgst": float(consolidated_product.cgst or 0),  # ✅ Direct field
-                    "sgst": float(consolidated_product.sgst or 0),  # ✅ Direct field
-                }
+            # Use consolidated products data in same format
+            for consolidated_product in consolidated_products:
+                if allow_product_sync:
+                    product_data = {
+                        "id": str(consolidated_product.id),
+                        "item_name": consolidated_product.item_name,  # ✅ Direct field
+                        "item_details": consolidated_product.item_details,  # ✅ Direct field
+                        "tax_ledger": str(consolidated_product.taxes) if consolidated_product.taxes else "PURCHAGE GST",
+                        "price": float(consolidated_product.price or 0),  # ✅ Direct field
+                        "quantity": int(consolidated_product.quantity or 1),  # ✅ Direct field
+                        "amount": float(consolidated_product.amount or 0),  # ✅ Direct field
+                        "product_gst": consolidated_product.product_gst or product_gst_rate,  # ✅ Direct field with fallback
+                        "igst": float(consolidated_product.igst or 0),  # ✅ Direct field
+                        "cgst": float(consolidated_product.cgst or 0),  # ✅ Direct field
+                        "sgst": float(consolidated_product.sgst or 0),  # ✅ Direct field
+                    }
+                else:
+                    product_data = {
+                        "id": str(consolidated_product.id),
+                        "tax_ledger": str(consolidated_product.taxes) if consolidated_product.taxes else "PURCHAGE GST",
+                        "product_gst": consolidated_product.product_gst or product_gst_rate,  # ✅ Direct field with fallback
+                        "amount": float(consolidated_product.amount or 0),  # ✅ Direct field
+                        "igst": float(consolidated_product.igst or 0),  # ✅ Direct field
+                        "cgst": float(consolidated_product.cgst or 0),  # ✅ Direct field
+                        "sgst": float(consolidated_product.sgst or 0),  # ✅ Direct field
+                    }
 
-            bill_data["products"].append(product_data)
+                bill_data["products"].append(product_data)
 
         except Exception as e:
             logger.error(f"Error accessing consolidated product for bill {analyzed_bill.bill_no}: {e}")

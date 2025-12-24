@@ -2208,20 +2208,21 @@ def prepare_expense_sync_data(analyzed_bill, organization):
     if hasattr(analyzed_bill, 'consolidate') and analyzed_bill.consolidate:
         # ✅ USE CONSOLIDATED TABLE DATA
         try:
-            consolidated_expense = analyzed_bill.consolidated_product
+            consolidated_expenses = analyzed_bill.consolidated_products.all()
             logger.info(f"Using consolidated data for expense bill {analyzed_bill.bill_no}")
 
-            # Add consolidated expense entry
-            if consolidated_expense.amount and consolidated_expense.amount > 0:
-                consolidated_entry = {
-                    "LEDGERNAME": str(consolidated_expense.chart_of_accounts) if consolidated_expense.chart_of_accounts else "General Expenses",
-                    "AMOUNT": float(consolidated_expense.amount)
-                }
-                # Use the debit_or_credit from consolidated product
-                if consolidated_expense.debit_or_credit == 'debit':
-                    dr_ledger.append(consolidated_entry)
-                elif consolidated_expense.debit_or_credit == 'credit':
-                    cr_ledger.append(consolidated_entry)
+            # Add consolidated expense entries
+            for consolidated_expense in consolidated_expenses:
+                if consolidated_expense.amount and consolidated_expense.amount > 0:
+                    consolidated_entry = {
+                        "LEDGERNAME": str(consolidated_expense.chart_of_accounts) if consolidated_expense.chart_of_accounts else "General Expenses",
+                        "AMOUNT": float(consolidated_expense.amount)
+                    }
+                    # Use the debit_or_credit from consolidated product
+                    if consolidated_expense.debit_or_credit == 'debit':
+                        dr_ledger.append(consolidated_entry)
+                    elif consolidated_expense.debit_or_credit == 'credit':
+                        cr_ledger.append(consolidated_entry)
 
         except Exception as e:
             logger.error(f"Error accessing consolidated expense for bill {analyzed_bill.bill_no}: {e}")

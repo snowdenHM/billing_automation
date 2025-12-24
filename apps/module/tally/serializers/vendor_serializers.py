@@ -103,7 +103,7 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
     def get_consolidated_product(self, obj):
         """Get consolidated product data as array for verification flexibility (like Zoho)"""
         try:
-            consolidated_product = obj.consolidated_product
+            consolidated_products = obj.consolidated_products.all()
             from ..models import TallyVendorConsolidatedProduct
 
             # Return as array for consistency with Zoho pattern (frontend expects consolidate_prod array)
@@ -122,9 +122,9 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
                 'original_items_count': consolidated_product.original_items_count or 0,
                 'consolidation_notes': consolidated_product.consolidation_notes or "",
                 'created_at': consolidated_product.created_at.isoformat() if consolidated_product.created_at else None
-            }]
+            } for consolidated_product in consolidated_products]
         except:
-            return []  # Return empty array if no consolidated product exists
+            return []  # Return empty array if no consolidated products exist
 
     def to_representation(self, instance):
         """Override to include consolidate_prod array like Zoho pattern"""

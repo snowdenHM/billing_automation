@@ -84,10 +84,10 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
     def get_consolidated_product(self, obj):
         """Get consolidated product data if exists"""
         try:
-            consolidated_product = obj.consolidated_product
+            consolidated_products = obj.consolidated_products.all()
             from ..models import TallyExpenseConsolidatedProduct
 
-            return {
+            return [{
                 'id': str(consolidated_product.id),
                 'item_details': consolidated_product.item_details,
                 'chart_of_accounts': str(consolidated_product.chart_of_accounts) if consolidated_product.chart_of_accounts else None,
@@ -96,9 +96,9 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
                 'original_entries_count': consolidated_product.original_entries_count or 0,
                 'consolidation_notes': consolidated_product.consolidation_notes or "",
                 'created_at': consolidated_product.created_at.isoformat() if consolidated_product.created_at else None
-            }
+            } for consolidated_product in consolidated_products]
         except:
-            return None
+            return []
 
     class Meta:
         model = TallyExpenseAnalyzedBill

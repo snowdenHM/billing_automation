@@ -605,7 +605,7 @@ class TallyVendorConsolidatedProduct(BaseOrgModel):
     ]
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
-    vendor_bill_analyzed = models.OneToOneField("TallyVendorAnalyzedBill", on_delete=models.CASCADE, related_name="consolidated_product")
+    vendor_bill_analyzed = models.ForeignKey("TallyVendorAnalyzedBill", on_delete=models.CASCADE, related_name="consolidated_products")
 
     # 📦 SAME FIELDS AS TallyVendorAnalyzedProduct (for compatibility)
     item_name = models.CharField(
@@ -715,7 +715,7 @@ class TallyExpenseConsolidatedProduct(BaseOrgModel):
         DEBIT = "debit", "Debit"
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
-    expense_bill = models.OneToOneField("TallyExpenseAnalyzedBill", on_delete=models.CASCADE, related_name="consolidated_product")
+    expense_bill = models.ForeignKey("TallyExpenseAnalyzedBill", on_delete=models.CASCADE, related_name="consolidated_products")
 
     # 📦 SAME FIELDS AS TallyExpenseAnalyzedProduct (for compatibility)
     item_details = models.CharField(

@@ -131,11 +131,11 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
         # Always include consolidated product data if it exists (regardless of consolidate flag)
         # Return as array for frontend verification flexibility
         try:
-            consolidated_product = instance.consolidated_product
-            consolidated_serializer = TallyVendorConsolidatedProductSerializer(consolidated_product)
-            data['consolidate_prod'] = [consolidated_serializer.data]
-        except TallyVendorConsolidatedProduct.DoesNotExist:
-            # No consolidated product exists, return empty array
+            consolidated_products = instance.consolidated_products.all()
+            consolidated_serializer = TallyVendorConsolidatedProductSerializer(consolidated_products, many=True)
+            data['consolidate_prod'] = consolidated_serializer.data
+        except:
+            # No consolidated products exist, return empty array
             data['consolidate_prod'] = []
 
         return data
