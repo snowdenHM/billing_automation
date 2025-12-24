@@ -93,7 +93,6 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
     products = TallyVendorAnalyzedProductSerializer(many=True, read_only=True)
     vendor_name = serializers.CharField(source='vendor.name', read_only=True)
     selected_bill_name = serializers.CharField(source='selected_bill.bill_munshi_name', read_only=True)
-    consolidated_product = serializers.SerializerMethodField()
 
     # Use SafeDecimalField for all decimal fields that might have invalid values
     total = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
@@ -102,16 +101,18 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
     sgst = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
 
     def get_consolidated_product(self, obj):
-        """Get consolidated product data if exists"""
+        """Get consolidated product data as array for verification flexibility (like Zoho)"""
         try:
             consolidated_product = obj.consolidated_product
             from ..models import TallyVendorConsolidatedProduct
 
-            return {
+            # Return as array for consistency with Zoho pattern (frontend expects consolidate_prod array)
+            return [{
                 'id': str(consolidated_product.id),
                 'item_name': consolidated_product.item_name,
                 'item_details': consolidated_product.item_details,
                 'price': float(consolidated_product.price or 0),
+                'rate': float(consolidated_product.price or 0),  # Alias for price
                 'quantity': consolidated_product.quantity or 1,
                 'amount': float(consolidated_product.amount or 0),
                 'product_gst': consolidated_product.product_gst or "",
@@ -121,9 +122,19 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
                 'original_items_count': consolidated_product.original_items_count or 0,
                 'consolidation_notes': consolidated_product.consolidation_notes or "",
                 'created_at': consolidated_product.created_at.isoformat() if consolidated_product.created_at else None
-            }
+            }]
         except:
-            return None
+            return []  # Return empty array if no consolidated product exists
+
+    def to_representation(self, instance):
+        """Override to include consolidate_prod array like Zoho pattern"""
+        data = super().to_representation(instance)
+
+        # Add consolidate_prod array (matching Zoho pattern for frontend compatibility)
+        consolidated_data = self.get_consolidated_product(instance)
+        data['consolidate_prod'] = consolidated_data
+
+        return data
 
     class Meta:
         model = TallyVendorAnalyzedBill
@@ -131,9 +142,9 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
             'id', 'selected_bill', 'selected_bill_name', 'vendor', 'vendor_name',
             'bill_no', 'bill_date', 'total', 'igst', 'igst_taxes',
             'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes', 'gst_type',
-            'note', 'consolidate', 'products', 'consolidated_product', 'created_at'
+            'note', 'consolidate', 'products', 'created_at'
         ]
-        read_only_fields = ['id', 'created_at', 'vendor_name', 'selected_bill_name', 'products', 'consolidated_product']
+        read_only_fields = ['id', 'created_at', 'vendor_name', 'selected_bill_name', 'products']
 
 
 class VendorBillUploadSerializer(serializers.Serializer):

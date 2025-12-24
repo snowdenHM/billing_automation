@@ -1637,6 +1637,21 @@ def vendor_bill_verify(request, org_id):
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     try:
+        # Handle consolidation flag from root level or analyzed_data
+        consolidate_flag = request.data.get('consolidate', analyzed_data.get('consolidate', False))
+        logger.info(f"Received consolidate flag: {consolidate_flag}")
+        logger.info(f"Current analyzed_bill consolidate value: {getattr(analyzed_bill, 'consolidate', 'NOT SET')}")
+        
+        # Always update the consolidate flag regardless of current value
+        try:
+            analyzed_bill.consolidate = consolidate_flag
+            analyzed_bill.save(update_fields=['consolidate'])
+            logger.info(f"Successfully updated consolidate flag to: {consolidate_flag}")
+        except Exception as consolidate_error:
+            logger.error(f"Failed to update consolidate flag: {str(consolidate_error)}")
+            # If the field doesn't exist, try to save without it but log the issue
+            logger.warning("Consolidate field might not exist in the model")
+
         verified_bill = update_analyzed_bill_data(analyzed_bill, analyzed_data, organization)
 
         bill.status = TallyVendorBill.BillStatus.VERIFIED
@@ -1665,6 +1680,16 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
         return analyzed_bill
 
     with transaction.atomic():
+        # Handle consolidate flag if present in analyzed_data
+        if 'consolidate' in analyzed_data:
+            consolidate_value = analyzed_data['consolidate']
+            logger.info(f"Updating consolidate flag in analyzed_data to: {consolidate_value}")
+            try:
+                analyzed_bill.consolidate = consolidate_value
+                logger.info(f"Set analyzed_bill.consolidate to: {consolidate_value}")
+            except AttributeError:
+                logger.warning("Consolidate field not available in analyzed_bill model")
+
         # Update vendor information
         vendor_data = analyzed_data.get('vendor', {})
         if vendor_data and vendor_data.get('vendor_name') != "No Ledger":
@@ -1760,54 +1785,106 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
 
         analyzed_bill.save(skip_validation=True)
 
-        # Update line items (products)
+        # Update line items (products) and handle consolidated products
         line_items = analyzed_data.get('products', [])
+        consolidate_flag = analyzed_data.get('consolidate', False)
+        
+        logger.info(f"Processing {len(line_items)} products with consolidate flag: {consolidate_flag}")
+        
         if line_items:
-            update_analyzed_products(analyzed_bill, line_items, organization)
-
-        # 🔄 Handle consolidate_prod array from frontend (similar to Zoho implementation)
-        consolidate_prod_data = analyzed_data.get('consolidate_prod', [])
-        if consolidate_prod_data:
-            try:
-                # 🔄 FIRST: Clear existing consolidated products to prevent duplicates
+            if consolidate_flag:
+                # Handle consolidation logic - create/update consolidated product
+                logger.info("Processing products in consolidation mode")
+                
+                # Check if we have a consolidated product in the payload
+                consolidated_product_from_payload = None
+                
+                for item in line_items:
+                    # Check if this is a consolidated product (has consolidated item details)
+                    if (item.get('item_details') and 
+                        'Consolidated' in str(item.get('item_details')) and
+                        'items:' in str(item.get('item_details'))):
+                        consolidated_product_from_payload = item
+                        logger.info(f"Found consolidated product in payload: {item.get('item_name')}")
+                        break
+                
+                if consolidated_product_from_payload:
+                    # Update or create consolidated product
+                    try:
+                        # Try to find existing consolidated product
+                        consolidated_product = None
+                        item_id = consolidated_product_from_payload.get('item_id')
+                        
+                        if item_id:
+                            try:
+                                consolidated_product = TallyVendorConsolidatedProduct.objects.get(
+                                    id=item_id,
+                                    vendor_bill_analyzed=analyzed_bill
+                                )
+                                logger.info(f"Found existing consolidated product: {consolidated_product.id}")
+                            except TallyVendorConsolidatedProduct.DoesNotExist:
+                                logger.info(f"Consolidated product with ID {item_id} not found, will create new")
+                        
+                        # Find or create tax ledger
+                        tax_ledger = None
+                        tax_ledger_name = consolidated_product_from_payload.get('tax_ledger')
+                        if tax_ledger_name and tax_ledger_name != "No Tax Ledger":
+                            tax_ledger = find_or_create_tax_ledger(tax_ledger_name, 'purchase', organization)
+                        
+                        # Create or update consolidated product
+                        consolidated_data = {
+                            'vendor_bill_analyzed': analyzed_bill,
+                            'organization': organization,
+                            'consolidated_item_name': consolidated_product_from_payload.get('item_name', 'Consolidated Items'),
+                            'consolidated_item_details': consolidated_product_from_payload.get('item_details', ''),
+                            'total_quantity': int(consolidated_product_from_payload.get('quantity', 1)),
+                            'consolidated_rate': float(consolidated_product_from_payload.get('price', 0)),
+                            'consolidated_amount': float(consolidated_product_from_payload.get('amount', 0)),
+                            'taxes': tax_ledger,
+                            'product_gst': consolidated_product_from_payload.get('product_gst', ''),
+                            'igst': float(consolidated_product_from_payload.get('igst', 0)),
+                            'cgst': float(consolidated_product_from_payload.get('cgst', 0)),
+                            'sgst': float(consolidated_product_from_payload.get('sgst', 0)),
+                            'original_items_count': 1,  # Will be updated later if needed
+                            'consolidation_notes': "Updated via verification"
+                        }
+                        
+                        if consolidated_product:
+                            # Update existing consolidated product
+                            for key, value in consolidated_data.items():
+                                if key not in ['vendor_bill_analyzed', 'organization']:  # Skip FK fields
+                                    setattr(consolidated_product, key, value)
+                            consolidated_product.save()
+                            logger.info(f"Updated consolidated product: {consolidated_product.id}")
+                        else:
+                            # Create new consolidated product
+                            consolidated_product = TallyVendorConsolidatedProduct.objects.create(**consolidated_data)
+                            logger.info(f"Created new consolidated product: {consolidated_product.id}")
+                        
+                        # Clear individual products since we're in consolidation mode
+                        existing_individual_products = analyzed_bill.products.all()
+                        if existing_individual_products.exists():
+                            logger.info(f"Clearing {existing_individual_products.count()} individual products for consolidation")
+                            existing_individual_products.delete()
+                            
+                    except Exception as e:
+                        logger.error(f"Error handling consolidated product: {str(e)}")
+                        raise
+                else:
+                    # No consolidated product found in payload, but consolidate=true
+                    # Update individual products normally
+                    logger.info("No consolidated product in payload, processing as individual products")
+                    update_analyzed_products(analyzed_bill, line_items, organization)
+            else:
+                # Normal individual products mode
+                logger.info("Processing products in individual mode")
+                update_analyzed_products(analyzed_bill, line_items, organization)
+                
+                # Clear any existing consolidated products
                 existing_consolidated = TallyVendorConsolidatedProduct.objects.filter(vendor_bill_analyzed=analyzed_bill)
                 if existing_consolidated.exists():
-                    existing_count = existing_consolidated.count()
+                    logger.info(f"Clearing {existing_consolidated.count()} consolidated products for individual mode")
                     existing_consolidated.delete()
-                    logger.info(f"Deleted {existing_count} existing consolidated products before creating new ones")
-
-                # Handle consolidated product creation (always create new after clearing)
-                for idx, consolidated_data in enumerate(consolidate_prod_data):
-                    logger.info(f"Creating consolidated vendor product {idx + 1}: {consolidated_data.get('item_name', 'Unnamed')}")
-
-                    # Create new consolidated product (since we cleared existing ones)
-                    TallyVendorConsolidatedProduct.objects.create(
-                        vendor_bill_analyzed=analyzed_bill,
-                        organization=organization,
-                        item_name=consolidated_data.get('item_name', 'Consolidated Product'),
-                        item_details=consolidated_data.get('item_details', 'Consolidated product from verification'),
-                        price=consolidated_data.get('price', 0),
-                        quantity=consolidated_data.get('quantity', 1),
-                        amount=consolidated_data.get('amount', 0),
-                        product_gst=consolidated_data.get('product_gst', '18%'),
-                        igst=consolidated_data.get('igst', 0),
-                        cgst=consolidated_data.get('cgst', 0),
-                        sgst=consolidated_data.get('sgst', 0),
-                        taxes_id=consolidated_data.get('taxes'),
-                        original_items_count=1,
-                        consolidation_notes='Created from frontend verification'
-                    )
-                    logger.info(f"Created new consolidated vendor product for item {idx + 1}")
-
-            except Exception as consolidate_error:
-                logger.error(f"Error processing consolidate_prod array: {consolidate_error}")
-                # Don't fail the entire request, just log the error
-
-        # Handle consolidation flag
-        consolidate_flag = analyzed_data.get('consolidate', False)
-        if consolidate_flag != getattr(analyzed_bill, 'consolidate', False):
-            analyzed_bill.consolidate = consolidate_flag
-            analyzed_bill.save()
 
         return analyzed_bill
 
