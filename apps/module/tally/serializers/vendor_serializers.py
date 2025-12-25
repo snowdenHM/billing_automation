@@ -4,6 +4,9 @@ from typing import List, Dict, Any
 from decimal import Decimal, InvalidOperation
 from django.contrib.auth.models import User
 from ..models import TallyVendorBill, TallyVendorAnalyzedBill, TallyVendorAnalyzedProduct, Ledger
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class SafeDecimalField(serializers.DecimalField):
@@ -103,6 +106,11 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
     def get_consolidated_product(self, obj):
         """Get consolidated product data as array for verification flexibility (like Zoho)"""
         try:
+            # Ensure obj is a TallyVendorAnalyzedBill instance
+            if not hasattr(obj, 'consolidated_products'):
+                logger.warning(f"Object {type(obj)} does not have consolidated_products attribute")
+                return []
+                
             consolidated_products = obj.consolidated_products.all()
             from ..models import TallyVendorConsolidatedProduct
 
@@ -123,18 +131,26 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
                 'consolidation_notes': consolidated_product.consolidation_notes or "",
                 'created_at': consolidated_product.created_at.isoformat() if consolidated_product.created_at else None
             } for consolidated_product in consolidated_products]
-        except:
+        except Exception as e:
+            logger.error(f"Error getting consolidated products for {type(obj)}: {str(e)}")
             return []  # Return empty array if no consolidated products exist
 
     def to_representation(self, instance):
         """Override to include consolidate_prod array like Zoho pattern"""
-        data = super().to_representation(instance)
+        try:
+            data = super().to_representation(instance)
 
-        # Add consolidate_prod array (matching Zoho pattern for frontend compatibility)
-        consolidated_data = self.get_consolidated_product(instance)
-        data['consolidate_prod'] = consolidated_data
+            # Add consolidate_prod array (matching Zoho pattern for frontend compatibility)
+            consolidated_data = self.get_consolidated_product(instance)
+            data['consolidate_prod'] = consolidated_data
 
-        return data
+            return data
+        except Exception as e:
+            logger.error(f"Error in TallyVendorAnalyzedBillSerializer.to_representation for {type(instance)}: {str(e)}")
+            # Return basic data without consolidated_products if there's an error
+            data = super().to_representation(instance)
+            data['consolidate_prod'] = []
+            return data
 
     class Meta:
         model = TallyVendorAnalyzedBill
@@ -270,9 +286,14 @@ class TallyVendorBillDetailSerializer(serializers.ModelSerializer):
             from ..models import TallyVendorAnalyzedBill
             analyzed_bill = TallyVendorAnalyzedBill.objects.filter(selected_bill=obj).first()
             if analyzed_bill:
-                return TallyVendorAnalyzedBillSerializer(analyzed_bill).data
-        except:
-            pass
+                # Use a try-catch to handle any serialization issues
+                try:
+                    return TallyVendorAnalyzedBillSerializer(analyzed_bill).data
+                except Exception as serialization_error:
+                    logger.error(f"Error serializing analyzed bill {analyzed_bill.id}: {str(serialization_error)}")
+                    return None
+        except Exception as e:
+            logger.error(f"Error getting analyzed bill for {obj.id}: {str(e)}")
         return None
 
     def get_next_bill(self, obj):

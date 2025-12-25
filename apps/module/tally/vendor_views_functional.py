@@ -1075,10 +1075,10 @@ def vendor_bills_upload(request, org_id):
                 try:
                     logger.info(f"Auto-analyzing Tally vendor bill: {bill.bill_munshi_name}")
 
-                    # Analyze with AI
-                    analysis_result = analyze_bill_with_ai(bill, organization)
+                    # Analyze with AI - this returns a TallyVendorAnalyzedBill instance
+                    analyzed_bill_instance = analyze_bill_with_ai(bill, organization)
 
-                    if analysis_result['success']:
+                    if analyzed_bill_instance:
                         # Check for duplicates after analysis
                         is_duplicate, duplicate_bills, max_similarity = check_duplicate_tally_vendor_bill(bill, organization)
 
@@ -1121,7 +1121,7 @@ def vendor_bills_upload(request, org_id):
                             'bill_id': str(bill.id),
                             'bill_name': bill.bill_munshi_name,
                             'analysis_successful': False,
-                            'error': analysis_result.get('error', 'Unknown analysis error'),
+                            'error': 'Analysis failed - no analyzed bill created',
                             'duplicate_detected': False
                         })
 
@@ -1694,6 +1694,12 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
 
     if not analyzed_data:
         return analyzed_bill
+    
+    # Add defensive check to ensure analyzed_bill is the correct type
+    from .models import TallyVendorAnalyzedBill
+    if not isinstance(analyzed_bill, TallyVendorAnalyzedBill):
+        logger.error(f"Expected TallyVendorAnalyzedBill, got {type(analyzed_bill)}")
+        raise ValueError(f"Invalid analyzed_bill type: {type(analyzed_bill)}")
 
     with transaction.atomic():
         # Handle consolidate flag if present in analyzed_data
@@ -1862,11 +1868,13 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                 except Exception as consolidate_error:
                     logger.error(f"Error processing consolidate_prod array: {consolidate_error}")
                 
-                # Clear individual products since we're in consolidation mode
+                # Clear individual products only if we have consolidated products to replace them
                 existing_individual_products = analyzed_bill.products.all()
-                if existing_individual_products.exists():
+                if existing_individual_products.exists() and len(consolidate_prod_array) > 0:
                     logger.info(f"Clearing {existing_individual_products.count()} individual products for consolidation")
                     existing_individual_products.delete()
+                elif len(consolidate_prod_array) == 0:
+                    logger.warning("No consolidated products provided - keeping existing individual products")
                     
             else:
                 logger.warning("Consolidate=true but no consolidate_prod array found in payload")
@@ -1917,9 +1925,9 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                             consolidated_product = TallyVendorConsolidatedProduct.objects.create(**consolidated_data)
                             logger.info(f"Created new consolidated product (fallback): {consolidated_product.id}")
                             
-                            # Clear individual products since we're in consolidation mode
+                            # Only clear individual products if consolidated product was successfully created
                             existing_individual_products = analyzed_bill.products.all()
-                            if existing_individual_products.exists():
+                            if existing_individual_products.exists() and consolidated_product:
                                 logger.info(f"Clearing {existing_individual_products.count()} individual products for consolidation (fallback)")
                                 existing_individual_products.delete()
                                 
@@ -2199,23 +2207,30 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 f"Created new product (client item_id: {item.get('item_id')}) name={item.get('item_name') or 'Unknown'} "
                 f"with GST type: {analyzed_bill.gst_type} (IGST: {calc_igst}, CGST: {calc_cgst}, SGST: {calc_sgst})")
 
-    # Delete products that are no longer in the frontend payload
-    products_to_delete = []
-    for existing_id, product in existing.items():
-        if existing_id not in updated_ids:
-            products_to_delete.append(product)
+    # Only delete products if we're NOT in consolidation mode
+    # In consolidation mode, individual products should be preserved unless explicitly cleared
+    if not getattr(analyzed_bill, 'consolidate', False):
+        products_to_delete = []
+        for existing_id, product in existing.items():
+            if existing_id not in updated_ids:
+                products_to_delete.append(product)
+        
+        if products_to_delete:
+            deleted_count = len(products_to_delete)
+            for product in products_to_delete:
+                logger.info(f"Deleting product {product.id}: {product.item_name or 'Unknown'}")
+                product.delete()
+            logger.info(f"Deleted {deleted_count} products not present in frontend payload")
+    else:
+        logger.info("Consolidation mode active - preserving individual products")
     
-    if products_to_delete:
-        deleted_count = len(products_to_delete)
-        for product in products_to_delete:
-            logger.info(f"Deleting product {product.id}: {product.item_name or 'Unknown'}")
-            product.delete()
-        logger.info(f"Deleted {deleted_count} products not present in frontend payload")
+    # Calculate deletion count for summary
+    deletion_count = 0 if getattr(analyzed_bill, 'consolidate', False) else len([existing_id for existing_id in existing.keys() if existing_id not in updated_ids])
     
     logger.info(
         f"Product update summary: {len(updated_ids)} updated, "
         f"{len(line_items or []) - len(updated_ids)} created, "
-        f"{len(products_to_delete) if products_to_delete else 0} deleted"
+        f"{deletion_count} deleted (consolidate mode: {getattr(analyzed_bill, 'consolidate', False)})"
     )
 
 
