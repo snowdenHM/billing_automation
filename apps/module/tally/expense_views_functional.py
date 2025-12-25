@@ -1687,17 +1687,31 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
                         
                         # Find chart of accounts ledger if specified
                         chart_ledger = None
-                        chart_ledger_name = consolidated_data.get('chart_of_accounts')
-                        if chart_ledger_name and chart_ledger_name != "No COA Ledger":
+                        chart_ledger_identifier = consolidated_data.get('chart_of_accounts')
+                        if chart_ledger_identifier and chart_ledger_identifier != "No COA Ledger":
                             try:
+                                # Check if it's a UUID (ledger ID)
+                                import uuid
+                                uuid.UUID(str(chart_ledger_identifier))
+                                # It's a UUID, find ledger by ID
                                 chart_ledger = Ledger.objects.filter(
-                                    name=chart_ledger_name,
+                                    id=chart_ledger_identifier,
                                     organization=organization
                                 ).first()
                                 if chart_ledger:
-                                    logger.info(f"Found chart of accounts ledger: {chart_ledger.name}")
+                                    logger.info(f"Found chart of accounts ledger by UUID: {chart_ledger.name}")
                                 else:
-                                    logger.warning(f"Chart of accounts ledger not found: {chart_ledger_name}")
+                                    logger.warning(f"Chart of accounts ledger not found for UUID: {chart_ledger_identifier}")
+                            except (ValueError, TypeError):
+                                # It's a name, find by name
+                                chart_ledger = Ledger.objects.filter(
+                                    name=chart_ledger_identifier,
+                                    organization=organization
+                                ).first()
+                                if chart_ledger:
+                                    logger.info(f"Found chart of accounts ledger by name: {chart_ledger.name}")
+                                else:
+                                    logger.warning(f"Chart of accounts ledger not found by name: {chart_ledger_identifier}")
                             except Exception as e:
                                 logger.error(f"Error finding chart of accounts ledger: {e}")
 
