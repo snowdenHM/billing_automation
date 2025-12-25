@@ -67,7 +67,7 @@ def check_duplicate_tally_expense_bill(bill, organization):
 
     if not bill.analysed_data:
         # If bill hasn't been analyzed yet, we can't check for duplicates
-        return False, [], 0.0 False, [], 0.0
+        return False, [], 0.0
 
     analyzed_data = bill.analysed_data
     current_invoice_number = analyzed_data.get('invoiceNumber', '').strip()
@@ -77,7 +77,7 @@ def check_duplicate_tally_expense_bill(bill, organization):
 
     if not current_invoice_number and not current_vendor_name:
         # Can't check duplicates without key identifying information
-        return False, [], 0.0 False, [], 0.0
+        return False, [], 0.0
 
     # Find potentially duplicate bills in the same organization
     potential_duplicates = TallyExpenseBill.objects.filter(
