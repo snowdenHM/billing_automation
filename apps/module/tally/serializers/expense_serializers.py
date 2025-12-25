@@ -82,9 +82,8 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
     products = TallyExpenseAnalyzedProductSerializer(many=True, read_only=True)
     vendor_name = serializers.CharField(source='vendor.name', read_only=True)
     selected_bill_name = serializers.CharField(source='selected_bill.bill_munshi_name', read_only=True)
-    consolidated_product = serializers.SerializerMethodField()
 
-    def get_consolidated_product(self, obj):
+    def get_consolidate_prod_data(self, obj):
         """Get consolidated product data if exists"""
         try:
             # Ensure obj is a TallyExpenseAnalyzedBill instance
@@ -115,7 +114,7 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
             data = super().to_representation(instance)
 
             # Add consolidate_prod array (matching Zoho pattern for frontend compatibility)
-            consolidated_data = self.get_consolidated_product(instance)
+            consolidated_data = self.get_consolidate_prod_data(instance)
             data['consolidate_prod'] = consolidated_data
 
             return data
@@ -130,11 +129,11 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
         model = TallyExpenseAnalyzedBill
         fields = [
             'id', 'selected_bill', 'selected_bill_name', 'vendor', 'vendor_name',
-            'voucher', 'bill_no', 'bill_date', 'total', 'igst', 'igst_taxes',
-            'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes', 'tds', 'tds_taxes', 'note',
-            'consolidate', 'products', 'consolidated_product', 'created_at'
+            'voucher', 'bill_no', 'bill_date', 'total', 'vendor_amount', 'vendor_debit_or_credit',
+            'igst', 'igst_taxes', 'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes', 
+            'tds', 'tds_taxes', 'note', 'consolidate', 'products', 'created_at'
         ]
-        read_only_fields = ['id', 'created_at', 'vendor_name', 'selected_bill_name', 'products', 'consolidated_product']
+        read_only_fields = ['id', 'created_at', 'vendor_name', 'selected_bill_name', 'products']
 
 
 class ExpenseBillUploadSerializer(serializers.Serializer):
