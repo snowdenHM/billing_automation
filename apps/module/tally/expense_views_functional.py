@@ -6,6 +6,7 @@ import logging
 import os
 import random
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from io import BytesIO
 
 from PyPDF2 import PdfReader
@@ -53,6 +54,44 @@ except ImportError:
     client = None
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Decimal Helper Functions
+
+def safe_decimal(value, default=0):
+    """
+    Safely convert a value to Decimal with exactly 2 decimal places.
+    Handles None, empty strings, and various numeric types.
+    """
+    if value is None or value == '':
+        return Decimal(str(default)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    
+    try:
+        # Convert to string first to avoid float precision issues
+        decimal_value = Decimal(str(float(value)))
+        # Quantize to exactly 2 decimal places
+        return decimal_value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    except (ValueError, TypeError, ArithmeticError):
+        return Decimal(str(default)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+def _to_decimal(val, default="0"):
+    """Convert value to Decimal - same as vendor views"""
+    if val is None or val == "":
+        return Decimal(default)
+    try:
+        return Decimal(str(val))
+    except (InvalidOperation, ValueError):
+        return Decimal(default)
+
+
+def _to_int(val, default=0):
+    """Convert value to int - same as vendor views"""
+    try:
+        return int(float(val))
+    except (TypeError, ValueError):
+        return default
 
 
 # ============================================================================
@@ -1543,7 +1582,7 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
 
         # Update vendor_amount if provided
         if 'vendor_amount' in analyzed_data:
-            analyzed_bill.vendor_amount = round(float(analyzed_data['vendor_amount']), 2)
+            analyzed_bill.vendor_amount = _to_decimal(analyzed_data['vendor_amount'])
 
         # Update bill details - handle flattened structure
         if 'voucher' in analyzed_data:
@@ -1561,15 +1600,15 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
             if due_date:
                 analyzed_bill.due_date = due_date
         if 'total' in analyzed_data:
-            analyzed_bill.total = round(float(analyzed_data['total']), 2)
+            analyzed_bill.total = _to_decimal(analyzed_data['total'])
 
         # Update tax information
         taxes_data = analyzed_data.get('taxes', {})
         if taxes_data:
-            # Update tax amounts with proper rounding to 2 decimal places
+            # Update tax amounts with proper decimal conversion
             igst_data = taxes_data.get('igst', {})
             if 'amount' in igst_data:
-                analyzed_bill.igst = round(float(igst_data['amount']), 2)
+                analyzed_bill.igst = _to_decimal(igst_data['amount'])
             if 'ledger' in igst_data and igst_data['ledger'] != "No Tax Ledger":
                 igst_ledger = find_or_create_expense_tax_ledger(igst_data['ledger'], 'IGST', organization)
                 if igst_ledger:
@@ -1579,7 +1618,7 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
 
             cgst_data = taxes_data.get('cgst', {})
             if 'amount' in cgst_data:
-                analyzed_bill.cgst = round(float(cgst_data['amount']), 2)
+                analyzed_bill.cgst = _to_decimal(cgst_data['amount'])
             if 'ledger' in cgst_data and cgst_data['ledger'] != "No Tax Ledger":
                 cgst_ledger = find_or_create_expense_tax_ledger(cgst_data['ledger'], 'CGST', organization)
                 if cgst_ledger:
@@ -1589,7 +1628,7 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
 
             sgst_data = taxes_data.get('sgst', {})
             if 'amount' in sgst_data:
-                analyzed_bill.sgst = round(float(sgst_data['amount']), 2)
+                analyzed_bill.sgst = _to_decimal(sgst_data['amount'])
             if 'ledger' in sgst_data and sgst_data['ledger'] != "No Tax Ledger":
                 sgst_ledger = find_or_create_expense_tax_ledger(sgst_data['ledger'], 'SGST', organization)
                 if sgst_ledger:
@@ -1600,7 +1639,7 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
             # Handle TDS data
             tds_data = taxes_data.get('tds', {})
             if 'amount' in tds_data:
-                analyzed_bill.tds = round(float(tds_data['amount']), 2)
+                analyzed_bill.tds = _to_decimal(tds_data['amount'])
             if 'ledger' in tds_data and tds_data['ledger'] != "No Tax Ledger":
                 tds_ledger = find_or_create_expense_tax_ledger(tds_data['ledger'], 'TDS', organization)
                 if tds_ledger:
@@ -1828,7 +1867,7 @@ def update_analyzed_expense_products(analyzed_bill, expense_items, organization)
 
     # Calculate debit/credit from expense items
     for item_data in expense_items:
-        amount = round(float(item_data.get('amount', 0)), 2)
+        amount = float(_to_decimal(item_data.get('amount', 0)))
         debit_or_credit = item_data.get('debit_or_credit', '').lower()
 
         if debit_or_credit == 'debit':
@@ -1894,7 +1933,7 @@ def update_analyzed_expense_products(analyzed_bill, expense_items, organization)
         if 'item_details' in item_data:
             product.item_details = item_data['item_details']
         if 'amount' in item_data:
-            product.amount = round(float(item_data['amount']), 2)
+            product.amount = _to_decimal(item_data['amount'])
         if 'debit_or_credit' in item_data:
             product.debit_or_credit = item_data['debit_or_credit']
 
