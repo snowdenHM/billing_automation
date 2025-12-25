@@ -13,7 +13,9 @@ from .models import (
     TallyVendorAnalyzedProduct,
     TallyExpenseBill,
     TallyExpenseAnalyzedBill,
-    TallyExpenseAnalyzedProduct, StockItem
+    TallyExpenseAnalyzedProduct,
+    TallyExpenseConsolidatedProduct,
+    StockItem
 )
 from .forms import TallyConfigForm
 
@@ -323,6 +325,31 @@ class TallyExpenseAnalyzedBillAdmin(admin.ModelAdmin):
         return qs
 
 
+class TallyExpenseConsolidatedProductAdmin(admin.ModelAdmin):
+    list_display = ('expense_bill_name', 'item_details_short', 'amount', 'debit_or_credit', 'original_entries_count', 'organization', 'created_at')
+    list_filter = ('organization', 'debit_or_credit', 'created_at')
+    search_fields = ('item_details', 'expense_bill__selected_bill__bill_munshi_name', 'organization__name')
+    readonly_fields = ('created_at', 'updated_at')
+    autocomplete_fields = ('organization', 'expense_bill', 'chart_of_accounts')
+    
+    def expense_bill_name(self, obj):
+        """Display expense bill name"""
+        return obj.expense_bill.selected_bill.bill_munshi_name if obj.expense_bill and obj.expense_bill.selected_bill else 'N/A'
+    expense_bill_name.short_description = 'Expense Bill'
+    expense_bill_name.admin_order_field = 'expense_bill__selected_bill__bill_munshi_name'
+    
+    def item_details_short(self, obj):
+        """Display shortened item details"""
+        return obj.item_details[:50] + '...' if obj.item_details and len(obj.item_details) > 50 else obj.item_details or 'N/A'
+    item_details_short.short_description = 'Item Details'
+    
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        if not request.user.is_superuser:
+            qs = qs.filter(organization__in=request.user.organizations.all())
+        return qs
+
+
 class StockItemAdmin(admin.ModelAdmin):
     list_display = ('name', 'parent', 'unit', 'category', 'organization', 'created_at')
     list_filter = ('organization', 'category', 'gst_applicable', 'created_at')
@@ -346,3 +373,4 @@ admin.site.register(TallyVendorBill, TallyVendorBillAdmin)
 admin.site.register(TallyVendorAnalyzedBill, TallyVendorAnalyzedBillAdmin)
 admin.site.register(TallyExpenseBill, TallyExpenseBillAdmin)
 admin.site.register(TallyExpenseAnalyzedBill, TallyExpenseAnalyzedBillAdmin)
+admin.site.register(TallyExpenseConsolidatedProduct, TallyExpenseConsolidatedProductAdmin)

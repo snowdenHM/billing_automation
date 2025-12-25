@@ -643,14 +643,44 @@ def process_expense_analysis_data(bill, json_data, organization):
                 TallyExpenseAnalyzedProduct.objects.bulk_create(product_instances)
                 logger.info(f"Successfully created {len(product_instances)} products for expense bill {analyzed_bill.id}")
 
-                # ✅ DO NOT AUTO-CREATE CONSOLIDATED PRODUCTS - Follow vendor pattern
-                # Individual products are always created first, consolidated products only created on user request
-                # This ensures frontend has correct data structure based on consolidate flag
-                
+                # ✅ CREATE CONSOLIDATED PRODUCTS FOR LAYOUT SWITCHING SUPPORT
+                # Both individual and consolidated products should be available during analysis
+                # This enables users to switch between individual and consolidated layouts
                 if len(product_instances) > 1:
-                    logger.info(f"ℹ️ Bill has {len(product_instances)} items - consolidation available but not auto-applied")
+                    try:
+                        # Calculate consolidated data
+                        total_amount = sum(p.amount for p in product_instances)
+                        items_count = len(product_instances)
+
+                        # Create detailed breakdown
+                        item_details = []
+                        for product in product_instances:
+                            item_details.append(f'• {product.item_details} (Amount: ₹{product.amount})')
+
+                        consolidated_details = f'Consolidated {items_count} expense entries:\n' + '\n'.join(item_details)
+
+                        # Create consolidated product
+                        consolidated_product = TallyExpenseConsolidatedProduct.objects.create(
+                            expense_bill=analyzed_bill,
+                            organization=organization,
+                            item_details=consolidated_details,
+                            amount=total_amount,
+                            debit_or_credit=TallyExpenseConsolidatedProduct.DebitCredit.DEBIT,  # Default for expenses
+                            original_entries_count=items_count,
+                            consolidation_notes=f'Auto-created during analysis for layout switching support - {items_count} expense entries'
+                        )
+
+                        logger.info(f"✅ Created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount}) - LAYOUT SWITCHING SUPPORT")
+                        logger.info(f"✅ Both individual and consolidated layouts now available")
+
+                        # Keep consolidate flag as false by default (users start with individual view)
+                        # But consolidated products are available for switching
+
+                    except Exception as e:
+                        logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")
+                        # Don't raise - consolidated product creation failure shouldn't break the main flow
                 else:
-                    logger.info(f"ℹ️ Bill has {len(product_instances)} item - no consolidation needed")
+                    logger.info(f"ℹ️ Skipping consolidated expense product creation - bill has only {len(product_instances)} item(s)")
 
             # Update bill status
             bill.status = TallyExpenseBill.BillStatus.ANALYSED
@@ -1345,14 +1375,39 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
                 TallyExpenseAnalyzedProduct.objects.bulk_create(created_products)
                 logger.info(f"Successfully created {len(created_products)} expense products for bill {analyzed_bill.id}")
 
-                # ✅ DO NOT AUTO-CREATE CONSOLIDATED PRODUCTS - Follow vendor pattern
-                # Individual products are always created first, consolidated products only created on user request
-                # This ensures frontend has correct data structure based on consolidate flag
-                
+                # ✅ CREATE CONSOLIDATED PRODUCTS FOR LAYOUT SWITCHING SUPPORT
+                # Both individual and consolidated products should be available during analysis
                 if len(created_products) > 1:
-                    logger.info(f"ℹ️ Bill has {len(created_products)} items - consolidation available but not auto-applied")
+                    try:
+                        # Calculate consolidated data
+                        total_amount = sum(p.amount for p in created_products)
+                        items_count = len(created_products)
+
+                        # Create detailed breakdown
+                        item_details = []
+                        for product in created_products:
+                            item_details.append(f'• {product.item_details} (Amount: ₹{product.amount})')
+
+                        consolidated_details = f'Consolidated {items_count} expense entries:\n' + '\n'.join(item_details)
+
+                        # Create consolidated product
+                        consolidated_product = TallyExpenseConsolidatedProduct.objects.create(
+                            expense_bill=analyzed_bill,
+                            organization=organization,
+                            item_details=consolidated_details,
+                            amount=total_amount,
+                            debit_or_credit=TallyExpenseConsolidatedProduct.DebitCredit.DEBIT,  # Default for expenses
+                            original_entries_count=items_count,
+                            consolidation_notes=f'Auto-created during existing data processing for layout switching support - {items_count} expense entries'
+                        )
+
+                        logger.info(f"✅ Created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount}) - LAYOUT SWITCHING SUPPORT")
+
+                    except Exception as e:
+                        logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")
+                        # Don't raise - consolidated product creation failure shouldn't break the main flow
                 else:
-                    logger.info(f"ℹ️ Bill has {len(created_products)} item - no consolidation needed")
+                    logger.info(f"ℹ️ Bill has only {len(created_products)} item - no consolidation needed")
 
             # Update bill status
             bill.status = TallyExpenseBill.BillStatus.ANALYSED
