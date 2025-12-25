@@ -636,45 +636,14 @@ def process_expense_analysis_data(bill, json_data, organization):
                 TallyExpenseAnalyzedProduct.objects.bulk_create(product_instances)
                 logger.info(f"Successfully created {len(product_instances)} products for expense bill {analyzed_bill.id}")
 
-                # ✅ AUTO-CREATE CONSOLIDATED PRODUCT FOR MULTI-ITEM BILLS
+                # ✅ DO NOT AUTO-CREATE CONSOLIDATED PRODUCTS - Follow vendor pattern
+                # Individual products are always created first, consolidated products only created on user request
+                # This ensures frontend has correct data structure based on consolidate flag
+                
                 if len(product_instances) > 1:
-                    try:
-                        # Delete existing consolidated product if exists
-                        TallyExpenseConsolidatedProduct.objects.filter(expense_bill=analyzed_bill).delete()
-
-                        # Calculate consolidated data
-                        total_amount = sum(p.amount for p in product_instances)
-                        items_count = len(product_instances)
-
-                        # Create detailed breakdown
-                        item_details = []
-                        for product in product_instances:
-                            item_details.append(f'• {product.item_details} (Amount: ₹{product.amount})')
-
-                        consolidated_details = f'Consolidated {items_count} expense entries:\n' + '\n'.join(item_details)
-
-                        # Create consolidated product
-                        consolidated_product = TallyExpenseConsolidatedProduct.objects.create(
-                            expense_bill=analyzed_bill,
-                            organization=organization,
-                            item_details=consolidated_details,
-                            amount=total_amount,
-                            debit_or_credit=TallyExpenseConsolidatedProduct.DebitCredit.DEBIT,  # Default for expenses
-                            original_entries_count=items_count,
-                            consolidation_notes=f'Auto-created during analysis for {items_count} expense entries'
-                        )
-
-                        logger.info(f"✅ Auto-created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
-
-                        # Set consolidate flag to true when consolidated product is created
-                        analyzed_bill.consolidate = True
-                        analyzed_bill.save(update_fields=['consolidate'])
-
-                    except Exception as e:
-                        logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")
-                        # Don't raise - consolidated product creation failure shouldn't break the main flow
+                    logger.info(f"ℹ️ Bill has {len(product_instances)} items - consolidation available but not auto-applied")
                 else:
-                    logger.info(f"ℹ️ Skipping consolidated expense product creation - bill has only {len(product_instances)} item(s)")
+                    logger.info(f"ℹ️ Bill has {len(product_instances)} item - no consolidation needed")
 
             # Update bill status
             bill.status = TallyExpenseBill.BillStatus.ANALYSED
@@ -1658,66 +1627,116 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
         # Save the analyzed bill
         analyzed_bill.save(skip_validation=True)
 
-        # Update expense items with item_id handling
-        expense_items = analyzed_data.get('expense_items', [])
-        if expense_items:
-            update_analyzed_expense_products(analyzed_bill, expense_items, organization)
-
-        # 🔄 Handle consolidate_prod array from frontend (similar to Zoho implementation)
-        consolidate_prod_data = analyzed_data.get('consolidate_prod', [])
-        if consolidate_prod_data:
-            try:
-                # 🔄 FIRST: Clear existing consolidated products to prevent duplicates
-                existing_consolidated = TallyExpenseConsolidatedProduct.objects.filter(expense_bill=analyzed_bill)
-                if existing_consolidated.exists():
-                    existing_count = existing_consolidated.count()
-                    existing_consolidated.delete()
-                    logger.info(f"Deleted {existing_count} existing consolidated products before creating new ones")
-
-                # Handle consolidated product creation (always create new after clearing)
-                for idx, consolidated_data in enumerate(consolidate_prod_data):
-                    logger.info(f"Creating consolidated expense product {idx + 1}: {consolidated_data.get('item_details', 'Unnamed')}")
-                    
-                    # Find chart of accounts ledger if specified
-                    chart_ledger = None
-                    chart_ledger_name = consolidated_data.get('chart_of_accounts')
-                    if chart_ledger_name and chart_ledger_name != "No COA Ledger":
-                        try:
-                            chart_ledger = Ledger.objects.filter(
-                                name=chart_ledger_name,
-                                organization=organization
-                            ).first()
-                            if chart_ledger:
-                                logger.info(f"Found chart of accounts ledger: {chart_ledger.name}")
-                            else:
-                                logger.warning(f"Chart of accounts ledger not found: {chart_ledger_name}")
-                        except Exception as e:
-                            logger.error(f"Error finding chart of accounts ledger: {e}")
-
-                    # Create new consolidated product (since we cleared existing ones)
-                    consolidated_product = TallyExpenseConsolidatedProduct.objects.create(
-                        expense_bill=analyzed_bill,
-                        organization=organization,
-                        item_details=consolidated_data.get('item_details', 'Consolidated expense from verification'),
-                        amount=consolidated_data.get('amount', 0),
-                        debit_or_credit=consolidated_data.get('debit_or_credit', 'debit'),
-                        chart_of_accounts=chart_ledger,  # Fixed: use chart_of_accounts instead of chart_of_accounts_id
-                        original_entries_count=consolidated_data.get('original_entries_count', 1),
-                        consolidation_notes='Created from frontend verification'
-                    )
-                    logger.info(f"Created consolidated expense product {consolidated_product.id} with chart of accounts: {chart_ledger.name if chart_ledger else 'None'}")
-
-            except Exception as consolidate_error:
-                logger.error(f"Error processing consolidate_prod array: {consolidate_error}")
-                # Don't fail the entire request, just log the error
-
-        # Handle consolidation flag
+        # Handle consolidation flag first to determine which data to process
         consolidate_flag = analyzed_data.get('consolidate', False)
         if consolidate_flag != getattr(analyzed_bill, 'consolidate', False):
             analyzed_bill.consolidate = consolidate_flag
             analyzed_bill.save()
 
+        # 🔄 CONSOLIDATION LOGIC - Match vendor pattern exactly
+        if consolidate_flag:
+            # CONSOLIDATED MODE: Handle consolidate_prod array
+            logger.info("Processing in consolidated products mode")
+            consolidate_prod_array = analyzed_data.get('consolidate_prod', [])
+            
+            if consolidate_prod_array:
+                try:
+                    # Clear existing consolidated products to prevent duplicates
+                    existing_consolidated = TallyExpenseConsolidatedProduct.objects.filter(expense_bill=analyzed_bill)
+                    if existing_consolidated.exists():
+                        existing_count = existing_consolidated.count()
+                        existing_consolidated.delete()
+                        logger.info(f"Deleted {existing_count} existing consolidated products before creating new ones")
+
+                    # Create new consolidated products from payload
+                    for idx, consolidated_data in enumerate(consolidate_prod_array):
+                        logger.info(f"Creating consolidated expense product {idx + 1}: {consolidated_data.get('item_details', 'Unnamed')}")
+                        
+                        # Find chart of accounts ledger if specified
+                        chart_ledger = None
+                        chart_ledger_name = consolidated_data.get('chart_of_accounts')
+                        if chart_ledger_name and chart_ledger_name != "No COA Ledger":
+                            try:
+                                chart_ledger = Ledger.objects.filter(
+                                    name=chart_ledger_name,
+                                    organization=organization
+                                ).first()
+                                if chart_ledger:
+                                    logger.info(f"Found chart of accounts ledger: {chart_ledger.name}")
+                                else:
+                                    logger.warning(f"Chart of accounts ledger not found: {chart_ledger_name}")
+                            except Exception as e:
+                                logger.error(f"Error finding chart of accounts ledger: {e}")
+
+                        # Create new consolidated product
+                        consolidated_product = TallyExpenseConsolidatedProduct.objects.create(
+                            expense_bill=analyzed_bill,
+                            organization=organization,
+                            item_details=consolidated_data.get('item_details', 'Consolidated expense from verification'),
+                            amount=_to_decimal(consolidated_data.get('amount', 0)),
+                            debit_or_credit=consolidated_data.get('debit_or_credit', 'debit'),
+                            chart_of_accounts=chart_ledger,
+                            original_entries_count=consolidated_data.get('original_entries_count', 1),
+                            consolidation_notes='Created from frontend verification'
+                        )
+                        logger.info(f"Created consolidated expense product {consolidated_product.id} with chart of accounts: {chart_ledger.name if chart_ledger else 'None'}")
+                        
+                    # ✅ CRITICAL: Keep individual products intact for layout switching support
+                    # Individual products are NEVER deleted in consolidation mode
+                    existing_individual_products = analyzed_bill.products.all()
+                    if existing_individual_products.exists():
+                        logger.info(f"✅ PRESERVED {existing_individual_products.count()} individual products (layout switching support)")
+                        logger.info("✅ Users can switch between individual and consolidated view")
+                    else:
+                        logger.warning("No individual products found to preserve")
+                        
+                except Exception as consolidate_error:
+                    logger.error(f"Error processing consolidate_prod array: {consolidate_error}")
+                    
+            else:
+                logger.warning("Consolidate=true but no consolidate_prod array found in payload")
+                # Keep individual products intact even if consolidate_prod is missing
+                existing_individual_products = analyzed_bill.products.all()
+                if existing_individual_products.exists():
+                    logger.info(f"✅ PRESERVED {existing_individual_products.count()} individual products (no consolidate_prod in payload)")
+                
+        else:
+            # INDIVIDUAL PRODUCTS MODE: Handle expense_items array
+            logger.info("Processing in individual products mode")
+            expense_items = analyzed_data.get('expense_items', [])
+            
+            if expense_items:
+                logger.info(f"Processing {len(expense_items)} individual expense items")
+                update_analyzed_expense_products(analyzed_bill, expense_items, organization)
+                
+                # Keep any existing consolidated products for layout switching support
+                existing_consolidated_products = analyzed_bill.consolidated_products.all()
+                if existing_consolidated_products.exists():
+                    logger.info(f"✅ PRESERVED {existing_consolidated_products.count()} consolidated products (layout switching support)")
+                    # Consolidated products are preserved for layout flexibility
+
         return analyzed_bill
+
+
+def find_or_create_expense_chart_of_accounts_ledger(coa_name, organization):
+    """Find existing chart of accounts ledger for expenses"""
+    try:
+        # First try to find exact match
+        coa_ledger = Ledger.objects.filter(
+            name__iexact=coa_name.strip(),
+            organization=organization
+        ).first()
+
+        if coa_ledger:
+            logger.info(f"Found existing chart of accounts ledger: {coa_ledger.name}")
+            return coa_ledger
+        else:
+            logger.warning(f"Chart of accounts ledger not found: {coa_name}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error finding chart of accounts ledger: {str(e)}")
+        return None
 
 
 def find_or_create_expense_vendor_ledger(vendor_name, vendor_data, organization):
@@ -1945,23 +1964,31 @@ def update_analyzed_expense_products(analyzed_bill, expense_items, organization)
 
         product.save()
 
-    # Delete expense products that are no longer in the frontend payload
-    products_to_delete = []
-    for existing_id, product in existing_products.items():
-        if existing_id not in updated_product_ids:
-            products_to_delete.append(product)
+    # ✅ CRITICAL: Only delete expense products if we're NOT in consolidation mode
+    # In consolidation mode, individual products are PRESERVED for layout switching
+    if not getattr(analyzed_bill, 'consolidate', False):
+        products_to_delete = []
+        for existing_id, product in existing_products.items():
+            if existing_id not in updated_product_ids:
+                products_to_delete.append(product)
+        
+        if products_to_delete:
+            deleted_count = len(products_to_delete)
+            for product in products_to_delete:
+                logger.info(f"Deleting expense product {product.id}: {product.item_details or 'Unknown'}")
+                product.delete()
+            logger.info(f"Deleted {deleted_count} expense products not present in frontend payload")
+    else:
+        logger.info("✅ CONSOLIDATION MODE: Individual products PRESERVED for layout switching")
+        logger.info("✅ Users can switch between individual and consolidated layouts")
     
-    if products_to_delete:
-        deleted_count = len(products_to_delete)
-        for product in products_to_delete:
-            logger.info(f"Deleting expense product {product.id}: {product.item_details or 'Unknown'}")
-            product.delete()
-        logger.info(f"Deleted {deleted_count} expense products not present in frontend payload")
+    # Calculate deletion count for summary  
+    deletion_count = 0 if getattr(analyzed_bill, 'consolidate', False) else len([existing_id for existing_id in existing_products.keys() if existing_id not in updated_product_ids])
     
     logger.info(
         f"Expense product update summary: {len(updated_product_ids)} updated, "
         f"{len(expense_items or []) - len(updated_product_ids)} created, "
-        f"{len(products_to_delete) if products_to_delete else 0} deleted"
+        f"{deletion_count} deleted (consolidate mode: {getattr(analyzed_bill, 'consolidate', False)})"
     )
 
 
