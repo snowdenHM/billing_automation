@@ -1830,33 +1830,59 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                     
                     # Handle consolidated product creation (always create new after clearing)
                     for idx, consolidated_product_data in enumerate(consolidate_prod_array):
-                        logger.info(f"Creating consolidated product {idx + 1}: {consolidated_product_data.get('item_name', 'Unnamed')}")
+                        item_id = consolidated_product_data.get('item_id')
+                        item_name = consolidated_product_data.get('item_name', 'Unnamed')
+                        logger.info(f"Creating consolidated product {idx + 1}: {item_name} (item_id: {item_id}, type: {type(item_id)})")
                         
                         try:
-                            # Find or create tax ledger
+                            # Find or create tax ledger with better logging
                             tax_ledger = None
                             tax_ledger_name = consolidated_product_data.get('tax_ledger')
-                            if tax_ledger_name and tax_ledger_name != "No Tax Ledger":
+                            logger.info(f"Processing tax_ledger: '{tax_ledger_name}' for item {idx + 1}")
+                            
+                            if tax_ledger_name and tax_ledger_name not in [None, '', 'No Tax Ledger']:
                                 tax_ledger = find_or_create_tax_ledger(tax_ledger_name, 'purchase', organization)
+                                if tax_ledger:
+                                    logger.info(f"Found/created tax ledger: {tax_ledger.name} (ID: {tax_ledger.id})")
+                                    # Validate that the tax ledger belongs to the same organization
+                                    if tax_ledger.organization != organization:
+                                        logger.error(f"Tax ledger organization mismatch! Ledger org: {tax_ledger.organization.id}, Expected org: {organization.id}")
+                                        tax_ledger = None
+                                else:
+                                    logger.warning(f"Failed to find/create tax ledger: {tax_ledger_name}")
+                            else:
+                                logger.info(f"No tax ledger specified or invalid value: '{tax_ledger_name}'")
                             
                             # Create new consolidated product (Tally now uses ForeignKey, multiple supported)
                             consolidated_product = TallyVendorConsolidatedProduct.objects.create(
                                 vendor_bill_analyzed=analyzed_bill,
                                 organization=organization,
-                                item_name=consolidated_product_data.get('item_name', 'Consolidated Items'),
-                                item_details=consolidated_product_data.get('item_details', ''),
+                                item_name=consolidated_product_data.get('item_name') or f'Consolidated Item {idx + 1}',
+                                item_details=consolidated_product_data.get('item_details') or '',
                                 quantity=int(consolidated_product_data.get('quantity', 1)),
                                 price=float(consolidated_product_data.get('price', 0) or consolidated_product_data.get('rate', 0)),
                                 amount=float(consolidated_product_data.get('amount', 0)),
-                                taxes=tax_ledger,
-                                product_gst=consolidated_product_data.get('product_gst', ''),
+                                taxes=tax_ledger,  # This should save the tax ledger
+                                product_gst=consolidated_product_data.get('product_gst') or '',
                                 igst=float(consolidated_product_data.get('igst', 0)),
                                 cgst=float(consolidated_product_data.get('cgst', 0)),
                                 sgst=float(consolidated_product_data.get('sgst', 0)),
                                 original_items_count=consolidated_product_data.get('original_items_count', 1),
                                 consolidation_notes='Created from frontend verification'
                             )
-                            logger.info(f"Created new consolidated product {consolidated_product.id}")
+                            
+                            # Log the saved tax ledger info
+                            logger.info(f"Created consolidated product {consolidated_product.id} with:")
+                            logger.info(f"  - Item: {consolidated_product.item_name}")
+                            logger.info(f"  - Tax Ledger: {consolidated_product.taxes.name if consolidated_product.taxes else 'None'}")
+                            logger.info(f"  - Tax Ledger ID: {consolidated_product.taxes.id if consolidated_product.taxes else 'None'}")
+                            
+                            # Double-check by re-fetching from database to ensure tax ledger was saved
+                            saved_product = TallyVendorConsolidatedProduct.objects.get(id=consolidated_product.id)
+                            if saved_product.taxes:
+                                logger.info(f"✅ VERIFIED: Tax ledger saved correctly - {saved_product.taxes.name}")
+                            else:
+                                logger.error(f"❌ ERROR: Tax ledger not saved to database for product {consolidated_product.id}")
                             
                             # Since Tally now uses ForeignKey, multiple consolidated products are supported
                             # We can create each consolidated product from the array
@@ -1897,11 +1923,17 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                     if consolidated_product_from_payload:
                         # Process consolidated product from products array fallback
                         try:
-                            # Find or create tax ledger
+                            # Find or create tax ledger with logging
                             tax_ledger = None
                             tax_ledger_name = consolidated_product_from_payload.get('tax_ledger')
-                            if tax_ledger_name and tax_ledger_name != "No Tax Ledger":
+                            logger.info(f"Processing fallback tax_ledger: '{tax_ledger_name}'")
+                            
+                            if tax_ledger_name and tax_ledger_name not in [None, '', "No Tax Ledger"]:
                                 tax_ledger = find_or_create_tax_ledger(tax_ledger_name, 'purchase', organization)
+                                if tax_ledger:
+                                    logger.info(f"Found/created tax ledger for fallback: {tax_ledger.name} (ID: {tax_ledger.id})")
+                                else:
+                                    logger.warning(f"Failed to find/create tax ledger for fallback: {tax_ledger_name}")
                             
                             # Create new consolidated product (since we allow multiple now)
                             consolidated_data = {
@@ -2026,6 +2058,8 @@ def find_or_create_vendor_ledger(vendor_name, vendor_data, organization):
 def find_or_create_tax_ledger(ledger_name, tax_type, organization):
     """Find existing tax ledger or create new one using TallyConfig"""
     try:
+        logger.info(f"Looking for tax ledger: '{ledger_name}' (type: {tax_type}) in org: {organization.id}")
+        
         # First try to find exact match
         tax_ledger = Ledger.objects.filter(
             name__iexact=ledger_name.strip(),
@@ -2033,7 +2067,10 @@ def find_or_create_tax_ledger(ledger_name, tax_type, organization):
         ).first()
 
         if tax_ledger:
+            logger.info(f"Found existing tax ledger: {tax_ledger.name} (ID: {tax_ledger.id})")
             return tax_ledger
+        
+        logger.info(f"Tax ledger '{ledger_name}' not found, creating new one...")
 
         # Get TallyConfig for the organization
         tally_config = TallyConfig.objects.filter(organization=organization).first()
@@ -2085,6 +2122,7 @@ def find_or_create_tax_ledger(ledger_name, tax_type, organization):
             parent=parent_ledger,
             organization=organization
         )
+        logger.info(f"Created new tax ledger: {tax_ledger.name} (ID: {tax_ledger.id}) under parent: {parent_ledger.parent}")
         return tax_ledger
 
     except Exception as e:

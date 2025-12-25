@@ -119,6 +119,7 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
                 'id': str(consolidated_product.id),
                 'item_name': consolidated_product.item_name,
                 'item_details': consolidated_product.item_details,
+                'tax_ledger': str(consolidated_product.taxes.name) if consolidated_product.taxes else "No Tax Ledger",
                 'price': float(consolidated_product.price or 0),
                 'rate': float(consolidated_product.price or 0),  # Alias for price
                 'quantity': consolidated_product.quantity or 1,
