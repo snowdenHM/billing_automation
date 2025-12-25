@@ -77,13 +77,15 @@ def safe_decimal(value, default=0):
 
 
 def _to_decimal(val, default="0"):
-    """Convert value to Decimal - same as vendor views"""
+    """Convert value to Decimal with proper quantization - same as vendor views"""
     if val is None or val == "":
-        return Decimal(default)
+        return Decimal(default).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     try:
-        return Decimal(str(val))
+        decimal_val = Decimal(str(val))
+        # Quantize to exactly 2 decimal places to avoid validation errors
+        return decimal_val.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     except (InvalidOperation, ValueError):
-        return Decimal(default)
+        return Decimal(default).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 
 def _to_int(val, default=0):
@@ -448,7 +450,7 @@ def analyze_expense_bill_with_ai(bill, organization):
     3. Vendor/Company details in "from" section (name and address)
     4. Customer details in "to" section (name and address) 
     5. Expense items with descriptions, categories, and amounts
-    6. Tax amounts (IGST, CGST, SGST - look for percentages and amounts)
+    6. Tax amounts (IGST, CGST, SGST, TDS - look for percentages and amounts)
     7. Total amount (may include terms like "Total", "Grand Total", "Amount Payable", "Net Amount")
     
     IMPORTANT RULES:
@@ -458,6 +460,7 @@ def analyze_expense_bill_with_ai(bill, organization):
     - Look carefully at the entire document, including headers, footers, and margins
     - Pay special attention to tax sections which may be in tables or separate areas
     - For expense categories, try to identify the type of expense (travel, food, supplies, etc.)
+    - Look for TDS (Tax Deducted at Source) amounts which may be shown as deductions
     
     Return data in this JSON structure:
     {
@@ -481,7 +484,8 @@ def analyze_expense_bill_with_ai(bill, organization):
         "total": 0,
         "igst": 0,
         "cgst": 0,
-        "sgst": 0
+        "sgst": 0,
+        "tds": 0
     }
     """
 
@@ -588,10 +592,12 @@ def process_expense_analysis_data(bill, json_data, organization):
         # Find vendor ledger
         vendor = find_expense_vendor_ledger(company_name, organization)
 
-        # Determine GST type with safe conversion
-        igst_val = safe_float_convert(relevant_data.get('igst', 0))
-        cgst_val = safe_float_convert(relevant_data.get('cgst', 0))
-        sgst_val = safe_float_convert(relevant_data.get('sgst', 0))
+        # Determine GST type with safe conversion and proper decimal rounding
+        igst_val = _to_decimal(relevant_data.get('igst', 0))
+        cgst_val = _to_decimal(relevant_data.get('cgst', 0))  
+        sgst_val = _to_decimal(relevant_data.get('sgst', 0))
+        tds_val = _to_decimal(relevant_data.get('tds', 0))
+        total_val = _to_decimal(relevant_data.get('total', 0))
 
         if igst_val > 0:
             gst_type = TallyExpenseAnalyzedBill.GSTType.IGST
@@ -610,7 +616,8 @@ def process_expense_analysis_data(bill, json_data, organization):
                 igst=igst_val,
                 cgst=cgst_val,
                 sgst=sgst_val,
-                total=safe_float_convert(relevant_data.get('total', 0)),
+                tds=tds_val,
+                total=total_val,
                 note="AI Analyzed Expense Bill",
                 organization=organization,
                 gst_type=gst_type
@@ -625,7 +632,7 @@ def process_expense_analysis_data(bill, json_data, organization):
                         product = TallyExpenseAnalyzedProduct(
                             expense_bill=analyzed_bill,
                             item_details=str(expense.get('description', '')),
-                            amount=safe_float_convert(expense.get('amount', 0)),
+                            amount=_to_decimal(expense.get('amount', 0)),
                             debit_or_credit=TallyExpenseAnalyzedProduct.DebitCredit.DEBIT,
                             # Expenses are typically debits
                             organization=organization
@@ -1282,10 +1289,11 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
         vendor = find_expense_vendor_ledger(company_name, organization)
 
         # Determine GST type with safe conversion and proper decimal rounding
-        igst_val = round(safe_float_convert(existing_data.get('igst', 0)), 2)
-        cgst_val = round(safe_float_convert(existing_data.get('cgst', 0)), 2)
-        sgst_val = round(safe_float_convert(existing_data.get('sgst', 0)), 2)
-        total_val = round(safe_float_convert(existing_data.get('total', 0)), 2)
+        igst_val = _to_decimal(existing_data.get('igst', 0))
+        cgst_val = _to_decimal(existing_data.get('cgst', 0))
+        sgst_val = _to_decimal(existing_data.get('sgst', 0))
+        tds_val = _to_decimal(existing_data.get('tds', 0))
+        total_val = _to_decimal(existing_data.get('total', 0))
 
         if igst_val > 0:
             gst_type = TallyExpenseAnalyzedBill.GSTType.IGST
@@ -1304,6 +1312,7 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
                 igst=igst_val,
                 cgst=cgst_val,
                 sgst=sgst_val,
+                tds=tds_val,
                 total=total_val,
                 note="AI Analyzed Expense Bill (Existing Data)",
                 organization=organization,
@@ -1320,7 +1329,7 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
             if isinstance(expenses, list):
                 for expense in expenses:
                     if isinstance(expense, dict):
-                        amount = round(safe_float_convert(expense.get('amount', 0)), 2)
+                        amount = _to_decimal(expense.get('amount', 0))
 
                         product = TallyExpenseAnalyzedProduct(
                             expense_bill=analyzed_bill,
@@ -1336,45 +1345,14 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
                 TallyExpenseAnalyzedProduct.objects.bulk_create(created_products)
                 logger.info(f"Successfully created {len(created_products)} expense products for bill {analyzed_bill.id}")
 
-                # ✅ AUTO-CREATE CONSOLIDATED PRODUCT FOR MULTI-ITEM BILLS
+                # ✅ DO NOT AUTO-CREATE CONSOLIDATED PRODUCTS - Follow vendor pattern
+                # Individual products are always created first, consolidated products only created on user request
+                # This ensures frontend has correct data structure based on consolidate flag
+                
                 if len(created_products) > 1:
-                    try:
-                        # Delete existing consolidated product if exists
-                        TallyExpenseConsolidatedProduct.objects.filter(expense_bill=analyzed_bill).delete()
-
-                        # Calculate consolidated data
-                        total_amount = sum(p.amount for p in created_products)
-                        items_count = len(created_products)
-
-                        # Create detailed breakdown
-                        item_details = []
-                        for product in created_products:
-                            item_details.append(f'• {product.item_details} (Amount: ₹{product.amount})')
-
-                        consolidated_details = f'Consolidated {items_count} expense entries:\n' + '\n'.join(item_details)
-
-                        # Create consolidated product
-                        consolidated_product = TallyExpenseConsolidatedProduct.objects.create(
-                            expense_bill=analyzed_bill,
-                            organization=organization,
-                            item_details=consolidated_details,
-                            amount=total_amount,
-                            debit_or_credit=TallyExpenseConsolidatedProduct.DebitCredit.DEBIT,  # Default for expenses
-                            original_entries_count=items_count,
-                            consolidation_notes=f'Auto-created during existing data processing for {items_count} expense entries'
-                        )
-
-                        logger.info(f"✅ Auto-created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
-
-                        # Set consolidate flag to true when consolidated product is created
-                        analyzed_bill.consolidate = True
-                        analyzed_bill.save(update_fields=['consolidate'])
-
-                    except Exception as e:
-                        logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")
-                        # Don't raise - consolidated product creation failure shouldn't break the main flow
+                    logger.info(f"ℹ️ Bill has {len(created_products)} items - consolidation available but not auto-applied")
                 else:
-                    logger.info(f"ℹ️ Skipping consolidated expense product creation - bill has only {len(created_products)} item(s)")
+                    logger.info(f"ℹ️ Bill has {len(created_products)} item - no consolidation needed")
 
             # Update bill status
             bill.status = TallyExpenseBill.BillStatus.ANALYSED
@@ -1913,6 +1891,13 @@ def update_analyzed_expense_products(analyzed_bill, expense_items, organization)
         elif analyzed_bill.sgst_debit_or_credit == 'credit':
             total_credit += float(analyzed_bill.sgst)
 
+    # Add TDS amounts to debit/credit totals
+    if analyzed_bill.tds and analyzed_bill.tds > 0:
+        if analyzed_bill.tds_debit_or_credit == 'debit':
+            total_debit += float(analyzed_bill.tds)
+        elif analyzed_bill.tds_debit_or_credit == 'credit':
+            total_credit += float(analyzed_bill.tds)
+
     # Add vendor amount to debit/credit totals
     if analyzed_bill.vendor_amount and analyzed_bill.vendor_amount > 0:
         if analyzed_bill.vendor_debit_or_credit == 'debit':
@@ -1927,7 +1912,7 @@ def update_analyzed_expense_products(analyzed_bill, expense_items, organization)
             f"Total Debit and Credit amounts must be equal across all components. "
             f"Total Debit: {total_debit}, Total Credit: {total_credit}, "
             f"Difference: {abs(total_debit - total_credit)}. "
-            f"This includes expense items, taxes (IGST/CGST/SGST), and vendor amount."
+            f"This includes expense items, taxes (IGST/CGST/SGST/TDS), and vendor amount."
         )
 
     # Get existing products mapped by their ID
