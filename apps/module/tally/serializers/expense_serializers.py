@@ -2,6 +2,9 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from drf_spectacular.utils import extend_schema_field
 from ..models import TallyExpenseBill, TallyExpenseAnalyzedBill, TallyExpenseAnalyzedProduct
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class UploadedByUserSerializer(serializers.ModelSerializer):
@@ -84,21 +87,44 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
     def get_consolidated_product(self, obj):
         """Get consolidated product data if exists"""
         try:
+            # Ensure obj is a TallyExpenseAnalyzedBill instance
+            if not hasattr(obj, 'consolidated_products'):
+                logger.warning(f"Object {type(obj)} does not have consolidated_products attribute")
+                return []
+                
             consolidated_products = obj.consolidated_products.all()
             from ..models import TallyExpenseConsolidatedProduct
 
             return [{
                 'id': str(consolidated_product.id),
                 'item_details': consolidated_product.item_details,
-                'chart_of_accounts': str(consolidated_product.chart_of_accounts) if consolidated_product.chart_of_accounts else None,
+                'chart_of_accounts': str(consolidated_product.chart_of_accounts.name) if consolidated_product.chart_of_accounts else "No COA Ledger",
                 'amount': float(consolidated_product.amount or 0),
                 'debit_or_credit': consolidated_product.debit_or_credit or "debit",
                 'original_entries_count': consolidated_product.original_entries_count or 0,
                 'consolidation_notes': consolidated_product.consolidation_notes or "",
                 'created_at': consolidated_product.created_at.isoformat() if consolidated_product.created_at else None
             } for consolidated_product in consolidated_products]
-        except:
+        except Exception as e:
+            logger.error(f"Error getting consolidated products for {type(obj)}: {str(e)}")
             return []
+
+    def to_representation(self, instance):
+        """Override to include consolidate_prod array like Zoho pattern"""
+        try:
+            data = super().to_representation(instance)
+
+            # Add consolidate_prod array (matching Zoho pattern for frontend compatibility)
+            consolidated_data = self.get_consolidated_product(instance)
+            data['consolidate_prod'] = consolidated_data
+
+            return data
+        except Exception as e:
+            logger.error(f"Error in TallyExpenseAnalyzedBillSerializer.to_representation for {type(instance)}: {str(e)}")
+            # Return basic data without consolidated_products if there's an error
+            data = super().to_representation(instance)
+            data['consolidate_prod'] = []
+            return data
 
     class Meta:
         model = TallyExpenseAnalyzedBill

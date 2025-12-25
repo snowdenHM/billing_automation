@@ -67,7 +67,7 @@ def check_duplicate_tally_expense_bill(bill, organization):
 
     if not bill.analysed_data:
         # If bill hasn't been analyzed yet, we can't check for duplicates
-        return False, [], 0.0
+        return False, [], 0.0 False, [], 0.0
 
     analyzed_data = bill.analysed_data
     current_invoice_number = analyzed_data.get('invoiceNumber', '').strip()
@@ -77,7 +77,7 @@ def check_duplicate_tally_expense_bill(bill, organization):
 
     if not current_invoice_number and not current_vendor_name:
         # Can't check duplicates without key identifying information
-        return False, [], 0.0
+        return False, [], 0.0 False, [], 0.0
 
     # Find potentially duplicate bills in the same organization
     potential_duplicates = TallyExpenseBill.objects.filter(
@@ -1027,10 +1027,10 @@ def expense_bills_upload(request, org_id):
                 try:
                     logger.info(f"Auto-analyzing Tally expense bill: {bill.bill_munshi_name}")
 
-                    # Analyze with AI
-                    analysis_result = analyze_expense_bill_with_ai(bill, organization)
+                    # Analyze with AI - this returns a TallyExpenseAnalyzedBill instance
+                    analyzed_bill_instance = analyze_expense_bill_with_ai(bill, organization)
 
-                    if analysis_result.get('success', True):  # Assume success if not explicitly failed
+                    if analyzed_bill_instance:
                         # Check for duplicates after analysis
                         is_duplicate, duplicate_bills, max_similarity = check_duplicate_tally_expense_bill(bill, organization)
 
@@ -1073,7 +1073,7 @@ def expense_bills_upload(request, org_id):
                             'bill_id': str(bill.id),
                             'bill_name': bill.bill_munshi_name,
                             'analysis_successful': False,
-                            'error': analysis_result.get('error', 'Unknown analysis error'),
+                            'error': 'Analysis failed - no analyzed bill created',
                             'duplicate_detected': False
                         })
 
@@ -1513,6 +1513,12 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
 
     if not analyzed_data:
         return analyzed_bill
+    
+    # Add defensive check to ensure analyzed_bill is the correct type
+    from .models import TallyExpenseAnalyzedBill
+    if not isinstance(analyzed_bill, TallyExpenseAnalyzedBill):
+        logger.error(f"Expected TallyExpenseAnalyzedBill, got {type(analyzed_bill)}")
+        raise ValueError(f"Invalid analyzed_bill type: {type(analyzed_bill)}")
 
     with transaction.atomic():
         # Update vendor information - handle flattened structure
@@ -1624,19 +1630,35 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
                 # Handle consolidated product creation (always create new after clearing)
                 for idx, consolidated_data in enumerate(consolidate_prod_data):
                     logger.info(f"Creating consolidated expense product {idx + 1}: {consolidated_data.get('item_details', 'Unnamed')}")
+                    
+                    # Find chart of accounts ledger if specified
+                    chart_ledger = None
+                    chart_ledger_name = consolidated_data.get('chart_of_accounts')
+                    if chart_ledger_name and chart_ledger_name != "No COA Ledger":
+                        try:
+                            chart_ledger = Ledger.objects.filter(
+                                name=chart_ledger_name,
+                                organization=organization
+                            ).first()
+                            if chart_ledger:
+                                logger.info(f"Found chart of accounts ledger: {chart_ledger.name}")
+                            else:
+                                logger.warning(f"Chart of accounts ledger not found: {chart_ledger_name}")
+                        except Exception as e:
+                            logger.error(f"Error finding chart of accounts ledger: {e}")
 
                     # Create new consolidated product (since we cleared existing ones)
-                    TallyExpenseConsolidatedProduct.objects.create(
+                    consolidated_product = TallyExpenseConsolidatedProduct.objects.create(
                         expense_bill=analyzed_bill,
                         organization=organization,
                         item_details=consolidated_data.get('item_details', 'Consolidated expense from verification'),
                         amount=consolidated_data.get('amount', 0),
                         debit_or_credit=consolidated_data.get('debit_or_credit', 'debit'),
-                        chart_of_accounts_id=consolidated_data.get('chart_of_accounts'),
-                        original_entries_count=1,
+                        chart_of_accounts=chart_ledger,  # Fixed: use chart_of_accounts instead of chart_of_accounts_id
+                        original_entries_count=consolidated_data.get('original_entries_count', 1),
                         consolidation_notes='Created from frontend verification'
                     )
-                    logger.info(f"Created new consolidated expense product for item {idx + 1}")
+                    logger.info(f"Created consolidated expense product {consolidated_product.id} with chart of accounts: {chart_ledger.name if chart_ledger else 'None'}")
 
             except Exception as consolidate_error:
                 logger.error(f"Error processing consolidate_prod array: {consolidate_error}")
