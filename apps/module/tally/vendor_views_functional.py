@@ -1868,11 +1868,11 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                 except Exception as consolidate_error:
                     logger.error(f"Error processing consolidate_prod array: {consolidate_error}")
                 
-                # Clear individual products only if we have consolidated products to replace them
+                # Keep individual products intact since users might switch between layouts
                 existing_individual_products = analyzed_bill.products.all()
                 if existing_individual_products.exists() and len(consolidate_prod_array) > 0:
-                    logger.info(f"Clearing {existing_individual_products.count()} individual products for consolidation")
-                    existing_individual_products.delete()
+                    logger.info(f"Keeping {existing_individual_products.count()} individual products (layout switching support)")
+                    # Individual products are preserved for layout flexibility
                 elif len(consolidate_prod_array) == 0:
                     logger.warning("No consolidated products provided - keeping existing individual products")
                     
@@ -1925,12 +1925,12 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                             consolidated_product = TallyVendorConsolidatedProduct.objects.create(**consolidated_data)
                             logger.info(f"Created new consolidated product (fallback): {consolidated_product.id}")
                             
-                            # Only clear individual products if consolidated product was successfully created
+                            # Keep individual products intact for layout switching support
                             existing_individual_products = analyzed_bill.products.all()
                             if existing_individual_products.exists() and consolidated_product:
-                                logger.info(f"Clearing {existing_individual_products.count()} individual products for consolidation (fallback)")
-                                existing_individual_products.delete()
-                                
+                                logger.info(f"Keeping {existing_individual_products.count()} individual products (layout switching support)")
+                                # Individual products are preserved for layout flexibility
+
                         except Exception as e:
                             logger.error(f"Error processing consolidated product (fallback): {str(e)}")
                     else:
@@ -1945,11 +1945,11 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                 logger.info(f"Processing {len(line_items)} individual products")
                 update_analyzed_products(analyzed_bill, line_items, organization)
                 
-                # Clear any existing consolidated products
+                # Keep any existing consolidated products for layout switching support
                 existing_consolidated = TallyVendorConsolidatedProduct.objects.filter(vendor_bill_analyzed=analyzed_bill)
                 if existing_consolidated.exists():
-                    logger.info(f"Clearing {existing_consolidated.count()} consolidated products for individual mode")
-                    existing_consolidated.delete()
+                    logger.info(f"Keeping {existing_consolidated.count()} consolidated products (layout switching support)")
+                    # Consolidated products are preserved for layout flexibility
 
         return analyzed_bill
 
