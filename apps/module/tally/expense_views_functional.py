@@ -627,6 +627,10 @@ def process_expense_analysis_data(bill, json_data, organization):
 
                         logger.info(f"✅ Auto-created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
 
+                        # Set consolidate flag to true when consolidated product is created
+                        analyzed_bill.consolidate = True
+                        analyzed_bill.save(update_fields=['consolidate'])
+
                     except Exception as e:
                         logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")
                         # Don't raise - consolidated product creation failure shouldn't break the main flow
@@ -1353,6 +1357,10 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
                         )
 
                         logger.info(f"✅ Auto-created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
+
+                        # Set consolidate flag to true when consolidated product is created
+                        analyzed_bill.consolidate = True
+                        analyzed_bill.save(update_fields=['consolidate'])
 
                     except Exception as e:
                         logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")
