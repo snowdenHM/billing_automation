@@ -29,6 +29,9 @@ from .views import (
     # Zoho Settings/Credentials
     zoho_credentials_view,
     generate_token_view,
+    initiate_oauth_view,
+    oauth_callback_view,
+    zoho_status_view,
 
     # Zoho Sync Endpoints
     vendors_list_view,
@@ -61,7 +64,10 @@ urlpatterns = [
         # ============================================================================
         # Zoho Settings/Credentials Management
         # ============================================================================
+        path('status/', zoho_status_view, name='zoho_status'),
         path('settings/credentials/', zoho_credentials_view, name='zoho_credentials'),
+        path('oauth/initiate/', initiate_oauth_view, name='initiate_oauth'),
+        path('oauth/callback/', oauth_callback_view, name='oauth_callback'),
         path('generate-token/', generate_token_view, name='generate_token'),
 
         # ============================================================================

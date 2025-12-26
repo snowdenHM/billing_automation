@@ -23,6 +23,11 @@ DEBUG = env.bool("DEBUG", default=False)
 ALLOWED_HOSTS = ["billmunshi.com", "www.billmunshi.com", "api.billmunshi.com", "127.0.0.1", "localhost","34.51.42.227"]
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your_openai_api_key_here")
 
+# Zoho Books Integration (Server-Based Application)
+ZOHO_CLIENT_ID = env("ZOHO_CLIENT_ID", default="")
+ZOHO_CLIENT_SECRET = env("ZOHO_CLIENT_SECRET", default="")  
+ZOHO_REDIRECT_URL = env("ZOHO_REDIRECT_URL", default="")
+
 
 
 

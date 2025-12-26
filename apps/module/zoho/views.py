@@ -3,14 +3,20 @@
 import logging
 import requests
 
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
+from django.urls import reverse
+from django.http import HttpResponseRedirect
+from django.conf import settings
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
+
+import urllib.parse
+import os
 
 from apps.organizations.models import Organization
 from apps.common.pagination import DefaultPagination
@@ -61,15 +67,46 @@ def get_organization_from_request(request, **kwargs):
 
 
 def get_zoho_credentials(organization):
-    """Get valid Zoho credentials for organization."""
+    """Get or create valid Zoho credentials for organization using environment variables."""
+    # Get credentials from environment variables
+    client_id = os.getenv('ZOHO_CLIENT_ID')
+    client_secret = os.getenv('ZOHO_CLIENT_SECRET')
+    redirect_url = os.getenv('ZOHO_REDIRECT_URL')
+    
+    if not all([client_id, client_secret, redirect_url]):
+        raise ValueError("Zoho environment variables (ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REDIRECT_URL) are not configured")
+    
     try:
-        credentials = ZohoCredentials.objects.get(organization=organization)
-        if not credentials.is_token_valid():
+        # Get existing credentials or create new ones
+        credentials, created = ZohoCredentials.objects.get_or_create(
+            organization=organization,
+            defaults={
+                'clientId': client_id,
+                'clientSecret': client_secret,
+                'redirectUrl': redirect_url,
+                'organisationId': '',  # Will be set during OAuth flow
+            }
+        )
+        
+        # Update credentials with latest environment values if they exist
+        if not created:
+            credentials.clientId = client_id
+            credentials.clientSecret = client_secret
+            credentials.redirectUrl = redirect_url
+            credentials.save(update_fields=['clientId', 'clientSecret', 'redirectUrl'])
+        
+        # Check token validity and refresh if needed
+        if credentials.accessToken and not credentials.is_token_valid():
             if not credentials.refresh_token():
-                raise ValueError("Unable to refresh Zoho token")
+                # Clear invalid tokens to force re-authentication
+                credentials.accessToken = None
+                credentials.refreshToken = None
+                credentials.save(update_fields=['accessToken', 'refreshToken'])
+        
         return credentials
-    except ZohoCredentials.DoesNotExist:
-        raise ValueError("Zoho credentials not found for organization")
+    except Exception as e:
+        logger.error(f"Error managing Zoho credentials: {str(e)}")
+        raise ValueError(f"Failed to get Zoho credentials: {str(e)}")
 
 
 def make_zoho_api_request(credentials, endpoint, method='GET', data=None):
@@ -150,6 +187,162 @@ def zoho_credentials_view(request, org_id):
 
 
 @extend_schema(
+    responses={"200": {"authorization_url": "string", "state": "string"}},
+    tags=["Zoho Ops"],
+    methods=["POST"]
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def initiate_oauth_view(request, org_id):
+    """Initiate Zoho OAuth2 flow using server-side credentials."""
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        # Get or create credentials using environment variables
+        credentials = get_zoho_credentials(organization)
+    except ValueError as e:
+        return Response(
+            {"detail": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+    # Generate state parameter for security (optional but recommended)
+    import uuid
+    state = str(uuid.uuid4())
+    
+    # Store state in session or database for validation (simple approach)
+    request.session[f'zoho_oauth_state_{org_id}'] = state
+
+    # Build Zoho OAuth2 authorization URL
+    auth_params = {
+        'response_type': 'code',
+        'client_id': credentials.clientId,
+        'scope': 'ZohoBooks.fullaccess.all',
+        'redirect_uri': credentials.redirectUrl,
+        'state': state,
+        'access_type': 'offline'  # To get refresh token
+    }
+    
+    authorization_url = 'https://accounts.zoho.in/oauth/v2/auth?' + urllib.parse.urlencode(auth_params)
+    
+    return Response({
+        "authorization_url": authorization_url,
+        "state": state,
+        "detail": "Redirect user to authorization URL to complete OAuth flow"
+    })
+
+
+@extend_schema(
+    responses={"200": {"access_token": "string", "refresh_token": "string", "expires_in": "integer"}},
+    tags=["Zoho Ops"],
+    methods=["GET"]
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def oauth_callback_view(request, org_id):
+    """Handle OAuth2 callback from Zoho and exchange code for tokens."""
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    # Get authorization code and state from callback
+    code = request.GET.get('code')
+    state = request.GET.get('state')
+    error = request.GET.get('error')
+    
+    if error:
+        return Response({
+            "detail": f"OAuth authorization failed: {error}",
+            "error_description": request.GET.get('error_description', '')
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    if not code:
+        return Response(
+            {"detail": "Authorization code not received from Zoho"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Validate state parameter
+    expected_state = request.session.get(f'zoho_oauth_state_{org_id}')
+    if state != expected_state:
+        return Response(
+            {"detail": "Invalid state parameter. Possible CSRF attack."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Clean up state from session
+    request.session.pop(f'zoho_oauth_state_{org_id}', None)
+
+    try:
+        # Get or create credentials using environment variables
+        credentials = get_zoho_credentials(organization)
+    except ValueError as e:
+        return Response(
+            {"detail": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+    # Exchange authorization code for tokens
+    token_url = "https://accounts.zoho.in/oauth/v2/token"
+    token_data = {
+        'code': code,
+        'client_id': credentials.clientId,
+        'client_secret': credentials.clientSecret,
+        'redirect_uri': credentials.redirectUrl,
+        'grant_type': 'authorization_code'
+    }
+
+    try:
+        response = requests.post(token_url, data=token_data, timeout=30)
+        
+        if response.status_code == 200:
+            token_response = response.json()
+
+            # Update credentials with new tokens
+            credentials.accessToken = token_response.get('access_token')
+            credentials.refreshToken = token_response.get('refresh_token')
+            credentials.accessCode = code  # Store the code for reference
+
+            # Set token expiry
+            expires_in = token_response.get('expires_in', 3600)
+            credentials.token_expiry = timezone.now() + timezone.timedelta(seconds=expires_in)
+
+            credentials.save(update_fields=['accessToken', 'refreshToken', 'accessCode', 'token_expiry', 'update_at'])
+
+            return Response({
+                "detail": "OAuth flow completed successfully",
+                "success": True,
+                "accessToken": credentials.accessToken[:20] + "...",  # Partial token for security
+                "refreshToken": credentials.refreshToken[:20] + "...",
+                "expires_in": expires_in,
+                "token_expiry": credentials.token_expiry
+            })
+        else:
+            error_data = response.json() if response.content else {}
+            logger.error(f"Zoho token exchange failed: {response.status_code} - {response.text}")
+            
+            return Response({
+                "detail": f"Token exchange failed: {error_data.get('error_description', 'Unknown error')}",
+                "error_code": error_data.get('error', 'token_exchange_failed')
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
+    except requests.RequestException as e:
+        logger.error(f"Network error during token exchange: {str(e)}")
+        return Response(
+            {"detail": f"Network error: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error during token exchange: {str(e)}")
+        return Response(
+            {"detail": f"Unexpected error: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@extend_schema(
     responses={"200": {"access_token": "string", "refresh_token": "string", "expires_in": "integer"}},
     tags=["Zoho Ops"],
     methods=["POST"]
@@ -163,16 +356,17 @@ def generate_token_view(request, org_id):
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        credentials = ZohoCredentials.objects.get(organization=organization)
-    except ZohoCredentials.DoesNotExist:
+        # Get or create credentials using environment variables
+        credentials = get_zoho_credentials(organization)
+    except ValueError as e:
         return Response(
-            {"detail": "Zoho credentials not found. Please configure credentials first."},
-            status=status.HTTP_404_NOT_FOUND
+            {"detail": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
     if not credentials.accessCode or credentials.accessCode == "Your Access Code":
         return Response(
-            {"detail": "Access code not provided. Please set the access code first."},
+            {"detail": "Access code not provided. Please complete OAuth flow first."},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -233,6 +427,56 @@ def generate_token_view(request, org_id):
             {"detail": f"Unexpected error: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@extend_schema(
+    responses={"200": {"is_connected": "boolean", "client_configured": "boolean", "organization_id": "string"}},
+    tags=["Zoho Ops"],
+    methods=["GET"]
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def zoho_status_view(request, org_id):
+    """Get Zoho integration status for the organization."""
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if environment variables are configured
+    client_configured = bool(
+        os.getenv('ZOHO_CLIENT_ID') and 
+        os.getenv('ZOHO_CLIENT_SECRET') and 
+        os.getenv('ZOHO_REDIRECT_URL')
+    )
+
+    if not client_configured:
+        return Response({
+            "is_connected": False,
+            "client_configured": False,
+            "detail": "Zoho client credentials not configured on server"
+        })
+
+    try:
+        credentials = get_zoho_credentials(organization)
+        is_connected = bool(
+            credentials.accessToken and 
+            credentials.refreshToken and 
+            credentials.is_token_valid()
+        )
+        
+        return Response({
+            "is_connected": is_connected,
+            "client_configured": True,
+            "organization_id": credentials.organisationId or None,
+            "token_expiry": credentials.token_expiry,
+            "created_at": credentials.created_at
+        })
+    except ValueError as e:
+        return Response({
+            "is_connected": False,
+            "client_configured": True,
+            "detail": str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ============================================================================
