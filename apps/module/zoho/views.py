@@ -477,6 +477,29 @@ def oauth_callback_view(request, org_id):
             logger.info(f"Successfully saved credentials: org_id={credentials.organisationId}, has_refresh_token={bool(credentials.refreshToken)}, is_connected={credentials.is_connected}")
             print(f"[SUCCESS] Successfully saved credentials: org_id={credentials.organisationId}, has_refresh_token={bool(credentials.refreshToken)}, is_connected={credentials.is_connected}")
 
+            # CRITICAL: Immediately refresh token to get proper working access token
+            # Initial OAuth access token expires very quickly (few seconds)
+            immediate_refresh_success = False
+            if refresh_token:
+                logger.info("Immediately refreshing token to get proper working access token...")
+                print(f"[CRITICAL] Immediately refreshing token to get proper working access token...")
+                
+                immediate_refresh_success = credentials.refresh_token()
+                
+                if immediate_refresh_success:
+                    logger.info("Immediate token refresh successful - now have working access token")
+                    print(f"[SUCCESS] Immediate token refresh successful - now have working access token")
+                    
+                    # Update final response with refreshed token info
+                    access_token = credentials.accessToken
+                    expires_in = 3600  # Refreshed tokens last 1 hour
+                else:
+                    logger.error("Immediate token refresh failed - access token may not work properly")
+                    print(f"[ERROR] Immediate token refresh failed - access token may not work properly")
+            else:
+                logger.warning("No refresh token available for immediate refresh")
+                print(f"[WARNING] No refresh token available for immediate refresh")
+
             return Response({
                 "detail": "OAuth flow completed successfully",
                 "success": True,
@@ -489,7 +512,10 @@ def oauth_callback_view(request, org_id):
                 "has_refresh_token": bool(credentials.refreshToken),
                 "is_connected": credentials.is_connected,
                 "api_domain": token_response.get('api_domain', 'https://www.zohoapis.in'),
-                "token_type": token_response.get('token_type', 'Bearer')
+                "token_type": token_response.get('token_type', 'Bearer'),
+                "immediate_refresh_performed": bool(refresh_token),
+                "immediate_refresh_success": immediate_refresh_success,
+                "working_token_ready": immediate_refresh_success or not refresh_token
             })
         else:
             # Log the full response for debugging
