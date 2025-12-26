@@ -77,7 +77,7 @@ class ZohoCredentialsAdmin(BaseOrgScopedAdmin):
     list_display = ["organization", "clientId", "token_expiry", "created_at"]
     list_filter = ["created_at", "token_expiry"]
     search_fields = ["organization__name", "clientId"]
-    readonly_fields = ["accessToken", "refreshToken", "token_expiry"]
+
 
 
 @admin.register(ZohoVendor)
