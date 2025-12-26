@@ -111,30 +111,73 @@ def get_zoho_credentials(organization):
 
 
 def make_zoho_api_request(credentials, endpoint, method='GET', data=None):
-    """Make authenticated request to Zoho API."""
-    headers = {
-        'Authorization': f'Zoho-oauthtoken {credentials.accessToken}',
-        'Content-Type': 'application/json'
-    }
+    """Make authenticated request to Zoho API with token refresh support."""
+    
+    def _make_request(access_token):
+        headers = {
+            'Authorization': f'Zoho-oauthtoken {access_token}',
+            'Content-Type': 'application/json'
+        }
 
-    # Handle endpoints that already have query parameters
-    if '?' in endpoint:
-        url = f"https://www.zohoapis.in/books/v3/{endpoint}&organization_id={credentials.organisationId}"
-    else:
-        url = f"https://www.zohoapis.in/books/v3/{endpoint}?organization_id={credentials.organisationId}"
+        # Handle endpoints that already have query parameters
+        if '?' in endpoint:
+            url = f"https://www.zohoapis.in/books/v3/{endpoint}&organization_id={credentials.organisationId}"
+        else:
+            url = f"https://www.zohoapis.in/books/v3/{endpoint}?organization_id={credentials.organisationId}"
+        
+        logger.info(f"Making Zoho API request to: {url}")
+        print(f"[DEBUG] Making Zoho API request to: {url}")
 
-    try:
         if method == 'GET':
-            response = requests.get(url, headers=headers)
+            response = requests.get(url, headers=headers, timeout=30)
         elif method == 'POST':
-            response = requests.post(url, headers=headers, json=data)
+            response = requests.post(url, headers=headers, json=data, timeout=30)
         else:
             raise ValueError(f"Unsupported HTTP method: {method}")
-
+        
+        return response
+    
+    try:
+        # First attempt with current access token
+        response = _make_request(credentials.accessToken)
+        
+        # If token expired, refresh and retry
+        if response.status_code == 401:
+            logger.info("Access token expired, attempting to refresh...")
+            print("[DEBUG] Access token expired, attempting to refresh...")
+            
+            if not credentials.refreshToken:
+                logger.error("No refresh token available for token refresh")
+                raise ValueError("Access token expired and no refresh token available. Please re-authenticate.")
+            
+            # Refresh the token
+            success = credentials.refresh_token()
+            if not success:
+                logger.error("Failed to refresh access token")
+                raise ValueError("Failed to refresh access token. Please re-authenticate.")
+            
+            # Retry with new access token
+            response = _make_request(credentials.accessToken)
+        
         response.raise_for_status()
+        logger.info(f"Zoho API request successful: {response.status_code}")
+        print(f"[DEBUG] Zoho API request successful: {response.status_code}")
+        
         return response.json()
+        
     except requests.RequestException as e:
         logger.error(f"Zoho API request failed: {str(e)}")
+        print(f"[ERROR] Zoho API request failed: {str(e)}")
+        
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                error_data = e.response.json()
+                logger.error(f"Zoho API error response: {error_data}")
+                print(f"[ERROR] Zoho API error response: {error_data}")
+            except:
+                logger.error(f"Zoho API error response (raw): {e.response.text}")
+                print(f"[ERROR] Zoho API error response (raw): {e.response.text}")
+        
         raise
 
 
@@ -727,9 +770,24 @@ def chart_of_accounts_sync_view(request, org_id):
 
     try:
         credentials = get_zoho_credentials(organization)
+        logger.info(f"Starting chart of accounts sync for org: {organization.name} (ID: {credentials.organisationId})")
+        print(f"[DEBUG] Starting chart of accounts sync for org: {organization.name} (ID: {credentials.organisationId})")
+        
+        # Check if credentials are connected
+        if not credentials.is_connected:
+            logger.error("Zoho credentials not connected")
+            return Response(
+                {"detail": "Zoho credentials not connected. Please authenticate first."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         zoho_data = make_zoho_api_request(credentials, "chartofaccounts")
+        logger.info(f"Retrieved {len(zoho_data.get('chartofaccounts', []))} chart of accounts from Zoho")
+        print(f"[DEBUG] Retrieved {len(zoho_data.get('chartofaccounts', []))} chart of accounts from Zoho")
 
         synced_count = 0
+        updated_count = 0
+        
         for account in zoho_data.get('chartofaccounts', []):
             chart_account, created = ZohoChartOfAccount.objects.update_or_create(
                 organization=organization,
@@ -740,12 +798,30 @@ def chart_of_accounts_sync_view(request, org_id):
             )
             if created:
                 synced_count += 1
+            else:
+                updated_count += 1
+
+        logger.info(f"Chart of accounts sync completed: {synced_count} new, {updated_count} updated")
+        print(f"[DEBUG] Chart of accounts sync completed: {synced_count} new, {updated_count} updated")
 
         return Response({
-            "detail": f"Successfully synced {synced_count} chart of accounts",
-            "synced_count": synced_count
+            "detail": f"Successfully synced chart of accounts: {synced_count} new, {updated_count} updated",
+            "synced_count": synced_count,
+            "updated_count": updated_count,
+            "total_accounts": len(zoho_data.get('chartofaccounts', []))
         })
+        
+    except ValueError as e:
+        # Handle authentication errors specifically
+        logger.error(f"Authentication error in chart of accounts sync: {str(e)}")
+        print(f"[ERROR] Authentication error in chart of accounts sync: {str(e)}")
+        return Response(
+            {"detail": f"Authentication error: {str(e)}"},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
     except Exception as e:
+        logger.error(f"Chart of accounts sync failed: {str(e)}")
+        print(f"[ERROR] Chart of accounts sync failed: {str(e)}")
         return Response(
             {"detail": f"Sync failed: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
