@@ -164,7 +164,7 @@ def zoho_credentials_view(request, org_id):
         credentials = ZohoCredentials.objects.get(organization=organization)
     except ZohoCredentials.DoesNotExist:
         if request.method == 'GET':
-            return Response({"detail": "Zoho credentials not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Zoho credentials not found"}, status=status.HTTP_200_OK)
         # Create new credentials for PUT/PATCH
         credentials = None
 
