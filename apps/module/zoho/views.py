@@ -289,7 +289,7 @@ def initiate_oauth_view(request, org_id):
     auth_params = {
         'response_type': 'code',
         'client_id': credentials.clientId,
-        'scope': 'ZohoBooks.contacts.ALL,ZohoBooks.settings.ALL,ZohoBooks.invoices.ALL,ZohoBooks.bills.ALL,ZohoBooks.expenses.ALL,ZohoBooks.banking.ALL',
+        'scope': 'ZohoBooks.contacts.ALL,ZohoBooks.settings.ALL,ZohoBooks.estimates.ALL,ZohoBooks.invoices.ALL,ZohoBooks.customerpayments.ALL,ZohoBooks.creditnotes.ALL,ZohoBooks.projects.ALL,ZohoBooks.expenses.ALL,ZohoBooks.salesorders.ALL,ZohoBooks.purchaseorders.ALL,ZohoBooks.bills.ALL,ZohoBooks.debitnotes.ALL,ZohoBooks.vendorpayments.ALL,ZohoBooks.banking.ALL,ZohoBooks.accountants.ALL',
         'redirect_uri': credentials.redirectUrl,
         'state': state,
         'access_type': 'offline',  # Critical for refresh token
