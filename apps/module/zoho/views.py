@@ -220,10 +220,11 @@ def initiate_oauth_view(request, org_id):
     auth_params = {
         'response_type': 'code',
         'client_id': credentials.clientId,
-        'scope': 'ZohoBooks.fullaccess.all',
+        'scope': 'ZohoBooks.contacts.ALL,ZohoBooks.settings.ALL,ZohoBooks.invoices.ALL,ZohoBooks.bills.ALL,ZohoBooks.expenses.ALL,ZohoBooks.banking.ALL',
         'redirect_uri': credentials.redirectUrl,
         'state': state,
-        'access_type': 'offline'  # To get refresh token
+        'access_type': 'offline',  # Critical for refresh token
+        'prompt': 'consent'  # Force consent screen to ensure refresh token
     }
     
     authorization_url = 'https://accounts.zoho.in/oauth/v2/auth?' + urllib.parse.urlencode(auth_params)
@@ -313,8 +314,17 @@ def oauth_callback_view(request, org_id):
             timeout=30
         )
         
+        logger.info(f"Token request URL: {token_url}")
+        print(f"[DEBUG] Token request URL: {token_url}")
+        logger.info(f"Token request data keys: {list(token_data.keys())}")
+        print(f"[DEBUG] Token request data keys: {list(token_data.keys())}")
+        
         if response.status_code == 200:
             token_response = response.json()
+            
+            # Log the complete token response for debugging (without sensitive data)
+            logger.info(f"Complete Zoho token response keys: {list(token_response.keys())}")
+            print(f"[DEBUG] Complete Zoho token response keys: {list(token_response.keys())}")
             
             # Validate that we got the required tokens
             access_token = token_response.get('access_token')
@@ -323,10 +333,19 @@ def oauth_callback_view(request, org_id):
             logger.info(f"Token response: access_token={'***' if access_token else 'None'}, refresh_token={'***' if refresh_token else 'None'}")
             print(f"[DEBUG] Token response: access_token={'***' if access_token else 'None'}, refresh_token={'***' if refresh_token else 'None'}")
             
+            # Log additional token info
+            expires_in = token_response.get('expires_in', 3600)
+            token_type = token_response.get('token_type', 'unknown')
+            api_domain = token_response.get('api_domain', 'unknown')
+            logger.info(f"Token details: expires_in={expires_in}, token_type={token_type}, api_domain={api_domain}")
+            print(f"[DEBUG] Token details: expires_in={expires_in}, token_type={token_type}, api_domain={api_domain}")
+            
             # Warn if refresh token is missing (this can happen in some OAuth flows)
             if not refresh_token:
                 logger.warning("Refresh token not received from Zoho - this may cause issues when access token expires")
                 print(f"[WARNING] Refresh token not received from Zoho - this may cause issues when access token expires")
+                logger.warning("Possible solutions: 1) Check if Zoho app is configured as 'Server-based Application' 2) Ensure prompt=consent is working 3) Try re-authorizing")
+                print(f"[WARNING] Possible solutions: 1) Check Zoho app config 2) Ensure prompt=consent 3) Try re-auth")
             
             if not access_token:
                 return Response({
@@ -346,10 +365,15 @@ def oauth_callback_view(request, org_id):
             # Set token expiry
             expires_in = token_response.get('expires_in', 3600)
             credentials.token_expiry = timezone.now() + timezone.timedelta(seconds=expires_in)
+            
+            logger.info(f"Token expiry set to: {credentials.token_expiry} (expires in {expires_in} seconds)")
+            print(f"[DEBUG] Token expiry set to: {credentials.token_expiry} (expires in {expires_in} seconds)")
 
             # Get organization ID from Zoho after getting access token
             org_id_set = False
             if not credentials.organisationId:
+                logger.info("Attempting to fetch organization ID from Zoho")
+                print(f"[DEBUG] Attempting to fetch organization ID from Zoho")
                 try:
                     org_response = requests.get(
                         "https://www.zohoapis.in/books/v3/organizations",
@@ -359,6 +383,8 @@ def oauth_callback_view(request, org_id):
                     if org_response.status_code == 200:
                         org_data = org_response.json()
                         organizations = org_data.get('organizations')
+                        logger.info(f"Received {len(organizations) if organizations else 0} organizations from Zoho")
+                        print(f"[DEBUG] Received {len(organizations) if organizations else 0} organizations from Zoho")
                         if organizations and len(organizations) > 0:
                             credentials.organisationId = organizations[0].get('organization_id', '')
                             org_id_set = True
@@ -392,7 +418,9 @@ def oauth_callback_view(request, org_id):
                 "organization_id": credentials.organisationId,
                 "org_id_fetched": org_id_set,
                 "has_refresh_token": bool(credentials.refreshToken),
-                "is_connected": credentials.is_connected
+                "is_connected": credentials.is_connected,
+                "api_domain": token_response.get('api_domain', 'https://www.zohoapis.in'),
+                "token_type": token_response.get('token_type', 'Bearer')
             })
         else:
             # Log the full response for debugging
