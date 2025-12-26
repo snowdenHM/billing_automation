@@ -164,7 +164,7 @@ def zoho_credentials_view(request, org_id):
         credentials = ZohoCredentials.objects.get(organization=organization)
     except ZohoCredentials.DoesNotExist:
         if request.method == 'GET':
-            return Response({"detail": "Zoho credentials not found"}, status=status.HTTP_200_OK)
+            return Response({}, status=status.HTTP_200_OK)
         # Create new credentials for PUT/PATCH
         credentials = None
 
@@ -309,7 +309,25 @@ def oauth_callback_view(request, org_id):
             expires_in = token_response.get('expires_in', 3600)
             credentials.token_expiry = timezone.now() + timezone.timedelta(seconds=expires_in)
 
-            credentials.save(update_fields=['accessToken', 'refreshToken', 'accessCode', 'token_expiry', 'update_at'])
+            # Get organization ID from Zoho after getting access token
+            try:
+                org_response = requests.get(
+                    "https://www.zohoapis.in/books/v3/organizations",
+                    headers={'Authorization': f'Zoho-oauthtoken {credentials.accessToken}'},
+                    timeout=30
+                )
+                if org_response.status_code == 200:
+                    org_data = org_response.json()
+                    organizations = org_data.get('organizations', [])
+                    if organizations:
+                        # Use the first organization (in most cases there's only one)
+                        credentials.organisationId = organizations[0]['organization_id']
+                        logger.info(f"Set organization ID: {credentials.organisationId}")
+            except Exception as org_error:
+                logger.warning(f"Could not fetch organization ID: {str(org_error)}")
+                # Continue without organization ID - can be set later
+
+            credentials.save(update_fields=['accessToken', 'refreshToken', 'accessCode', 'token_expiry', 'organisationId', 'update_at'])
 
             return Response({
                 "detail": "OAuth flow completed successfully",
@@ -317,7 +335,8 @@ def oauth_callback_view(request, org_id):
                 "accessToken": credentials.accessToken[:20] + "...",  # Partial token for security
                 "refreshToken": credentials.refreshToken[:20] + "...",
                 "expires_in": expires_in,
-                "token_expiry": credentials.token_expiry
+                "token_expiry": credentials.token_expiry,
+                "organization_id": credentials.organisationId
             })
         else:
             error_data = response.json() if response.content else {}
