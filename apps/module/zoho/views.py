@@ -111,7 +111,24 @@ def get_zoho_credentials(organization):
 
 
 def make_zoho_api_request(credentials, endpoint, method='GET', data=None):
-    """Make authenticated request to Zoho API with token refresh support."""
+    """Make authenticated request to Zoho API with proactive token refresh support."""
+    
+    # Proactively check if token is about to expire (within 5 minutes)
+    if credentials.token_expiry and timezone.now() >= (credentials.token_expiry - timezone.timedelta(minutes=5)):
+        logger.info("Access token expiring soon, proactively refreshing...")
+        print("[DEBUG] Access token expiring soon, proactively refreshing...")
+        
+        if credentials.refreshToken:
+            success = credentials.refresh_token()
+            if success:
+                logger.info("Proactive token refresh successful")
+                print("[DEBUG] Proactive token refresh successful")
+            else:
+                logger.warning("Proactive token refresh failed, will try with current token")
+                print("[WARNING] Proactive token refresh failed, will try with current token")
+        else:
+            logger.warning("No refresh token available for proactive refresh")
+            print("[WARNING] No refresh token available for proactive refresh")
     
     def _make_request(access_token):
         headers = {
@@ -127,6 +144,12 @@ def make_zoho_api_request(credentials, endpoint, method='GET', data=None):
         
         logger.info(f"Making Zoho API request to: {url}")
         print(f"[DEBUG] Making Zoho API request to: {url}")
+        
+        # Show token info for debugging
+        token_preview = access_token[:20] + "..." if len(access_token) > 20 else access_token
+        print(f"[DEBUG] Using access token: {token_preview}")
+        print(f"[DEBUG] Token expiry: {credentials.token_expiry}")
+        print(f"[DEBUG] Current time: {timezone.now()}")
 
         if method == 'GET':
             response = requests.get(url, headers=headers, timeout=30)
@@ -143,19 +166,22 @@ def make_zoho_api_request(credentials, endpoint, method='GET', data=None):
         
         # If token expired, refresh and retry
         if response.status_code == 401:
-            logger.info("Access token expired, attempting to refresh...")
-            print("[DEBUG] Access token expired, attempting to refresh...")
+            logger.info("Received 401 error, attempting token refresh...")
+            print("[DEBUG] Received 401 error, attempting token refresh...")
             
             if not credentials.refreshToken:
                 logger.error("No refresh token available for token refresh")
+                print("[ERROR] No refresh token available for token refresh")
                 raise ValueError("Access token expired and no refresh token available. Please re-authenticate.")
             
             # Refresh the token
             success = credentials.refresh_token()
             if not success:
                 logger.error("Failed to refresh access token")
+                print("[ERROR] Failed to refresh access token")
                 raise ValueError("Failed to refresh access token. Please re-authenticate.")
             
+            print("[DEBUG] Token refreshed, retrying API request...")
             # Retry with new access token
             response = _make_request(credentials.accessToken)
         

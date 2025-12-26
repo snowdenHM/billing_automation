@@ -82,38 +82,83 @@ class ZohoCredentials(BaseTeamModel):
     def refresh_token(self):
         """Refresh the access token using the refresh token"""
         if not self.refreshToken:
+            print("[ERROR] No refresh token available")
             return False
+        
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        print(f"[DEBUG] Starting token refresh for organization ID: {self.organisationId}")
+        logger.info(f"Starting token refresh for organization ID: {self.organisationId}")
 
+        # Build refresh token URL
         url = (
             "https://accounts.zoho.in/oauth/v2/token"
-            f"?refresh_token={self.refreshToken}&client_id={self.clientId}"
-            f"&client_secret={self.clientSecret}&grant_type=refresh_token"
+            f"?refresh_token={self.refreshToken}"
+            f"&client_id={self.clientId}"
+            f"&client_secret={self.clientSecret}"
+            f"&grant_type=refresh_token"
         )
+        
+        print(f"[DEBUG] Refresh token URL: {url[:80]}...[MASKED]")
+        logger.info(f"Refresh token request initiated")
 
         try:
             import requests
             response = requests.post(url, timeout=30)
+            
+            print(f"[DEBUG] Refresh token response status: {response.status_code}")
+            logger.info(f"Refresh token response status: {response.status_code}")
 
             if response.status_code == 200:
                 data = response.json()
+                print(f"[DEBUG] Refresh token response keys: {list(data.keys())}")
+                logger.info(f"Refresh token response received: {list(data.keys())}")
+                
                 if "access_token" in data:
+                    old_token = self.accessToken[:20] + "..." if self.accessToken else "None"
                     self.accessToken = data["access_token"]
+                    new_token = self.accessToken[:20] + "..."
+                    
+                    print(f"[DEBUG] Access token updated: {old_token} -> {new_token}")
+                    logger.info(f"Access token refreshed successfully")
+                    
                     # Set expiry to 50 minutes from now (Zoho tokens last 1 hour)
                     self.token_expiry = timezone.now() + timezone.timedelta(minutes=50)
+                    
                     # Update connection status
                     self.is_connected = bool(self.accessToken and self.organisationId)
+                    
+                    print(f"[DEBUG] Token expiry set to: {self.token_expiry}")
+                    print(f"[DEBUG] Connection status: {self.is_connected}")
+                    
                     self.save(update_fields=["accessToken", "token_expiry", "is_connected", "update_at"])
+                    
+                    print(f"[SUCCESS] Token refresh completed successfully")
+                    logger.info(f"Token refresh completed successfully")
                     return True
-            # Log the error for debugging
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to refresh Zoho token: {response.status_code} - {response.text}")
+                else:
+                    print(f"[ERROR] No access_token in response: {data}")
+                    logger.error(f"No access_token in refresh response: {data}")
+            else:
+                error_text = response.text
+                print(f"[ERROR] Refresh token failed: {response.status_code} - {error_text}")
+                logger.error(f"Failed to refresh Zoho token: {response.status_code} - {error_text}")
+                
+                # Try to parse error response
+                try:
+                    error_data = response.json()
+                    print(f"[ERROR] Zoho error details: {error_data}")
+                    logger.error(f"Zoho refresh error details: {error_data}")
+                except:
+                    pass
+                    
         except Exception as e:
-            # Log the exception for debugging
-            import logging
-            logger = logging.getLogger(__name__)
+            print(f"[EXCEPTION] Error refreshing Zoho token: {str(e)}")
             logger.exception(f"Exception refreshing Zoho token: {str(e)}")
 
+        print(f"[FAILED] Token refresh failed")
+        logger.error(f"Token refresh failed")
         return False
 
 
