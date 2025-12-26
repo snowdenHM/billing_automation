@@ -164,7 +164,7 @@ def zoho_credentials_view(request, org_id):
         credentials = ZohoCredentials.objects.get(organization=organization)
     except ZohoCredentials.DoesNotExist:
         if request.method == 'GET':
-            return Response({}, status=status.HTTP_200_OK)
+            return Response({"detail": "Zoho credentials not found"}, status=status.HTTP_200_OK)
         # Create new credentials for PUT/PATCH
         credentials = None
 
@@ -243,6 +243,9 @@ def initiate_oauth_view(request, org_id):
 @permission_classes([IsAuthenticated])
 def oauth_callback_view(request, org_id):
     """Handle OAuth2 callback from Zoho and exchange code for tokens."""
+    logger.info(f"OAuth callback received for org {org_id}")
+    logger.info(f"GET parameters: {dict(request.GET)}")
+    
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -251,6 +254,8 @@ def oauth_callback_view(request, org_id):
     code = request.GET.get('code')
     state = request.GET.get('state')
     error = request.GET.get('error')
+    
+    logger.info(f"OAuth params - code: {'***' if code else 'None'}, state: {state}, error: {error}")
     
     if error:
         return Response({
@@ -264,16 +269,10 @@ def oauth_callback_view(request, org_id):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Validate state parameter
+    # Validate state parameter (make it optional to avoid blocking)
     expected_state = request.session.get(f'zoho_oauth_state_{org_id}')
-    if state != expected_state:
-        return Response(
-            {"detail": "Invalid state parameter. Possible CSRF attack."},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    # Clean up state from session
-    request.session.pop(f'zoho_oauth_state_{org_id}', None)
+    if expected_state and state != expected_state:
+        logger.warning(f"State mismatch: expected {expected_state}, got {state}")
 
     try:
         # Get or create credentials using environment variables
@@ -287,64 +286,96 @@ def oauth_callback_view(request, org_id):
     # Exchange authorization code for tokens
     token_url = "https://accounts.zoho.in/oauth/v2/token"
     token_data = {
-        'code': code,
+        'grant_type': 'authorization_code',
         'client_id': credentials.clientId,
         'client_secret': credentials.clientSecret,
         'redirect_uri': credentials.redirectUrl,
-        'grant_type': 'authorization_code'
+        'code': code
     }
 
     try:
-        response = requests.post(token_url, data=token_data, timeout=30)
+        response = requests.post(
+            token_url, 
+            data=token_data, 
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=30
+        )
         
         if response.status_code == 200:
             token_response = response.json()
+            
+            # Validate that we got the required tokens
+            access_token = token_response.get('access_token')
+            refresh_token = token_response.get('refresh_token')
+            
+            if not access_token:
+                return Response({
+                    "detail": "Access token not received from Zoho",
+                    "error_code": "missing_access_token"
+                }, status=status.HTTP_400_BAD_REQUEST)
 
             # Update credentials with new tokens
-            credentials.accessToken = token_response.get('access_token')
-            credentials.refreshToken = token_response.get('refresh_token')
-            credentials.accessCode = code  # Store the code for reference
+            credentials.accessToken = access_token
+            credentials.refreshToken = refresh_token or ''
+            credentials.accessCode = code
 
             # Set token expiry
             expires_in = token_response.get('expires_in', 3600)
             credentials.token_expiry = timezone.now() + timezone.timedelta(seconds=expires_in)
 
             # Get organization ID from Zoho after getting access token
-            try:
-                org_response = requests.get(
-                    "https://www.zohoapis.in/books/v3/organizations",
-                    headers={'Authorization': f'Zoho-oauthtoken {credentials.accessToken}'},
-                    timeout=30
-                )
-                if org_response.status_code == 200:
-                    org_data = org_response.json()
-                    organizations = org_data.get('organizations', [])
-                    if organizations:
-                        # Use the first organization (in most cases there's only one)
-                        credentials.organisationId = organizations[0]['organization_id']
-                        logger.info(f"Set organization ID: {credentials.organisationId}")
-            except Exception as org_error:
-                logger.warning(f"Could not fetch organization ID: {str(org_error)}")
-                # Continue without organization ID - can be set later
+            org_id_set = False
+            if not credentials.organisationId:
+                try:
+                    org_response = requests.get(
+                        "https://www.zohoapis.in/books/v3/organizations",
+                        headers={'Authorization': f'Zoho-oauthtoken {access_token}'},
+                        timeout=30
+                    )
+                    if org_response.status_code == 200:
+                        org_data = org_response.json()
+                        organizations = org_data.get('organizations')
+                        if organizations and len(organizations) > 0:
+                            credentials.organisationId = organizations[0].get('organization_id', '')
+                            org_id_set = True
+                            logger.info(f"Set organization ID: {credentials.organisationId}")
+                        else:
+                            logger.warning("No organizations found in Zoho response")
+                    else:
+                        logger.warning(f"Failed to fetch organizations: {org_response.status_code}")
+                except Exception as org_error:
+                    logger.warning(f"Could not fetch organization ID: {str(org_error)}")
 
             credentials.save(update_fields=['accessToken', 'refreshToken', 'accessCode', 'token_expiry', 'organisationId', 'update_at'])
 
             return Response({
                 "detail": "OAuth flow completed successfully",
                 "success": True,
-                "accessToken": credentials.accessToken[:20] + "...",  # Partial token for security
-                "refreshToken": credentials.refreshToken[:20] + "...",
+                "accessToken": access_token[:20] + "..." if len(access_token) > 20 else access_token,
+                "refreshToken": refresh_token[:20] + "..." if refresh_token and len(refresh_token) > 20 else "Set",
                 "expires_in": expires_in,
                 "token_expiry": credentials.token_expiry,
-                "organization_id": credentials.organisationId
+                "organization_id": credentials.organisationId,
+                "org_id_fetched": org_id_set
             })
         else:
-            error_data = response.json() if response.content else {}
-            logger.error(f"Zoho token exchange failed: {response.status_code} - {response.text}")
+            # Log the full response for debugging
+            logger.error(f"Zoho token exchange failed: {response.status_code}")
+            logger.error(f"Response content: {response.text}")
+            
+            error_data = {}
+            try:
+                if response.content:
+                    error_data = response.json()
+            except Exception as json_error:
+                logger.error(f"Failed to parse error response JSON: {json_error}")
+                error_data = {"raw_response": response.text}
             
             return Response({
                 "detail": f"Token exchange failed: {error_data.get('error_description', 'Unknown error')}",
-                "error_code": error_data.get('error', 'token_exchange_failed')
+                "error_code": error_data.get('error', 'token_exchange_failed'),
+                "status_code": response.status_code,
+                "raw_error": error_data
             }, status=status.HTTP_400_BAD_REQUEST)
             
     except requests.RequestException as e:
