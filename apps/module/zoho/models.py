@@ -62,6 +62,7 @@ class ZohoCredentials(BaseTeamModel):
     accessToken = models.CharField(max_length=200, null=True, blank=True)
     refreshToken = models.CharField(max_length=200, null=True, blank=True)
     token_expiry = models.DateTimeField(null=True, blank=True)
+    is_connected = models.BooleanField(default=False, help_text="Whether the Zoho Books integration is fully connected and functional")
     created_at = models.DateTimeField(auto_now_add=True)
     update_at = models.DateTimeField(auto_now=True)
 
@@ -99,7 +100,9 @@ class ZohoCredentials(BaseTeamModel):
                     self.accessToken = data["access_token"]
                     # Set expiry to 50 minutes from now (Zoho tokens last 1 hour)
                     self.token_expiry = timezone.now() + timezone.timedelta(minutes=50)
-                    self.save(update_fields=["accessToken", "token_expiry", "update_at"])
+                    # Update connection status
+                    self.is_connected = bool(self.accessToken and self.organisationId)
+                    self.save(update_fields=["accessToken", "token_expiry", "is_connected", "update_at"])
                     return True
             # Log the error for debugging
             import logging

@@ -101,7 +101,8 @@ def get_zoho_credentials(organization):
                 # Clear invalid tokens to force re-authentication
                 credentials.accessToken = None
                 credentials.refreshToken = None
-                credentials.save(update_fields=['accessToken', 'refreshToken'])
+                credentials.is_connected = False
+                credentials.save(update_fields=['accessToken', 'refreshToken', 'is_connected'])
         
         return credentials
     except Exception as e:
@@ -244,7 +245,9 @@ def initiate_oauth_view(request, org_id):
 def oauth_callback_view(request, org_id):
     """Handle OAuth2 callback from Zoho and exchange code for tokens."""
     logger.info(f"OAuth callback received for org {org_id}")
+    print(f"[DEBUG] OAuth callback received for org {org_id}")
     logger.info(f"GET parameters: {dict(request.GET)}")
+    print(f"[DEBUG] GET parameters: {dict(request.GET)}")
     
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
@@ -256,6 +259,7 @@ def oauth_callback_view(request, org_id):
     error = request.GET.get('error')
     
     logger.info(f"OAuth params - code: {'***' if code else 'None'}, state: {state}, error: {error}")
+    print(f"[DEBUG] OAuth params - code: {'***' if code else 'None'}, state: {state}, error: {error}")
     
     if error:
         return Response({
@@ -269,10 +273,18 @@ def oauth_callback_view(request, org_id):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Validate state parameter (make it optional to avoid blocking)
+    # Validate state parameter (make it optional to avoid blocking legitimate requests)
     expected_state = request.session.get(f'zoho_oauth_state_{org_id}')
     if expected_state and state != expected_state:
         logger.warning(f"State mismatch: expected {expected_state}, got {state}")
+        print(f"[WARNING] State mismatch: expected {expected_state}, got {state}")
+        logger.warning("Continuing OAuth flow despite state mismatch (this may be due to multiple browser tabs or session issues)")
+        print(f"[WARNING] Continuing OAuth flow despite state mismatch")
+        # Don't block the OAuth flow - just log the warning
+    
+    # Clean up state from session if it exists
+    if expected_state:
+        request.session.pop(f'zoho_oauth_state_{org_id}', None)
 
     try:
         # Get or create credentials using environment variables
@@ -308,16 +320,28 @@ def oauth_callback_view(request, org_id):
             access_token = token_response.get('access_token')
             refresh_token = token_response.get('refresh_token')
             
+            logger.info(f"Token response: access_token={'***' if access_token else 'None'}, refresh_token={'***' if refresh_token else 'None'}")
+            print(f"[DEBUG] Token response: access_token={'***' if access_token else 'None'}, refresh_token={'***' if refresh_token else 'None'}")
+            
+            # Warn if refresh token is missing (this can happen in some OAuth flows)
+            if not refresh_token:
+                logger.warning("Refresh token not received from Zoho - this may cause issues when access token expires")
+                print(f"[WARNING] Refresh token not received from Zoho - this may cause issues when access token expires")
+            
             if not access_token:
                 return Response({
                     "detail": "Access token not received from Zoho",
-                    "error_code": "missing_access_token"
+                    "error_code": "missing_access_token",
+                    "raw_response": token_response
                 }, status=status.HTTP_400_BAD_REQUEST)
 
             # Update credentials with new tokens
             credentials.accessToken = access_token
-            credentials.refreshToken = refresh_token or ''
+            credentials.refreshToken = refresh_token if refresh_token else None  # Don't save empty string
             credentials.accessCode = code
+            
+            logger.info(f"Saving tokens: access_token length={len(access_token)}, refresh_token={'saved' if refresh_token else 'not_received'}")
+            print(f"[DEBUG] Saving tokens: access_token length={len(access_token)}, refresh_token={'saved' if refresh_token else 'not_received'}")
 
             # Set token expiry
             expires_in = token_response.get('expires_in', 3600)
@@ -339,29 +363,43 @@ def oauth_callback_view(request, org_id):
                             credentials.organisationId = organizations[0].get('organization_id', '')
                             org_id_set = True
                             logger.info(f"Set organization ID: {credentials.organisationId}")
+                            print(f"[DEBUG] Set organization ID: {credentials.organisationId}")
                         else:
                             logger.warning("No organizations found in Zoho response")
+                            print(f"[WARNING] No organizations found in Zoho response")
                     else:
                         logger.warning(f"Failed to fetch organizations: {org_response.status_code}")
+                        print(f"[WARNING] Failed to fetch organizations: {org_response.status_code}")
                 except Exception as org_error:
                     logger.warning(f"Could not fetch organization ID: {str(org_error)}")
+                    print(f"[WARNING] Could not fetch organization ID: {str(org_error)}")
 
-            credentials.save(update_fields=['accessToken', 'refreshToken', 'accessCode', 'token_expiry', 'organisationId', 'update_at'])
+            # Update connection status
+            credentials.is_connected = bool(access_token and credentials.organisationId)
+            
+            credentials.save(update_fields=['accessToken', 'refreshToken', 'accessCode', 'token_expiry', 'organisationId', 'is_connected', 'update_at'])
+            
+            logger.info(f"Successfully saved credentials: org_id={credentials.organisationId}, has_refresh_token={bool(credentials.refreshToken)}, is_connected={credentials.is_connected}")
+            print(f"[SUCCESS] Successfully saved credentials: org_id={credentials.organisationId}, has_refresh_token={bool(credentials.refreshToken)}, is_connected={credentials.is_connected}")
 
             return Response({
                 "detail": "OAuth flow completed successfully",
                 "success": True,
                 "accessToken": access_token[:20] + "..." if len(access_token) > 20 else access_token,
-                "refreshToken": refresh_token[:20] + "..." if refresh_token and len(refresh_token) > 20 else "Set",
+                "refreshToken": refresh_token[:20] + "..." if refresh_token and len(refresh_token) > 20 else ("Set" if refresh_token else "Not received"),
                 "expires_in": expires_in,
                 "token_expiry": credentials.token_expiry,
                 "organization_id": credentials.organisationId,
-                "org_id_fetched": org_id_set
+                "org_id_fetched": org_id_set,
+                "has_refresh_token": bool(credentials.refreshToken),
+                "is_connected": credentials.is_connected
             })
         else:
             # Log the full response for debugging
             logger.error(f"Zoho token exchange failed: {response.status_code}")
+            print(f"[ERROR] Zoho token exchange failed: {response.status_code}")
             logger.error(f"Response content: {response.text}")
+            print(f"[ERROR] Response content: {response.text}")
             
             error_data = {}
             try:
@@ -380,12 +418,14 @@ def oauth_callback_view(request, org_id):
             
     except requests.RequestException as e:
         logger.error(f"Network error during token exchange: {str(e)}")
+        print(f"[ERROR] Network error during token exchange: {str(e)}")
         return Response(
             {"detail": f"Network error: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
     except Exception as e:
         logger.error(f"Unexpected error during token exchange: {str(e)}")
+        print(f"[ERROR] Unexpected error during token exchange: {str(e)}")
         return Response(
             {"detail": f"Unexpected error: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -511,8 +551,15 @@ def zoho_status_view(request, org_id):
         is_connected = bool(
             credentials.accessToken and 
             credentials.refreshToken and 
-            credentials.is_token_valid()
+            credentials.is_token_valid() and
+            hasattr(credentials, 'is_connected') and credentials.is_connected
         )
+        
+        # Update is_connected field if it doesn't match current token status
+        expected_connected = bool(credentials.accessToken and credentials.organisationId and credentials.is_token_valid())
+        if hasattr(credentials, 'is_connected') and credentials.is_connected != expected_connected:
+            credentials.is_connected = expected_connected
+            credentials.save(update_fields=['is_connected'])
         
         return Response({
             "is_connected": is_connected,
