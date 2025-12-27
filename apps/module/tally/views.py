@@ -167,48 +167,55 @@ def create_or_update_tally_config(request, org_id):
         # Check if config already exists for this organization
         existing_config = TallyConfig.objects.filter(organization=organization).first()
         
-        # Prepare data
-        config_data = dict(request.data)
-        if 'tally_product_allow_sync' not in config_data:
-            config_data['tally_product_allow_sync'] = False
-            
-        context = {'request': request, 'organization': organization}
+        # Get tally_product_allow_sync value
+        tally_product_allow_sync = request.data.get('tally_product_allow_sync', False)
+        print(f"tally_product_allow_sync: {tally_product_allow_sync}")
         
         if existing_config:
             print(f"Updating existing TallyConfig: {existing_config.id}")
-            serializer = TallyConfigSerializer(existing_config, data=config_data, context=context)
+            tally_config = existing_config
         else:
             print("Creating new TallyConfig")
-            serializer = TallyConfigSerializer(data=config_data, context=context)
+            tally_config = TallyConfig.objects.create(
+                organization=organization,
+                tally_product_allow_sync=tally_product_allow_sync
+            )
+            
+        # Set tally_product_allow_sync field
+        tally_config.tally_product_allow_sync = tally_product_allow_sync
+        tally_config.save()
         
-        if serializer.is_valid():
-            if existing_config:
-                # Update existing config
-                tally_config = serializer.save()
-                message = 'Tally configuration updated successfully'
-                print(f"Updated TallyConfig: {tally_config.id}")
-            else:
-                # Create new config
-                tally_config = serializer.save(organization=organization)
-                message = 'Tally configuration created successfully'
-                print(f"Created Tally config: {tally_config.id}")
-            
-            # Refresh from database with related fields
-            tally_config.refresh_from_db()
-            response_serializer = TallyConfigSerializer(tally_config, context=context)
-            
-            return Response({
-                'success': True,
-                'message': message,
-                'data': response_serializer.data
-            }, status=status.HTTP_201_CREATED if not existing_config else status.HTTP_200_OK)
-        else:
-            print(f"Serializer validation errors: {serializer.errors}")
-            return Response({
-                'success': False,
-                'message': 'Validation failed',
-                'errors': serializer.errors
-            }, status=status.HTTP_400_BAD_REQUEST)
+        # Set parent ledgers directly
+        for field in parent_fields:
+            if field in request.data:
+                parent_ids = request.data[field] or []
+                print(f"Setting {field} with IDs: {parent_ids}")
+                
+                # Get parent ledger objects
+                parent_ledgers = ParentLedger.objects.filter(
+                    id__in=parent_ids,
+                    organization=organization
+                )
+                
+                # Set the many-to-many relationship
+                getattr(tally_config, field).set(parent_ledgers)
+                print(f"Set {field} with {parent_ledgers.count()} parent ledgers")
+        
+        # Refresh from database
+        tally_config.refresh_from_db()
+        
+        # Prepare response using serializer
+        context = {'request': request, 'organization': organization}
+        response_serializer = TallyConfigSerializer(tally_config, context=context)
+        
+        message = 'Tally configuration updated successfully' if existing_config else 'Tally configuration created successfully'
+        print(f"Success: {message}")
+        
+        return Response({
+            'success': True,
+            'message': message,
+            'data': response_serializer.data
+        }, status=status.HTTP_201_CREATED if not existing_config else status.HTTP_200_OK)
             
     except Organization.DoesNotExist:
         return Response({
@@ -217,6 +224,8 @@ def create_or_update_tally_config(request, org_id):
         }, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         print(f"Error in create_or_update_tally_config: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return Response({
             'success': False,
             'message': f'Error saving tally configuration: {str(e)}'
