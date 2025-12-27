@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db import models
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -37,18 +38,15 @@ User = get_user_model()
 @permission_classes([IsAuthenticated])
 def organization_list_view(request):
     """
-    List organizations accessible to the authenticated user.
+    List organizations where the authenticated user has an active OrgMembership.
     """
-    # Users can only see organizations they belong to
-    if request.user.is_staff:
-        organizations = Organization.objects.all().select_related("owner", "created_by")
-    else:
-        user_org_ids = request.user.memberships.filter(
-            is_active=True
-        ).values_list('organization_id', flat=True)
-        organizations = Organization.objects.filter(
-            id__in=user_org_ids
-        ).select_related("owner", "created_by")
+    # Get organizations where user has active membership through OrgMembership model
+    user_org_ids = request.user.memberships.filter(
+        is_active=True
+    ).values_list('organization_id', flat=True)
+    organizations = Organization.objects.filter(
+        id__in=user_org_ids
+    ).select_related("owner", "created_by")
 
     serializer = OrganizationSerializer(organizations, many=True, context={"request": request})
     return Response({"data": serializer.data})
