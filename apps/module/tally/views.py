@@ -211,11 +211,6 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ParentLedgerSerializer
     permission_classes = [OrganizationAPIKeyOrBearerToken]
     
-    def get_queryset(self):
-        """Filter parent ledgers by organization"""
-        organization = self.get_organization()
-        return ParentLedger.objects.filter(organization=organization).order_by('parent')
-    
     def get_organization(self):
         """Get organization from URL UUID parameter or API key"""
         # Extract organization UUID from URL
@@ -234,6 +229,59 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
                 return membership.organization
 
         return None
+
+    def get_queryset(self):
+        """Filter parent ledgers by organization and create default ones if none exist"""
+        organization = self.get_organization()
+        if not organization:
+            return ParentLedger.objects.none()
+            
+        # Check if any parent ledgers exist for this organization
+        existing_count = ParentLedger.objects.filter(organization=organization).count()
+        
+        # If no parent ledgers exist, create some default ones
+        if existing_count == 0:
+            self._create_default_parent_ledgers(organization)
+        
+        return ParentLedger.objects.filter(organization=organization).order_by('parent')
+    
+    def _create_default_parent_ledgers(self, organization):
+        """Create default parent ledgers for the organization"""
+        default_parent_ledgers = [
+            'Duties & Taxes',
+            'Purchase Accounts', 
+            'Sales Accounts',
+            'Sundry Creditors',
+            'Sundry Debtors',
+            'Current Assets',
+            'Current Liabilities',
+            'Direct Expenses',
+            'Direct Incomes',
+            'Indirect Expenses',
+            'Indirect Incomes',
+            'Fixed Assets',
+            'Investments',
+            'Loans & Advances (Asset)',
+            'Loans (Liability)',
+            'Capital Account',
+            'Reserves & Surplus',
+            'Bank Accounts',
+            'Cash-in-hand',
+            'Stock-in-hand'
+        ]
+        
+        parent_ledgers_to_create = []
+        for parent_name in default_parent_ledgers:
+            parent_ledgers_to_create.append(
+                ParentLedger(
+                    organization=organization,
+                    parent=parent_name
+                )
+            )
+        
+        # Bulk create all parent ledgers
+        ParentLedger.objects.bulk_create(parent_ledgers_to_create)
+        print(f"Created {len(parent_ledgers_to_create)} default parent ledgers for organization: {organization.name}")
 
     def dispatch(self, request, *args, **kwargs):
         """Intercept all incoming calls for logging and debugging"""

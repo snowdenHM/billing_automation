@@ -65,6 +65,69 @@ class TallyConfigSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'igst_parent_names', 'cgst_parent_names', 'sgst_parent_names',
                            'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names']
     
+    def validate_igst_parents(self, value):
+        return self._validate_parent_ledgers(value, 'igst_parents')
+    
+    def validate_cgst_parents(self, value):
+        return self._validate_parent_ledgers(value, 'cgst_parents')
+    
+    def validate_sgst_parents(self, value):
+        return self._validate_parent_ledgers(value, 'sgst_parents')
+    
+    def validate_vendor_parents(self, value):
+        return self._validate_parent_ledgers(value, 'vendor_parents')
+    
+    def validate_chart_of_accounts_parents(self, value):
+        return self._validate_parent_ledgers(value, 'chart_of_accounts_parents')
+    
+    def validate_chart_of_accounts_expense_parents(self, value):
+        return self._validate_parent_ledgers(value, 'chart_of_accounts_expense_parents')
+    
+    def _validate_parent_ledgers(self, value, field_name):
+        """Custom validation for parent ledger fields to ensure they belong to the same organization"""
+        if not value:
+            return value
+            
+        # Get organization from context (set by the viewset)
+        request = self.context.get('request')
+        if not request:
+            return value
+            
+        # Get organization from the viewset
+        view = self.context.get('view')
+        if hasattr(view, 'get_organization'):
+            organization = view.get_organization()
+        else:
+            # Fallback: try to get from request user
+            organization = None
+            if hasattr(request.user, 'memberships'):
+                membership = request.user.memberships.first()
+                if membership:
+                    organization = membership.organization
+        
+        if not organization:
+            raise serializers.ValidationError(f"Unable to determine organization for {field_name} validation")
+        
+        # Validate that all ParentLedger objects exist and belong to this organization
+        from .models import ParentLedger
+        parent_ids = [item.id if hasattr(item, 'id') else item for item in value]
+        
+        existing_parents = ParentLedger.objects.filter(
+            id__in=parent_ids,
+            organization=organization
+        )
+        
+        existing_ids = set(str(parent.id) for parent in existing_parents)
+        provided_ids = set(str(pid) for pid in parent_ids)
+        
+        missing_ids = provided_ids - existing_ids
+        if missing_ids:
+            raise serializers.ValidationError(
+                f"The following ParentLedger IDs do not exist for organization '{organization.name}': {', '.join(missing_ids)}"
+            )
+        
+        return value
+    
     def get_igst_parent_names(self, obj):
         return [parent.parent for parent in obj.igst_parents.all() if parent.parent]
     
