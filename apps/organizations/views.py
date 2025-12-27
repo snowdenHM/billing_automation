@@ -746,14 +746,14 @@ def organization_onboarding_create_view(request):
     Create a new organization with the requesting user as admin member.
     This is part of the onboarding flow.
     """
-    # Set the requesting user as both owner and creator
+    # Create organization serializer without owner_email
     serializer = OrganizationSerializer(
-        data={**request.data, "owner_email": request.user.email},
+        data=request.data,
         context={"request": request}
     )
     serializer.is_valid(raise_exception=True)
 
-    # Create the organization
+    # Create the organization with user as owner and creator
     organization = serializer.save(
         created_by=request.user,
         owner=request.user
