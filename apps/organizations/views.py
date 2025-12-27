@@ -689,22 +689,17 @@ def organization_create_with_module_view(request):
     except Module.DoesNotExist:
         return Response({"detail": "Invalid module code."}, status=status.HTTP_400_BAD_REQUEST)
     
-    # Create organization data without owner_email
-    org_data = request.data.copy()
-    if 'module' in org_data:
-        del org_data['module']  # Remove module from organization data
+    # Get organization name
+    org_name = request.data.get('name')
+    if not org_name:
+        return Response({"detail": "Organization name is required."}, status=status.HTTP_400_BAD_REQUEST)
     
-    # Create organization serializer
-    serializer = OrganizationSerializer(
-        data=org_data,
-        context={"request": request}
-    )
-    serializer.is_valid(raise_exception=True)
-    
-    # Save organization with owner and created_by set
-    organization = serializer.save(
+    # Create organization directly
+    organization = Organization.objects.create(
+        name=org_name,
+        owner=request.user,
         created_by=request.user,
-        owner=request.user
+        status=Organization.ACTIVE
     )
     
     # Add user as admin member
