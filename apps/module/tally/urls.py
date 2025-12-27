@@ -25,12 +25,15 @@ from .vendor_views_functional import (
     vendor_bill_sync_external
 )
 from .bill_move_view import move_tally_bills_between_modules_view
-from .views import LedgerViewSet, TallyConfigViewSet, ParentLedgerViewSet, MasterAPIView
+from .views import (
+    LedgerViewSet, TallyConfigViewSet, ParentLedgerViewSet, MasterAPIView,
+    get_tally_config, create_or_update_tally_config
+)
 from .organization_data_views import organization_tally_data
 
 # Create router for the remaining viewsets
 router = DefaultRouter()
-router.register(r'configs', TallyConfigViewSet, basename='tally-config')
+# router.register(r'configs', TallyConfigViewSet, basename='tally-config')  # Removed - using function-based views
 router.register(r'parent-ledgers', ParentLedgerViewSet, basename='parent-ledger')
 
 app_name = 'tally'
@@ -38,6 +41,11 @@ app_name = 'tally'
 urlpatterns = [
     # Organization-scoped endpoints (UUID only)
     path('org/<uuid:org_id>/', include([
+        # New function-based Tally Config endpoints
+        path('config/', get_tally_config, name='get-tally-config'),
+        path('config/save/', create_or_update_tally_config, name='create-update-tally-config'),
+        
+        # Other router URLs
         path('', include(router.urls)),
 
         # Organization comprehensive data endpoint

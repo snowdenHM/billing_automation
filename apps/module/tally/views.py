@@ -3,7 +3,7 @@ import os
 import json
 from datetime import datetime
 from rest_framework import viewsets, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, BasePermission, AllowAny
@@ -73,6 +73,217 @@ class OrganizationAPIKeyOrBearerToken(BasePermission):
 
 
 @extend_schema(tags=['Tally Config'])
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])  # You can change this to OrganizationAPIKeyOrBearerToken if needed
+def get_tally_config(request, org_id):
+    """Get tally configuration for organization"""
+    if request.method != 'GET':
+        return Response({'error': 'Method not allowed'}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+    
+    try:
+        print(f"Getting TallyConfig for organization: {org_id}")
+        
+        # Get organization
+        organization = get_object_or_404(Organization, id=org_id)
+        print(f"Found organization: {organization.name}")
+        
+        # Get tally config for this organization
+        tally_config = TallyConfig.objects.filter(organization=organization).prefetch_related(
+            'igst_parents',
+            'cgst_parents', 
+            'sgst_parents',
+            'vendor_parents',
+            'chart_of_accounts_parents',
+            'chart_of_accounts_expense_parents'
+        ).first()
+        
+        if not tally_config:
+            print("No TallyConfig found for this organization")
+            return Response({
+                'success': False,
+                'message': 'No tally configuration found for this organization',
+                'data': None
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Serialize the config
+        serializer = TallyConfigSerializer(tally_config, context={'request': request, 'organization': organization})
+        
+        print(f"Retrieved TallyConfig: {tally_config.id}")
+        return Response({
+            'success': True,
+            'message': 'Tally configuration retrieved successfully',
+            'data': serializer.data
+        }, status=status.HTTP_200_OK)
+        
+    except Organization.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': 'Organization not found'
+        }, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        print(f"Error in get_tally_config: {str(e)}")
+        return Response({
+            'success': False,
+            'message': f'Error retrieving tally configuration: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@extend_schema(tags=['Tally Config'])
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])  # You can change this to OrganizationAPIKeyOrBearerToken if needed
+def create_or_update_tally_config(request, org_id):
+    """Create or update tally configuration for organization"""
+    if request.method != 'POST':
+        return Response({'error': 'Method not allowed'}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+    
+    try:
+        print(f"Creating/updating TallyConfig for organization: {org_id}")
+        print(f"Request data: {request.data}")
+        
+        # Get organization
+        organization = get_object_or_404(Organization, id=org_id)
+        print(f"Found organization: {organization.name}")
+        
+        # Ensure ParentLedgers exist for this organization
+        _ensure_parent_ledgers_exist(organization)
+        
+        # Debug the parent ledger data being sent
+        parent_fields = ['igst_parents', 'cgst_parents', 'sgst_parents', 'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents']
+        
+        for field in parent_fields:
+            if field in request.data:
+                parent_ids = request.data[field]
+                print(f"{field}: {parent_ids}")
+                
+                if parent_ids:
+                    # Check if these parent ledger IDs exist for this organization
+                    existing = ParentLedger.objects.filter(
+                        id__in=parent_ids, 
+                        organization=organization
+                    ).values_list('id', 'parent')
+                    
+                    existing_ids = [str(pid) for pid, _ in existing]
+                    missing_ids = [pid for pid in parent_ids if str(pid) not in existing_ids]
+                    
+                    print(f"  Found {len(existing)} matching parent ledgers: {list(existing)}")
+                    if missing_ids:
+                        print(f"  Missing ParentLedger IDs: {missing_ids}")
+        
+        # Check if config already exists for this organization
+        existing_config = TallyConfig.objects.filter(organization=organization).first()
+        
+        # Prepare data
+        config_data = dict(request.data)
+        if 'tally_product_allow_sync' not in config_data:
+            config_data['tally_product_allow_sync'] = False
+            
+        context = {'request': request, 'organization': organization}
+        
+        if existing_config:
+            print(f"Updating existing TallyConfig: {existing_config.id}")
+            serializer = TallyConfigSerializer(existing_config, data=config_data, context=context)
+        else:
+            print("Creating new TallyConfig")
+            serializer = TallyConfigSerializer(data=config_data, context=context)
+        
+        if serializer.is_valid():
+            if existing_config:
+                # Update existing config
+                tally_config = serializer.save()
+                message = 'Tally configuration updated successfully'
+                print(f"Updated TallyConfig: {tally_config.id}")
+            else:
+                # Create new config
+                tally_config = serializer.save(organization=organization)
+                message = 'Tally configuration created successfully'
+                print(f"Created Tally config: {tally_config.id}")
+            
+            # Refresh from database with related fields
+            tally_config.refresh_from_db()
+            response_serializer = TallyConfigSerializer(tally_config, context=context)
+            
+            return Response({
+                'success': True,
+                'message': message,
+                'data': response_serializer.data
+            }, status=status.HTTP_201_CREATED if not existing_config else status.HTTP_200_OK)
+        else:
+            print(f"Serializer validation errors: {serializer.errors}")
+            return Response({
+                'success': False,
+                'message': 'Validation failed',
+                'errors': serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
+    except Organization.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': 'Organization not found'
+        }, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        print(f"Error in create_or_update_tally_config: {str(e)}")
+        return Response({
+            'success': False,
+            'message': f'Error saving tally configuration: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def _ensure_parent_ledgers_exist(organization):
+    """Ensure ParentLedgers exist for the organization"""
+    if not organization:
+        return
+        
+    existing_count = ParentLedger.objects.filter(organization=organization).count()
+    print(f"ParentLedger count for {organization.name}: {existing_count}")
+    
+    if existing_count == 0:
+        print("Creating default ParentLedgers...")
+        _create_default_parent_ledgers(organization)
+    else:
+        print("ParentLedgers already exist for this organization")
+
+
+def _create_default_parent_ledgers(organization):
+    """Create default parent ledgers for the organization"""
+    default_parent_ledgers = [
+        'Duties & Taxes',
+        'Purchase Accounts', 
+        'Sales Accounts',
+        'Sundry Creditors',
+        'Sundry Debtors',
+        'Current Assets',
+        'Current Liabilities',
+        'Direct Expenses',
+        'Direct Incomes',
+        'Indirect Expenses',
+        'Indirect Incomes',
+        'Fixed Assets',
+        'Investments',
+        'Loans & Advances (Asset)',
+        'Loans (Liability)',
+        'Capital Account',
+        'Reserves & Surplus',
+        'Bank Accounts',
+        'Cash-in-hand',
+        'Stock-in-hand'
+    ]
+    
+    parent_ledgers_to_create = []
+    for parent_name in default_parent_ledgers:
+        parent_ledgers_to_create.append(
+            ParentLedger(
+                organization=organization,
+                parent=parent_name
+            )
+        )
+    
+    # Bulk create all parent ledgers
+    ParentLedger.objects.bulk_create(parent_ledgers_to_create)
+    print(f"Created {len(parent_ledgers_to_create)} default parent ledgers for organization: {organization.name}")
+
+
+# Keep the old ViewSet class for backward compatibility but it won't be used
+@extend_schema(tags=['Tally Config - Deprecated'])
 class TallyConfigViewSet(viewsets.ModelViewSet):
     serializer_class = TallyConfigSerializer
     permission_classes = [OrganizationAPIKeyOrBearerToken]
@@ -173,6 +384,8 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
     )
     def create(self, request, *args, **kwargs):
         print(f"TallyConfigViewSet.create called with data: {request.data}")
+        print(f"URL kwargs: {self.kwargs}")
+        
         organization = self.get_organization()
         print(f"Creating TallyConfig for organization: {organization}")
         
@@ -182,19 +395,33 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Debug the parent ledger data being sent
-        for field in ['igst_parents', 'cgst_parents', 'sgst_parents', 'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents']:
+        # Debug the parent ledger data being sent - like Node.js controller
+        parent_fields = ['igst_parents', 'cgst_parents', 'sgst_parents', 'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents']
+        
+        for field in parent_fields:
             if field in request.data:
-                print(f"{field}: {request.data[field]}")
-                # Check if these parent ledger IDs exist for this organization
-                from .models import ParentLedger
                 parent_ids = request.data[field]
+                print(f"{field}: {parent_ids}")
+                
                 if parent_ids:
+                    # Check if these parent ledger IDs exist for this organization
+                    from .models import ParentLedger
                     existing = ParentLedger.objects.filter(
                         id__in=parent_ids, 
                         organization=organization
                     ).values_list('id', 'parent')
+                    
+                    existing_ids = [str(pid) for pid, _ in existing]
+                    missing_ids = [pid for pid in parent_ids if str(pid) not in existing_ids]
+                    
                     print(f"  Found {len(existing)} matching parent ledgers: {list(existing)}")
+                    if missing_ids:
+                        print(f"  Missing ParentLedger IDs: {missing_ids}")
+                        # Auto-create missing parent ledgers if needed
+                        print(f"  WARNING: Some ParentLedger IDs are missing for organization {organization.name}")
+        
+        # Make sure ParentLedgers exist for this organization
+        self._ensure_parent_ledgers_exist(organization)
         
         # Create a mutable copy of request.data
         mutable_data = dict(request.data)
@@ -269,14 +496,20 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
         if not organization:
             return ParentLedger.objects.none()
             
+        print(f"Getting ParentLedgers for organization: {organization.name} (ID: {organization.id})")
+        
         # Check if any parent ledgers exist for this organization
         existing_count = ParentLedger.objects.filter(organization=organization).count()
+        print(f"Existing ParentLedger count: {existing_count}")
         
         # If no parent ledgers exist, create some default ones
         if existing_count == 0:
+            print("No ParentLedgers found, creating defaults...")
             self._create_default_parent_ledgers(organization)
         
-        return ParentLedger.objects.filter(organization=organization).order_by('parent')
+        queryset = ParentLedger.objects.filter(organization=organization).order_by('parent')
+        print(f"Returning {queryset.count()} ParentLedgers")
+        return queryset
     
     def _create_default_parent_ledgers(self, organization):
         """Create default parent ledgers for the organization"""
@@ -315,6 +548,20 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
         # Bulk create all parent ledgers
         ParentLedger.objects.bulk_create(parent_ledgers_to_create)
         print(f"Created {len(parent_ledgers_to_create)} default parent ledgers for organization: {organization.name}")
+
+    def _ensure_parent_ledgers_exist(self, organization):
+        """Ensure ParentLedgers exist for the organization before TallyConfig creation"""
+        if not organization:
+            return
+            
+        existing_count = ParentLedger.objects.filter(organization=organization).count()
+        print(f"ParentLedger count for {organization.name}: {existing_count}")
+        
+        if existing_count == 0:
+            print("Creating default ParentLedgers...")
+            self._create_default_parent_ledgers(organization)
+        else:
+            print("ParentLedgers already exist for this organization")
 
     def dispatch(self, request, *args, **kwargs):
         """Intercept all incoming calls for logging and debugging"""

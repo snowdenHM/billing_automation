@@ -84,42 +84,32 @@ class TallyConfigSerializer(serializers.ModelSerializer):
         return self._validate_parent_ledgers(value, 'chart_of_accounts_expense_parents')
     
     def _validate_parent_ledgers(self, value, field_name):
-        """Custom validation for parent ledger fields to ensure they belong to the same organization"""
+        """Custom validation for parent ledger fields - forgiving validation like Node.js version"""
         if not value:
             return value
         
-        # Get organization from context (preferred method)
+        print(f"Validating {field_name} with values: {value}")
+        
+        # Get organization from context
         organization = self.context.get('organization')
+        request = self.context.get('request')
+        view = self.context.get('view')
         
-        # Fallback: get from view if context doesn't have organization
-        if not organization:
-            request = self.context.get('request')
-            view = self.context.get('view')
-            
-            if not request or not view:
-                print(f"Skipping {field_name} validation - no request/view context")
-                return value
-            
+        # Try to get organization if not in context
+        if not organization and view and hasattr(view, 'get_organization'):
             try:
-                if hasattr(view, 'get_organization'):
-                    organization = view.get_organization()
-                else:
-                    organization = None
+                organization = view.get_organization()
             except Exception as e:
-                print(f"Error getting organization from view: {e}")
-                return value
+                print(f"Error getting organization: {e}")
         
         if not organization:
-            print(f"No organization found for {field_name} validation, skipping")
+            print(f"No organization context for {field_name} validation - allowing all values")
             return value
         
         print(f"Validating {field_name} for organization: {organization.name} (ID: {organization.id})")
         
-        # Validate that all ParentLedger objects exist and belong to this organization
-        from .models import ParentLedger
+        # Convert values to string IDs
         parent_ids = []
-        
-        # Handle different input formats (list of objects, list of IDs, etc.)
         for item in value:
             if hasattr(item, 'id'):
                 parent_ids.append(str(item.id))
@@ -132,6 +122,9 @@ class TallyConfigSerializer(serializers.ModelSerializer):
             return value
         
         try:
+            from .models import ParentLedger
+            
+            # Check which ParentLedgers exist for this organization
             existing_parents = ParentLedger.objects.filter(
                 id__in=parent_ids,
                 organization=organization
@@ -139,17 +132,31 @@ class TallyConfigSerializer(serializers.ModelSerializer):
             
             existing_ids = set(str(parent.id) for parent in existing_parents)
             provided_ids = set(parent_ids)
-            
             missing_ids = provided_ids - existing_ids
+            
+            print(f"Existing ParentLedger IDs: {existing_ids}")
+            print(f"Provided ParentLedger IDs: {provided_ids}")
+            print(f"Missing ParentLedger IDs: {missing_ids}")
+            
+            # Instead of raising an error, just warn and return valid IDs only
             if missing_ids:
-                print(f"Missing ParentLedger IDs for organization {organization.name}: {missing_ids}")
-                # Instead of raising error, just warn and continue
-                # This allows the form to work even if some IDs are invalid
-                print(f"WARNING: Some ParentLedger IDs don't exist: {', '.join(missing_ids)}")
+                print(f"WARNING: Some ParentLedger IDs don't exist for organization {organization.name}: {missing_ids}")
+                # Return only the valid IDs that exist
+                valid_parent_objects = []
+                for pid in parent_ids:
+                    if pid in existing_ids:
+                        # Find the actual ParentLedger object
+                        parent_obj = existing_parents.filter(id=pid).first()
+                        if parent_obj:
+                            valid_parent_objects.append(parent_obj)
+                
+                print(f"Returning {len(valid_parent_objects)} valid ParentLedger objects")
+                return valid_parent_objects
             
         except Exception as e:
-            print(f"Error validating parent ledgers: {e}")
-            # Don't fail validation on database errors
+            print(f"Error in ParentLedger validation: {e}")
+            # Don't fail validation on database errors - just return original value
+            return value
         
         return value
     
