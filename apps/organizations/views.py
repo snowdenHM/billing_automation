@@ -148,10 +148,18 @@ def organization_invite_user_view(request, org_id):
     # Get user data from request
     user_email = request.data.get('email')
     user_role = request.data.get('role', 'MANAGER')
-    full_name = request.data.get('full_name', '')
+    first_name = request.data.get('first_name', '')
+    last_name = request.data.get('last_name', '')
+    full_name = request.data.get('full_name', '')  # For backward compatibility
     
     if not user_email:
         return Response({"detail": "User email is required."}, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Split full_name if provided but no first/last names
+    if full_name and not (first_name or last_name):
+        name_parts = full_name.strip().split()
+        first_name = name_parts[0] if name_parts else ''
+        last_name = ' '.join(name_parts[1:]) if len(name_parts) > 1 else ''
     
     # Check if user exists, create if not
     try:
@@ -162,17 +170,15 @@ def organization_invite_user_view(request, org_id):
         current_year = datetime.now().year
         default_password = f"Bill@{current_year}"
         
-        # Extract first name from full_name if provided, else use email prefix
-        if full_name:
-            first_name = full_name.split()[0] if full_name.split() else full_name
-        else:
+        # Use first name or email prefix as fallback
+        if not first_name:
             first_name = user_email.split('@')[0]
         
         user_to_add = User.objects.create(
             email=user_email,
             username=user_email,  # Use email as username
             first_name=first_name,
-            full_name=full_name or first_name,
+            last_name=last_name,
             password=make_password(default_password),
             is_active=True
         )
