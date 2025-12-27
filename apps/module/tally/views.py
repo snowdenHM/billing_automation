@@ -142,9 +142,6 @@ def create_or_update_tally_config(request, org_id):
         organization = get_object_or_404(Organization, id=org_id)
         print(f"Found organization: {organization.name}")
         
-        # Ensure ParentLedgers exist for this organization
-        _ensure_parent_ledgers_exist(organization)
-        
         # Debug the parent ledger data being sent
         parent_fields = ['igst_parents', 'cgst_parents', 'sgst_parents', 'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents']
         
@@ -226,243 +223,6 @@ def create_or_update_tally_config(request, org_id):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-def _ensure_parent_ledgers_exist(organization):
-    """Ensure ParentLedgers exist for the organization"""
-    if not organization:
-        return
-        
-    existing_count = ParentLedger.objects.filter(organization=organization).count()
-    print(f"ParentLedger count for {organization.name}: {existing_count}")
-    
-    if existing_count == 0:
-        print("Creating default ParentLedgers...")
-        _create_default_parent_ledgers(organization)
-    else:
-        print("ParentLedgers already exist for this organization")
-
-
-def _create_default_parent_ledgers(organization):
-    """Create default parent ledgers for the organization"""
-    default_parent_ledgers = [
-        'Duties & Taxes',
-        'Purchase Accounts', 
-        'Sales Accounts',
-        'Sundry Creditors',
-        'Sundry Debtors',
-        'Current Assets',
-        'Current Liabilities',
-        'Direct Expenses',
-        'Direct Incomes',
-        'Indirect Expenses',
-        'Indirect Incomes',
-        'Fixed Assets',
-        'Investments',
-        'Loans & Advances (Asset)',
-        'Loans (Liability)',
-        'Capital Account',
-        'Reserves & Surplus',
-        'Bank Accounts',
-        'Cash-in-hand',
-        'Stock-in-hand'
-    ]
-    
-    parent_ledgers_to_create = []
-    for parent_name in default_parent_ledgers:
-        parent_ledgers_to_create.append(
-            ParentLedger(
-                organization=organization,
-                parent=parent_name
-            )
-        )
-    
-    # Bulk create all parent ledgers
-    ParentLedger.objects.bulk_create(parent_ledgers_to_create)
-    print(f"Created {len(parent_ledgers_to_create)} default parent ledgers for organization: {organization.name}")
-
-
-# Keep the old ViewSet class for backward compatibility but it won't be used
-@extend_schema(tags=['Tally Config - Deprecated'])
-class TallyConfigViewSet(viewsets.ModelViewSet):
-    serializer_class = TallyConfigSerializer
-    permission_classes = [OrganizationAPIKeyOrBearerToken]
-
-    def get_queryset(self):
-        """Filter queryset based on organization UUID with proper prefetching"""
-        organization = self.get_organization()
-        # Add explicit ordering and prefetch related parent ledgers for better performance
-        return TallyConfig.objects.filter(organization=organization).prefetch_related(
-            'igst_parents',
-            'cgst_parents',
-            'sgst_parents',
-            'vendor_parents',
-            'chart_of_accounts_parents',
-            'chart_of_accounts_expense_parents'
-        ).order_by('-id')
-
-    def get_organization(self):
-        """Get organization from URL UUID parameter or API key"""
-        # Extract organization UUID from URL
-        org_id = self.kwargs.get('org_id')
-        if org_id:
-            return get_object_or_404(Organization, id=org_id)
-
-        # If using API key, get organization from request (set by permission class)
-        if hasattr(self.request, 'organization'):
-            return self.request.organization
-
-        # Fallback to user's first organization
-        if hasattr(self.request.user, 'memberships'):
-            membership = self.request.user.memberships.first()
-            if membership:
-                return membership.organization
-
-        return None
-
-    def perform_create(self, serializer):
-        """Set organization when creating TallyConfig and ensure only one config per org"""
-        organization = self.get_organization()
-        
-        if not organization:
-            from rest_framework.exceptions import ValidationError
-            raise ValidationError({
-                "organization": "Unable to determine organization for TallyConfig creation. Ensure org_id is provided in URL."
-            })
-        
-        print(f"Creating/updating TallyConfig for organization: {organization.name} (ID: {organization.id})")
-        
-        # Check if config already exists for this organization
-        existing_config = TallyConfig.objects.filter(organization=organization).first()
-        if existing_config:
-            print(f"Updating existing TallyConfig (ID: {existing_config.id})")
-            # If config exists, update it instead of creating new one
-            for field_name, field_value in serializer.validated_data.items():
-                if hasattr(existing_config, field_name):
-                    field_obj = existing_config._meta.get_field(field_name)
-                    if field_obj.many_to_many:  # ManyToMany fields
-                        print(f"Setting ManyToMany field {field_name} with {len(field_value)} items")
-                        getattr(existing_config, field_name).set(field_value)
-                    else:
-                        print(f"Setting field {field_name} = {field_value}")
-                        setattr(existing_config, field_name, field_value)
-            existing_config.save()
-            # Update the serializer instance to return the updated config
-            serializer.instance = existing_config
-            return existing_config
-        else:
-            print("Creating new TallyConfig")
-            serializer.save(organization=organization)
-
-    def dispatch(self, request, *args, **kwargs):
-        """Intercept all incoming calls for logging and debugging"""
-        # Log the incoming request
-        print(f"TallyConfigViewSet - {request.method} {request.get_full_path()}")
-        print(f"Request Headers: {dict(request.headers)}")
-        print(f"Request Data: {request.data if hasattr(request, 'data') else 'No data'}")
-
-        # Get organization info for debugging
-        try:
-            org = self.get_organization()
-            print(f"Organization: {org.name if org else 'None'} (ID: {org.id if org else 'None'})")
-        except Exception as e:
-            print(f"Error getting organization: {str(e)}")
-
-        return super().dispatch(request, *args, **kwargs)
-
-    @extend_schema(
-        summary="List Tally Configurations",
-        description="Get all Tally configurations for the organization",
-    )
-    def list(self, request, *args, **kwargs):
-        print(f"TallyConfigViewSet.list called for org: {self.get_organization()}")
-        return super().list(request, *args, **kwargs)
-
-    @extend_schema(
-        summary="Create Tally Configuration",
-        description="Create a new Tally configuration for mapping parent ledgers to different GST types and categories",
-    )
-    def create(self, request, *args, **kwargs):
-        print(f"TallyConfigViewSet.create called with data: {request.data}")
-        print(f"URL kwargs: {self.kwargs}")
-        
-        organization = self.get_organization()
-        print(f"Creating TallyConfig for organization: {organization}")
-        
-        if not organization:
-            return Response(
-                {"error": "Unable to determine organization from request"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Debug the parent ledger data being sent - like Node.js controller
-        parent_fields = ['igst_parents', 'cgst_parents', 'sgst_parents', 'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents']
-        
-        for field in parent_fields:
-            if field in request.data:
-                parent_ids = request.data[field]
-                print(f"{field}: {parent_ids}")
-                
-                if parent_ids:
-                    # Check if these parent ledger IDs exist for this organization
-                    from .models import ParentLedger
-                    existing = ParentLedger.objects.filter(
-                        id__in=parent_ids, 
-                        organization=organization
-                    ).values_list('id', 'parent')
-                    
-                    existing_ids = [str(pid) for pid, _ in existing]
-                    missing_ids = [pid for pid in parent_ids if str(pid) not in existing_ids]
-                    
-                    print(f"  Found {len(existing)} matching parent ledgers: {list(existing)}")
-                    if missing_ids:
-                        print(f"  Missing ParentLedger IDs: {missing_ids}")
-                        # Auto-create missing parent ledgers if needed
-                        print(f"  WARNING: Some ParentLedger IDs are missing for organization {organization.name}")
-        
-        # Make sure ParentLedgers exist for this organization
-        self._ensure_parent_ledgers_exist(organization)
-        
-        # Create a mutable copy of request.data
-        mutable_data = dict(request.data)
-        
-        # Ensure tally_product_allow_sync is properly handled
-        if 'tally_product_allow_sync' not in mutable_data:
-            mutable_data['tally_product_allow_sync'] = False
-        
-        # Update request.data with our mutable copy
-        request._full_data = mutable_data
-            
-        return super().create(request, *args, **kwargs)
-
-    @extend_schema(
-        summary="Update Tally Configuration",
-        description="Update a Tally configuration completely",
-    )
-    def update(self, request, *args, **kwargs):
-        config_id = kwargs.get('pk')
-        print(f"TallyConfigViewSet.update called for config ID: {config_id} with data: {request.data}")
-        
-        # Create a mutable copy of request.data
-        mutable_data = dict(request.data)
-        
-        # Ensure tally_product_allow_sync is properly handled
-        if 'tally_product_allow_sync' not in mutable_data:
-            mutable_data['tally_product_allow_sync'] = False
-        
-        # Update request.data with our mutable copy
-        request._full_data = mutable_data
-            
-        return super().update(request, *args, **kwargs)
-
-    @extend_schema(
-        summary="Partially Update Tally Configuration",
-        description="Partially update a Tally configuration",
-    )
-    def partial_update(self, request, *args, **kwargs):
-        config_id = kwargs.get('pk')
-        print(f"TallyConfigViewSet.partial_update called for config ID: {config_id} with data: {request.data}")
-        return super().partial_update(request, *args, **kwargs)
-
-
 @extend_schema(tags=['Parent Ledgers'])
 class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet for getting ParentLedger options for TallyConfig forms"""
@@ -489,82 +249,22 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
         return None
 
     def get_queryset(self):
-        """Filter parent ledgers by organization and create default ones if none exist"""
+        """Filter parent ledgers by organization"""
         organization = self.get_organization()
         if not organization:
             return ParentLedger.objects.none()
             
         print(f"Getting ParentLedgers for organization: {organization.name} (ID: {organization.id})")
         
-        # Check if any parent ledgers exist for this organization
-        existing_count = ParentLedger.objects.filter(organization=organization).count()
-        print(f"Existing ParentLedger count: {existing_count}")
-        
-        # If no parent ledgers exist, create some default ones
-        if existing_count == 0:
-            print("No ParentLedgers found, creating defaults...")
-            self._create_default_parent_ledgers(organization)
-        
         queryset = ParentLedger.objects.filter(organization=organization).order_by('parent')
         print(f"Returning {queryset.count()} ParentLedgers")
         return queryset
-    
-    def _create_default_parent_ledgers(self, organization):
-        """Create default parent ledgers for the organization"""
-        default_parent_ledgers = [
-            'Duties & Taxes',
-            'Purchase Accounts', 
-            'Sales Accounts',
-            'Sundry Creditors',
-            'Sundry Debtors',
-            'Current Assets',
-            'Current Liabilities',
-            'Direct Expenses',
-            'Direct Incomes',
-            'Indirect Expenses',
-            'Indirect Incomes',
-            'Fixed Assets',
-            'Investments',
-            'Loans & Advances (Asset)',
-            'Loans (Liability)',
-            'Capital Account',
-            'Reserves & Surplus',
-            'Bank Accounts',
-            'Cash-in-hand',
-            'Stock-in-hand'
-        ]
-        
-        parent_ledgers_to_create = []
-        for parent_name in default_parent_ledgers:
-            parent_ledgers_to_create.append(
-                ParentLedger(
-                    organization=organization,
-                    parent=parent_name
-                )
-            )
-        
-        # Bulk create all parent ledgers
-        ParentLedger.objects.bulk_create(parent_ledgers_to_create)
-        print(f"Created {len(parent_ledgers_to_create)} default parent ledgers for organization: {organization.name}")
-
-    def _ensure_parent_ledgers_exist(self, organization):
-        """Ensure ParentLedgers exist for the organization before TallyConfig creation"""
-        if not organization:
-            return
-            
-        existing_count = ParentLedger.objects.filter(organization=organization).count()
-        print(f"ParentLedger count for {organization.name}: {existing_count}")
-        
-        if existing_count == 0:
-            print("Creating default ParentLedgers...")
-            self._create_default_parent_ledgers(organization)
-        else:
-            print("ParentLedgers already exist for this organization")
+   
 
     def dispatch(self, request, *args, **kwargs):
         """Intercept all incoming calls for logging and debugging"""
         # Log the incoming request
-        print(f"TallyConfigViewSet - {request.method} {request.get_full_path()}")
+        print(f"LedgerViewSet - {request.method} {request.get_full_path()}")
         print(f"Request Headers: {dict(request.headers)}")
         print(f"Request Data: {request.data if hasattr(request, 'data') else 'No data'}")
 
@@ -733,7 +433,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
         description="Get all Tally configurations for the organization",
     )
     def list(self, request, *args, **kwargs):
-        print(f"TallyConfigViewSet.list called for org: {self.get_organization()}")
+        print(f"LedgerViewSet.list called for org: {self.get_organization()}")
         return super().list(request, *args, **kwargs)
 
     @extend_schema(
@@ -741,7 +441,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
         description="Create a new Tally configuration for mapping parent ledgers to different GST types and categories. Accepts bulk data ingestion.",
     )
     def create(self, request, *args, **kwargs):
-        print(f"TallyConfigViewSet.create called with data: {request.data}")
+        print(f"LedgerViewSet.create called with data: {request.data}")
         organization = self.get_organization()
         print(f"Creating TallyConfig for organization: {organization}")
 
@@ -791,7 +491,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def retrieve(self, request, *args, **kwargs):
         config_id = kwargs.get('pk')
-        print(f"TallyConfigViewSet.retrieve called for config ID: {config_id}")
+        print(f"LedgerViewSet.retrieve called for config ID: {config_id}")
         return super().retrieve(request, *args, **kwargs)
 
     @extend_schema(
@@ -800,7 +500,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def update(self, request, *args, **kwargs):
         config_id = kwargs.get('pk')
-        print(f"TallyConfigViewSet.update called for config ID: {config_id} with data: {request.data}")
+        print(f"LedgerViewSet.update called for config ID: {config_id} with data: {request.data}")
         return super().update(request, *args, **kwargs)
 
     @extend_schema(
@@ -809,7 +509,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def partial_update(self, request, *args, **kwargs):
         config_id = kwargs.get('pk')
-        print(f"TallyConfigViewSet.partial_update called for config ID: {config_id} with data: {request.data}")
+        print(f"LedgerViewSet.partial_update called for config ID: {config_id} with data: {request.data}")
         return super().partial_update(request, *args, **kwargs)
 
     @extend_schema(
@@ -818,7 +518,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def destroy(self, request, *args, **kwargs):
         config_id = kwargs.get('pk')
-        print(f"TallyConfigViewSet.destroy called for config ID: {config_id}")
+        print(f"LedgerViewSet.destroy called for config ID: {config_id}")
         return super().destroy(request, *args, **kwargs)
 
 

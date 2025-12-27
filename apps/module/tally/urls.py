@@ -26,7 +26,7 @@ from .vendor_views_functional import (
 )
 from .bill_move_view import move_tally_bills_between_modules_view
 from .views import (
-    LedgerViewSet, TallyConfigViewSet, ParentLedgerViewSet, MasterAPIView,
+    LedgerViewSet, ParentLedgerViewSet, MasterAPIView,
     get_tally_config, create_or_update_tally_config
 )
 from .organization_data_views import organization_tally_data

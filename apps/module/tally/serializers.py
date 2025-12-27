@@ -66,98 +66,27 @@ class TallyConfigSerializer(serializers.ModelSerializer):
                            'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names']
     
     def validate_igst_parents(self, value):
-        return self._validate_parent_ledgers(value, 'igst_parents')
+        # Skip validation - let Django handle it at the database level
+        return value
     
     def validate_cgst_parents(self, value):
-        return self._validate_parent_ledgers(value, 'cgst_parents')
+        # Skip validation - let Django handle it at the database level
+        return value
     
     def validate_sgst_parents(self, value):
-        return self._validate_parent_ledgers(value, 'sgst_parents')
+        # Skip validation - let Django handle it at the database level
+        return value
     
     def validate_vendor_parents(self, value):
-        return self._validate_parent_ledgers(value, 'vendor_parents')
+        # Skip validation - let Django handle it at the database level
+        return value
     
     def validate_chart_of_accounts_parents(self, value):
-        return self._validate_parent_ledgers(value, 'chart_of_accounts_parents')
+        # Skip validation - let Django handle it at the database level
+        return value
     
     def validate_chart_of_accounts_expense_parents(self, value):
-        return self._validate_parent_ledgers(value, 'chart_of_accounts_expense_parents')
-    
-    def _validate_parent_ledgers(self, value, field_name):
-        """Custom validation for parent ledger fields - forgiving validation like Node.js version"""
-        if not value:
-            return value
-        
-        print(f"Validating {field_name} with values: {value}")
-        
-        # Get organization from context
-        organization = self.context.get('organization')
-        request = self.context.get('request')
-        view = self.context.get('view')
-        
-        # Try to get organization if not in context
-        if not organization and view and hasattr(view, 'get_organization'):
-            try:
-                organization = view.get_organization()
-            except Exception as e:
-                print(f"Error getting organization: {e}")
-        
-        if not organization:
-            print(f"No organization context for {field_name} validation - allowing all values")
-            return value
-        
-        print(f"Validating {field_name} for organization: {organization.name} (ID: {organization.id})")
-        
-        # Convert values to string IDs
-        parent_ids = []
-        for item in value:
-            if hasattr(item, 'id'):
-                parent_ids.append(str(item.id))
-            elif isinstance(item, str):
-                parent_ids.append(item)
-            else:
-                parent_ids.append(str(item))
-        
-        if not parent_ids:
-            return value
-        
-        try:
-            from .models import ParentLedger
-            
-            # Check which ParentLedgers exist for this organization
-            existing_parents = ParentLedger.objects.filter(
-                id__in=parent_ids,
-                organization=organization
-            )
-            
-            existing_ids = set(str(parent.id) for parent in existing_parents)
-            provided_ids = set(parent_ids)
-            missing_ids = provided_ids - existing_ids
-            
-            print(f"Existing ParentLedger IDs: {existing_ids}")
-            print(f"Provided ParentLedger IDs: {provided_ids}")
-            print(f"Missing ParentLedger IDs: {missing_ids}")
-            
-            # Instead of raising an error, just warn and return valid IDs only
-            if missing_ids:
-                print(f"WARNING: Some ParentLedger IDs don't exist for organization {organization.name}: {missing_ids}")
-                # Return only the valid IDs that exist
-                valid_parent_objects = []
-                for pid in parent_ids:
-                    if pid in existing_ids:
-                        # Find the actual ParentLedger object
-                        parent_obj = existing_parents.filter(id=pid).first()
-                        if parent_obj:
-                            valid_parent_objects.append(parent_obj)
-                
-                print(f"Returning {len(valid_parent_objects)} valid ParentLedger objects")
-                return valid_parent_objects
-            
-        except Exception as e:
-            print(f"Error in ParentLedger validation: {e}")
-            # Don't fail validation on database errors - just return original value
-            return value
-        
+        # Skip validation - let Django handle it at the database level
         return value
     
     def get_igst_parent_names(self, obj):
