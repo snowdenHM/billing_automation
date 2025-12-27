@@ -163,9 +163,15 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
         organization = self.get_organization()
         print(f"Creating TallyConfig for organization: {organization}")
         
+        # Create a mutable copy of request.data
+        mutable_data = dict(request.data)
+        
         # Ensure tally_product_allow_sync is properly handled
-        if 'tally_product_allow_sync' not in request.data:
-            request.data['tally_product_allow_sync'] = False
+        if 'tally_product_allow_sync' not in mutable_data:
+            mutable_data['tally_product_allow_sync'] = False
+        
+        # Update request.data with our mutable copy
+        request._full_data = mutable_data
             
         return super().create(request, *args, **kwargs)
 
@@ -177,9 +183,15 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
         config_id = kwargs.get('pk')
         print(f"TallyConfigViewSet.update called for config ID: {config_id} with data: {request.data}")
         
+        # Create a mutable copy of request.data
+        mutable_data = dict(request.data)
+        
         # Ensure tally_product_allow_sync is properly handled
-        if 'tally_product_allow_sync' not in request.data:
-            request.data['tally_product_allow_sync'] = False
+        if 'tally_product_allow_sync' not in mutable_data:
+            mutable_data['tally_product_allow_sync'] = False
+        
+        # Update request.data with our mutable copy
+        request._full_data = mutable_data
             
         return super().update(request, *args, **kwargs)
 
