@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.db import models
+from django.contrib.auth.hashers import make_password
+from datetime import datetime
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -116,6 +118,105 @@ def organization_update_view(request, pk):
 
 
 # Member Management Views
+@extend_schema(
+    request=OrgMembershipSerializer,
+    responses=OrgMembershipSerializer,
+    tags=["Organizations"],
+    methods=["POST"]
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def organization_invite_user_view(request, org_id):
+    """
+    Invite a user to an organization by email. Creates user if doesn't exist,
+    then creates organization membership.
+    """
+    try:
+        organization = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user is admin of the organization
+    if not (request.user.is_staff or
+            organization.memberships.filter(
+                user=request.user,
+                role='ADMIN',
+                is_active=True
+            ).exists()):
+        raise PermissionDenied("You don't have permission to add members to this organization")
+
+    # Get user data from request
+    user_email = request.data.get('email')
+    user_role = request.data.get('role', 'MANAGER')
+    full_name = request.data.get('full_name', '')
+    
+    if not user_email:
+        return Response({"detail": "User email is required."}, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Check if user exists, create if not
+    try:
+        user_to_add = User.objects.get(email=user_email)
+        user_created = False
+    except User.DoesNotExist:
+        # Create new user with default password
+        current_year = datetime.now().year
+        default_password = f"Bill@{current_year}"
+        
+        # Extract first name from full_name if provided, else use email prefix
+        if full_name:
+            first_name = full_name.split()[0] if full_name.split() else full_name
+        else:
+            first_name = user_email.split('@')[0]
+        
+        user_to_add = User.objects.create(
+            email=user_email,
+            username=user_email,  # Use email as username
+            first_name=first_name,
+            full_name=full_name or first_name,
+            password=make_password(default_password),
+            is_active=True
+        )
+        user_created = True
+    
+    # Check if user is already a member
+    existing_membership = OrgMembership.objects.filter(
+        organization=organization,
+        user=user_to_add
+    ).first()
+    
+    if existing_membership:
+        if existing_membership.is_active:
+            return Response({"detail": "User is already a member of this organization."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            # Reactivate existing membership
+            existing_membership.is_active = True
+            existing_membership.role = user_role
+            existing_membership.save()
+            serializer = OrgMembershipSerializer(existing_membership, context={"request": request})
+            message = "User membership reactivated." + (f" New user created with default password." if user_created else "")
+            return Response({"data": serializer.data, "message": message, "user_created": user_created}, status=status.HTTP_200_OK)
+    
+    # Create new membership
+    membership = OrgMembership.objects.create(
+        organization=organization,
+        user=user_to_add,
+        role=user_role,
+        is_active=True
+    )
+    
+    serializer = OrgMembershipSerializer(membership, context={"request": request})
+    message = "User successfully added to organization."
+    if user_created:
+        message += f" New user created with default password: Bill@{current_year}"
+    
+    return Response({
+        "data": serializer.data, 
+        "message": message,
+        "user_created": user_created,
+        "default_password": f"Bill@{current_year}" if user_created else None
+    }, status=status.HTTP_201_CREATED)
+
+
 @extend_schema(
     request=OrgMembershipSerializer,
     responses=OrgMembershipSerializer,

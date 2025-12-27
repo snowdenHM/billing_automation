@@ -4,6 +4,7 @@ from .views import (
     organization_detail_view,
     organization_update_view,
     organization_add_member_view,
+    organization_invite_user_view,
     organization_members_view,
     organization_remove_member_view,
     organization_update_member_role_view,
@@ -35,6 +36,7 @@ urlpatterns = [
     # Member management endpoints
     path("org/<uuid:org_id>/members/", organization_members_view, name="org-members"),
     path("org/<uuid:org_id>/members/add/", organization_add_member_view, name="org-add-member"),
+    path("org/<uuid:org_id>/members/invite/", organization_invite_user_view, name="org-invite-user"),
     path("org/<uuid:org_id>/members/<uuid:membership_id>/", organization_remove_member_view, name="org-remove-member"),
     path("org/<uuid:org_id>/members/<uuid:membership_id>/role/", organization_update_member_role_view, name="org-update-member-role"),
 
