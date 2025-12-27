@@ -26,14 +26,14 @@ from .vendor_views_functional import (
 )
 from .bill_move_view import move_tally_bills_between_modules_view
 from .views import (
-    LedgerViewSet, ParentLedgerViewSet, MasterAPIView,
+    LedgerViewSet, TallyConfigViewSet, ParentLedgerViewSet, MasterAPIView,
     get_tally_config, create_or_update_tally_config
 )
 from .organization_data_views import organization_tally_data
 
 # Create router for the remaining viewsets
 router = DefaultRouter()
-# router.register(r'configs', TallyConfigViewSet, basename='tally-config')  # Removed - using function-based views
+router.register(r'configs', TallyConfigViewSet, basename='tally-config')
 router.register(r'parent-ledgers', ParentLedgerViewSet, basename='parent-ledger')
 
 app_name = 'tally'

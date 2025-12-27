@@ -232,6 +232,195 @@ def create_or_update_tally_config(request, org_id):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@extend_schema(tags=['Tally Config ViewSet'])
+class TallyConfigViewSet(viewsets.ModelViewSet):
+    """ViewSet for TallyConfig with ledgers action"""
+    serializer_class = TallyConfigSerializer
+    permission_classes = [OrganizationAPIKeyOrBearerToken]
+
+    def get_queryset(self):
+        """Filter queryset based on organization UUID with proper prefetching"""
+        organization = self.get_organization()
+        return TallyConfig.objects.filter(organization=organization).prefetch_related(
+            'igst_parents',
+            'cgst_parents',
+            'sgst_parents',
+            'vendor_parents',
+            'chart_of_accounts_parents',
+            'chart_of_accounts_expense_parents'
+        ).order_by('-id')
+
+    def get_organization(self):
+        """Get organization from URL UUID parameter or API key"""
+        # Extract organization UUID from URL
+        org_id = self.kwargs.get('org_id')
+        if org_id:
+            return get_object_or_404(Organization, id=org_id)
+
+        # If using API key, get organization from request (set by permission class)
+        if hasattr(self.request, 'organization'):
+            return self.request.organization
+
+        # Fallback to user's first organization
+        if hasattr(self.request.user, 'memberships'):
+            membership = self.request.user.memberships.first()
+            if membership:
+                return membership.organization
+
+        return None
+
+    @extend_schema(
+        summary="Get Ledgers by Parent Type",
+        description="Get all ledgers for a specific parent type from TallyConfig",
+        parameters=[
+            OpenApiParameter(
+                name='parent_type',
+                description='Type of parent ledger to retrieve',
+                required=True,
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY
+            ),
+            OpenApiParameter(
+                name='config_id',
+                description='Specific TallyConfig ID to get ledgers from (optional)',
+                required=False,
+                type=OpenApiTypes.UUID,
+                location=OpenApiParameter.QUERY
+            )
+        ],
+        responses={200: LedgerSerializer(many=True)},
+    )
+    @action(detail=False, methods=['get'], url_path='ledgers')
+    def get_ledgers_by_parent_type(self, request, org_id=None):
+        """Get ledgers by parent type from TallyConfig"""
+        parent_type = request.query_params.get('parent_type')
+        config_id = request.query_params.get('config_id')
+
+        if not parent_type:
+            return Response(
+                {'error': 'parent_type parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Valid parent types
+        valid_parent_types = [
+            'igst_parents',
+            'cgst_parents',
+            'sgst_parents',
+            'vendor_parents',
+            'chart_of_accounts_parents',
+            'chart_of_accounts_expense_parents'
+        ]
+
+        if parent_type not in valid_parent_types:
+            return Response(
+                {
+                    'error': f'Invalid parent_type. Must be one of: {", ".join(valid_parent_types)}'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        organization = self.get_organization()
+        if not organization:
+            return Response(
+                {'error': 'Organization not found'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Get TallyConfig - either specific one or first available
+            if config_id:
+                tally_config = TallyConfig.objects.get(
+                    id=config_id,
+                    organization=organization
+                )
+            else:
+                tally_config = TallyConfig.objects.filter(
+                    organization=organization
+                ).first()
+
+            if not tally_config:
+                return Response(
+                    {'error': 'No TallyConfig found for this organization'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Get the parent ledgers for the specified type
+            parent_ledgers = getattr(tally_config, parent_type).all()
+
+            if not parent_ledgers.exists():
+                return Response(
+                    {
+                        'message': f'No {parent_type} configured in TallyConfig',
+                        'config_id': str(tally_config.id),
+                        'parent_type': parent_type,
+                        'ledgers': []
+                    },
+                    status=status.HTTP_200_OK
+                )
+
+            # Get all ledgers under these parent ledgers
+            ledgers = Ledger.objects.filter(
+                parent__in=parent_ledgers,
+                organization=organization
+            ).select_related('parent').order_by('parent__parent', 'name')
+
+            # Group ledgers by parent for better organization
+            grouped_ledgers = {}
+            total_ledgers = 0
+
+            for ledger in ledgers:
+                parent_name = ledger.parent.parent
+                parent_id = str(ledger.parent.id)
+
+                if parent_name not in grouped_ledgers:
+                    grouped_ledgers[parent_name] = {
+                        'parent_id': parent_id,
+                        'parent_name': parent_name,
+                        'ledger_count': 0,
+                        'ledgers': []
+                    }
+
+                ledger_data = {
+                    'id': str(ledger.id),
+                    'master_id': ledger.master_id,
+                    'alter_id': ledger.alter_id,
+                    'name': ledger.name,
+                    'alias': ledger.alias,
+                    'opening_balance': str(ledger.opening_balance),
+                    'gst_in': ledger.gst_in,
+                    'company': ledger.company
+                }
+
+                grouped_ledgers[parent_name]['ledgers'].append(ledger_data)
+                grouped_ledgers[parent_name]['ledger_count'] += 1
+                total_ledgers += 1
+
+            response_data = {
+                'success': True,
+                'config_id': str(tally_config.id),
+                'parent_type': parent_type,
+                'total_parent_ledgers': parent_ledgers.count(),
+                'total_ledgers': total_ledgers,
+                'grouped_ledgers': grouped_ledgers
+            }
+
+            print(f"Retrieved {total_ledgers} ledgers for {parent_type} from {parent_ledgers.count()} parent ledgers")
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except TallyConfig.DoesNotExist:
+            return Response(
+                {'error': 'TallyConfig not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            print(f"Error retrieving ledgers by parent type: {str(e)}")
+            return Response(
+                {'error': f'Error retrieving ledgers: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 @extend_schema(tags=['Parent Ledgers'])
 class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet for getting ParentLedger options for TallyConfig forms"""
