@@ -46,13 +46,42 @@ class StockItemBulkCreateSerializer(serializers.Serializer):
 
 
 class TallyConfigSerializer(serializers.ModelSerializer):
+    # Read-only fields for displaying parent names in the frontend
+    igst_parent_names = serializers.SerializerMethodField()
+    cgst_parent_names = serializers.SerializerMethodField()
+    sgst_parent_names = serializers.SerializerMethodField()
+    vendor_parent_names = serializers.SerializerMethodField()
+    coa_parent_names = serializers.SerializerMethodField()
+    expense_coa_parent_names = serializers.SerializerMethodField()
+    
     class Meta:
         model = TallyConfig
         fields = [
             'id', 'tally_product_allow_sync', 'igst_parents', 'cgst_parents', 'sgst_parents',
-            'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents'
+            'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents',
+            'igst_parent_names', 'cgst_parent_names', 'sgst_parent_names', 
+            'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names'
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'igst_parent_names', 'cgst_parent_names', 'sgst_parent_names',
+                           'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names']
+    
+    def get_igst_parent_names(self, obj):
+        return [parent.parent for parent in obj.igst_parents.all() if parent.parent]
+    
+    def get_cgst_parent_names(self, obj):
+        return [parent.parent for parent in obj.cgst_parents.all() if parent.parent]
+    
+    def get_sgst_parent_names(self, obj):
+        return [parent.parent for parent in obj.sgst_parents.all() if parent.parent]
+    
+    def get_vendor_parent_names(self, obj):
+        return [parent.parent for parent in obj.vendor_parents.all() if parent.parent]
+    
+    def get_coa_parent_names(self, obj):
+        return [parent.parent for parent in obj.chart_of_accounts_parents.all() if parent.parent]
+    
+    def get_expense_coa_parent_names(self, obj):
+        return [parent.parent for parent in obj.chart_of_accounts_expense_parents.all() if parent.parent]
 
 
 class LedgerBulkCreateSerializer(serializers.Serializer):

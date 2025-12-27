@@ -1,5 +1,6 @@
 import re
 import os
+import json
 from datetime import datetime
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -18,6 +19,7 @@ from apps.common.permissions import IsOrgAdmin
 from apps.module.tally.models import Ledger, ParentLedger, TallyConfig, StockItem
 from apps.module.tally.serializers import (
     LedgerSerializer,
+    ParentLedgerSerializer,
     TallyConfigSerializer,
     LedgerBulkCreateSerializer,
     StockItemSerializer,
@@ -108,9 +110,118 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
         return None
 
     def perform_create(self, serializer):
-        """Set organization when creating TallyConfig"""
+        """Set organization when creating TallyConfig and ensure only one config per org"""
         organization = self.get_organization()
+        
+        # Check if config already exists for this organization
+        existing_config = TallyConfig.objects.filter(organization=organization).first()
+        if existing_config:
+            # If config exists, update it instead of creating new one
+            for field_name, field_value in serializer.validated_data.items():
+                if hasattr(existing_config, field_name):
+                    if field_name.endswith('_parents'):  # ManyToMany fields
+                        getattr(existing_config, field_name).set(field_value)
+                    else:
+                        setattr(existing_config, field_name, field_value)
+            existing_config.save()
+            # Update the serializer instance to return the updated config
+            serializer.instance = existing_config
+            return existing_config
+        
         serializer.save(organization=organization)
+
+    def dispatch(self, request, *args, **kwargs):
+        """Intercept all incoming calls for logging and debugging"""
+        # Log the incoming request
+        print(f"TallyConfigViewSet - {request.method} {request.get_full_path()}")
+        print(f"Request Headers: {dict(request.headers)}")
+        print(f"Request Data: {request.data if hasattr(request, 'data') else 'No data'}")
+
+        # Get organization info for debugging
+        try:
+            org = self.get_organization()
+            print(f"Organization: {org.name if org else 'None'} (ID: {org.id if org else 'None'})")
+        except Exception as e:
+            print(f"Error getting organization: {str(e)}")
+
+        return super().dispatch(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="List Tally Configurations",
+        description="Get all Tally configurations for the organization",
+    )
+    def list(self, request, *args, **kwargs):
+        print(f"TallyConfigViewSet.list called for org: {self.get_organization()}")
+        return super().list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Create Tally Configuration",
+        description="Create a new Tally configuration for mapping parent ledgers to different GST types and categories",
+    )
+    def create(self, request, *args, **kwargs):
+        print(f"TallyConfigViewSet.create called with data: {request.data}")
+        organization = self.get_organization()
+        print(f"Creating TallyConfig for organization: {organization}")
+        
+        # Ensure tally_product_allow_sync is properly handled
+        if 'tally_product_allow_sync' not in request.data:
+            request.data['tally_product_allow_sync'] = False
+            
+        return super().create(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Update Tally Configuration",
+        description="Update a Tally configuration completely",
+    )
+    def update(self, request, *args, **kwargs):
+        config_id = kwargs.get('pk')
+        print(f"TallyConfigViewSet.update called for config ID: {config_id} with data: {request.data}")
+        
+        # Ensure tally_product_allow_sync is properly handled
+        if 'tally_product_allow_sync' not in request.data:
+            request.data['tally_product_allow_sync'] = False
+            
+        return super().update(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Partially Update Tally Configuration",
+        description="Partially update a Tally configuration",
+    )
+    def partial_update(self, request, *args, **kwargs):
+        config_id = kwargs.get('pk')
+        print(f"TallyConfigViewSet.partial_update called for config ID: {config_id} with data: {request.data}")
+        return super().partial_update(request, *args, **kwargs)
+
+
+@extend_schema(tags=['Parent Ledgers'])
+class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for getting ParentLedger options for TallyConfig forms"""
+    serializer_class = ParentLedgerSerializer
+    permission_classes = [OrganizationAPIKeyOrBearerToken]
+    
+    def get_queryset(self):
+        """Filter parent ledgers by organization"""
+        organization = self.get_organization()
+        return ParentLedger.objects.filter(organization=organization).order_by('parent')
+    
+    def get_organization(self):
+        """Get organization from URL UUID parameter or API key"""
+        # Extract organization UUID from URL
+        org_id = self.kwargs.get('org_id')
+        if org_id:
+            return get_object_or_404(Organization, id=org_id)
+
+        # If using API key, get organization from request (set by permission class)
+        if hasattr(self.request, 'organization'):
+            return self.request.organization
+
+        # Fallback to user's first organization
+        if hasattr(self.request.user, 'memberships'):
+            membership = self.request.user.memberships.first()
+            if membership:
+                return membership.organization
+
+        return None
 
     def dispatch(self, request, *args, **kwargs):
         """Intercept all incoming calls for logging and debugging"""
