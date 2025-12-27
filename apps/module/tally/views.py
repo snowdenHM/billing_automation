@@ -74,11 +74,10 @@ class OrganizationAPIKeyOrBearerToken(BasePermission):
 
 @extend_schema(tags=['Tally Config'])
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])  # You can change this to OrganizationAPIKeyOrBearerToken if needed
+@permission_classes([OrganizationAPIKeyOrBearerToken])  # Use same permission as ViewSet
 def get_tally_config(request, org_id):
     """Get tally configuration for organization"""
-    if request.method != 'GET':
-        return Response({'error': 'Method not allowed'}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+    print(f"get_tally_config called - Method: {request.method}, org_id: {org_id}")
     
     try:
         print(f"Getting TallyConfig for organization: {org_id}")
@@ -103,7 +102,7 @@ def get_tally_config(request, org_id):
                 'success': False,
                 'message': 'No tally configuration found for this organization',
                 'data': None
-            }, status=status.HTTP_404_NOT_FOUND)
+            }, status=status.HTTP_200_OK)  # Return 200 with null data instead of 404
         
         # Serialize the config
         serializer = TallyConfigSerializer(tally_config, context={'request': request, 'organization': organization})
@@ -130,11 +129,10 @@ def get_tally_config(request, org_id):
 
 @extend_schema(tags=['Tally Config'])
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])  # You can change this to OrganizationAPIKeyOrBearerToken if needed
+@permission_classes([OrganizationAPIKeyOrBearerToken])  # Use same permission as ViewSet
 def create_or_update_tally_config(request, org_id):
     """Create or update tally configuration for organization"""
-    if request.method != 'POST':
-        return Response({'error': 'Method not allowed'}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+    print(f"create_or_update_tally_config called - Method: {request.method}, org_id: {org_id}")
     
     try:
         print(f"Creating/updating TallyConfig for organization: {org_id}")

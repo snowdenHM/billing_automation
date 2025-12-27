@@ -39,7 +39,7 @@ router.register(r'parent-ledgers', ParentLedgerViewSet, basename='parent-ledger'
 app_name = 'tally'
 
 urlpatterns = [
-    # Organization-scoped endpoints (UUID only)
+    # Organization-scoped endpoints (UUID only)  
     path('org/<uuid:org_id>/', include([
         # New function-based Tally Config endpoints
         path('config/', get_tally_config, name='get-tally-config'),
