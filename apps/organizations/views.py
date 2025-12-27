@@ -355,6 +355,76 @@ def organization_remove_member_view(request, org_id, membership_id):
 
 
 @extend_schema(
+    responses={"204": None},
+    tags=["Organizations"],
+    methods=["DELETE"]
+)
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def organization_delete_member_view(request, org_id, membership_id):
+    """
+    Delete a member from the organization and optionally delete user account.
+    Query params:
+    - delete_user: 'true' to also delete the user account (default: false)
+    """
+    try:
+        organization = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check if user is admin of the organization
+    if not (request.user.is_staff or
+            organization.memberships.filter(
+                user=request.user,
+                role='ADMIN',
+                is_active=True
+            ).exists()):
+        raise PermissionDenied("You don't have permission to delete members from this organization")
+
+    try:
+        membership = OrgMembership.objects.get(
+            organization=organization,
+            id=membership_id,
+            is_active=True
+        )
+    except OrgMembership.DoesNotExist:
+        return Response({"detail": "Membership not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Prevent removing the organization owner
+    if membership.user == organization.owner:
+        return Response(
+            {"detail": "Cannot delete organization owner"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Get the user before deleting membership
+    user_to_delete = membership.user
+    delete_user_account = request.query_params.get('delete_user', 'false').lower() == 'true'
+    
+    # Delete the membership
+    membership.delete()
+    
+    response_message = "Member removed from organization."
+    
+    # Optionally delete user account if requested and user has no other active memberships
+    if delete_user_account:
+        # Check if user has other active memberships
+        other_memberships = OrgMembership.objects.filter(
+            user=user_to_delete,
+            is_active=True
+        ).exists()
+        
+        if not other_memberships:
+            # Delete user account
+            user_to_delete.delete()
+            response_message += " User account also deleted."
+        else:
+            response_message += " User account kept due to other active memberships."
+    
+    return Response({"message": response_message}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
     request=OrgMembershipUpdateSerializer,
     responses=OrgMembershipSerializer,
     tags=["Organizations"],

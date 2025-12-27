@@ -6,7 +6,7 @@ from .views import (
     organization_add_member_view,
     organization_invite_user_view,
     organization_members_view,
-    organization_remove_member_view,
+    organization_remove_member_view,    organization_delete_member_view,    organization_delete_member_view,
     organization_update_member_role_view,
     organization_issue_api_key_view,
     organization_list_api_keys_view,
@@ -38,6 +38,7 @@ urlpatterns = [
     path("org/<uuid:org_id>/members/add/", organization_add_member_view, name="org-add-member"),
     path("org/<uuid:org_id>/members/invite/", organization_invite_user_view, name="org-invite-user"),
     path("org/<uuid:org_id>/members/<uuid:membership_id>/", organization_remove_member_view, name="org-remove-member"),
+    path("org/<uuid:org_id>/members/<uuid:membership_id>/delete/", organization_delete_member_view, name="org-delete-member"),
     path("org/<uuid:org_id>/members/<uuid:membership_id>/role/", organization_update_member_role_view, name="org-update-member-role"),
 
     # API Key management endpoints
