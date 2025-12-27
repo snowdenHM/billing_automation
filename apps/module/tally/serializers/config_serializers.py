@@ -70,6 +70,7 @@ class TallyConfigSerializer(serializers.ModelSerializer):
         model = TallyConfig
         fields = [
             'id',
+            'tally_product_allow_sync',
             # ManyToMany fields - now properly handled with PrimaryKeyRelatedField
             'igst_parents', 'cgst_parents', 'sgst_parents',
             'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents',
