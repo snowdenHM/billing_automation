@@ -673,6 +673,68 @@ def membership_delete_view(request, pk):
 )
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+def organization_create_with_module_view(request):
+    """
+    Create organization, add user as admin member, and enable specified module.
+    All in one shot - three operations combined.
+    """
+    # Validate required data
+    module_code = request.data.get('module')
+    if not module_code:
+        return Response({"detail": "Module code is required (tally or zoho)."}, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Check if module exists
+    try:
+        module = Module.objects.get(code=module_code)
+    except Module.DoesNotExist:
+        return Response({"detail": "Invalid module code."}, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Create organization
+    serializer = OrganizationSerializer(
+        data={**request.data, "owner_email": request.user.email},
+        context={"request": request}
+    )
+    serializer.is_valid(raise_exception=True)
+    
+    organization = serializer.save(
+        created_by=request.user,
+        owner=request.user
+    )
+    
+    # Add user as admin member
+    membership = OrgMembership.objects.create(
+        organization=organization,
+        user=request.user,
+        role=OrgMembership.ADMIN,
+        is_active=True
+    )
+    
+    # Enable the specified module
+    org_module = OrganizationModule.objects.create(
+        organization=organization,
+        module=module,
+        is_active=True
+    )
+    
+    # Return response with all created data
+    response_data = {
+        "organization": OrganizationSerializer(organization, context={"request": request}).data,
+        "membership": OrgMembershipSerializer(membership, context={"request": request}).data,
+        "enabled_module": OrganizationModuleSerializer(org_module, context={"request": request}).data,
+        "message": f"Organization created successfully with {module.name} module enabled."
+    }
+    
+    return Response({"data": response_data}, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(
+    request=OrganizationSerializer,
+    responses=OrganizationSerializer,
+    tags=["Organization Onboarding"],
+    methods=["POST"]
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def organization_onboarding_create_view(request):
     """
     Create a new organization with the requesting user as admin member.

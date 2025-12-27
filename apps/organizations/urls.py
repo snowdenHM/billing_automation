@@ -15,6 +15,7 @@ from .views import (
     membership_detail_view,
     membership_update_view,
     membership_delete_view,
+    organization_create_with_module_view,
     organization_onboarding_create_view,
     organization_onboarding_enable_module_view,
 )
@@ -54,6 +55,7 @@ urlpatterns = [
     path("memberships/<uuid:pk>/delete/", membership_delete_view, name="membership-delete"),
 
     # Onboarding endpoints
+    path("org/create-with-module/", organization_create_with_module_view, name="org-create-with-module"),
     path("org/onboarding/create/", organization_onboarding_create_view, name="org-onboarding-create"),
     path("org/onboarding/<uuid:org_id>/enable-module/", organization_onboarding_enable_module_view, name="org-onboarding-enable-module"),
 ]
