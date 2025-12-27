@@ -113,22 +113,35 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
         """Set organization when creating TallyConfig and ensure only one config per org"""
         organization = self.get_organization()
         
+        if not organization:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({
+                "organization": "Unable to determine organization for TallyConfig creation. Ensure org_id is provided in URL."
+            })
+        
+        print(f"Creating/updating TallyConfig for organization: {organization.name} (ID: {organization.id})")
+        
         # Check if config already exists for this organization
         existing_config = TallyConfig.objects.filter(organization=organization).first()
         if existing_config:
+            print(f"Updating existing TallyConfig (ID: {existing_config.id})")
             # If config exists, update it instead of creating new one
             for field_name, field_value in serializer.validated_data.items():
                 if hasattr(existing_config, field_name):
-                    if field_name.endswith('_parents'):  # ManyToMany fields
+                    field_obj = existing_config._meta.get_field(field_name)
+                    if field_obj.many_to_many:  # ManyToMany fields
+                        print(f"Setting ManyToMany field {field_name} with {len(field_value)} items")
                         getattr(existing_config, field_name).set(field_value)
                     else:
+                        print(f"Setting field {field_name} = {field_value}")
                         setattr(existing_config, field_name, field_value)
             existing_config.save()
             # Update the serializer instance to return the updated config
             serializer.instance = existing_config
             return existing_config
-        
-        serializer.save(organization=organization)
+        else:
+            print("Creating new TallyConfig")
+            serializer.save(organization=organization)
 
     def dispatch(self, request, *args, **kwargs):
         """Intercept all incoming calls for logging and debugging"""
@@ -162,6 +175,26 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
         print(f"TallyConfigViewSet.create called with data: {request.data}")
         organization = self.get_organization()
         print(f"Creating TallyConfig for organization: {organization}")
+        
+        if not organization:
+            return Response(
+                {"error": "Unable to determine organization from request"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Debug the parent ledger data being sent
+        for field in ['igst_parents', 'cgst_parents', 'sgst_parents', 'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents']:
+            if field in request.data:
+                print(f"{field}: {request.data[field]}")
+                # Check if these parent ledger IDs exist for this organization
+                from .models import ParentLedger
+                parent_ids = request.data[field]
+                if parent_ids:
+                    existing = ParentLedger.objects.filter(
+                        id__in=parent_ids, 
+                        organization=organization
+                    ).values_list('id', 'parent')
+                    print(f"  Found {len(existing)} matching parent ledgers: {list(existing)}")
         
         # Create a mutable copy of request.data
         mutable_data = dict(request.data)
