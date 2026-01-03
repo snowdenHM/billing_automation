@@ -542,6 +542,7 @@ def process_analysis_data(bill, json_data, organization):
         # Extract required fields with safe access
         invoice_number = str(relevant_data.get('invoiceNumber', '')).strip()
         date_issued = str(relevant_data.get('dateIssued', ''))
+        due_date_str = str(relevant_data.get('dueDate', ''))
 
         # Handle 'from' field safely
         from_data = relevant_data.get('from', {})
@@ -552,6 +553,7 @@ def process_analysis_data(bill, json_data, organization):
 
         # Parse date with multiple format support
         bill_date = parse_bill_date(date_issued)
+        due_date = parse_bill_date(due_date_str) if due_date_str else None
 
         # Find vendor ledger
         vendor = find_vendor_ledger(company_name, organization)
