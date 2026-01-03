@@ -131,7 +131,7 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
         model = TallyExpenseAnalyzedBill
         fields = [
             'id', 'selected_bill', 'selected_bill_name', 'vendor', 'vendor_name',
-            'voucher', 'bill_no', 'bill_date', 'total', 'vendor_amount', 'vendor_debit_or_credit',
+            'voucher', 'bill_no', 'bill_date', 'due_date', 'total', 'vendor_amount', 'vendor_debit_or_credit',
             'igst', 'igst_taxes', 'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes', 
             'tds', 'tds_taxes', 'note', 'consolidate', 'products', 'created_at'
         ]
