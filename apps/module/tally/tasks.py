@@ -58,7 +58,7 @@ def get_job_status(job_id):
         return None
 
 
-def process_vendor_bill_analysis(bill_id):
+def process_vendor_bill_analysis(bill_id, **kwargs):
     """
     Background task to analyze vendor bill and check for duplicates
     """
@@ -149,7 +149,7 @@ def process_vendor_bill_analysis(bill_id):
         raise
 
 
-def process_expense_bill_analysis(bill_id):
+def process_expense_bill_analysis(bill_id, **kwargs):
     """
     Background task to analyze expense bill and check for duplicates
     """
