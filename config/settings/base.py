@@ -51,6 +51,7 @@ THIRD_PARTY_APPS = [
     "corsheaders",
     "rest_framework_api_key",
     "waffle",
+    "django_rq",
 ]
 
 LOCAL_APPS = [
@@ -101,6 +102,33 @@ DATABASES = {
         "DATABASE_URL",
         default="sqlite:///" + str(BASE_DIR / "db.sqlite3"),
     )
+}
+
+# ------------------------------------------------------------
+# Django-RQ Configuration
+# ------------------------------------------------------------
+RQ_QUEUES = {
+    'default': {
+        'HOST': env('REDIS_HOST', default='localhost'),
+        'PORT': env.int('REDIS_PORT', default=6379),
+        'DB': env.int('REDIS_DB', default=0),
+        'PASSWORD': env('REDIS_PASSWORD', default=''),
+        'DEFAULT_TIMEOUT': 360,
+    },
+    'high': {
+        'HOST': env('REDIS_HOST', default='localhost'),
+        'PORT': env.int('REDIS_PORT', default=6379),
+        'DB': env.int('REDIS_DB', default=0),
+        'PASSWORD': env('REDIS_PASSWORD', default=''),
+        'DEFAULT_TIMEOUT': 500,
+    },
+    'low': {
+        'HOST': env('REDIS_HOST', default='localhost'),
+        'PORT': env.int('REDIS_PORT', default=6379),
+        'DB': env.int('REDIS_DB', default=0),
+        'PASSWORD': env('REDIS_PASSWORD', default=''),
+        'DEFAULT_TIMEOUT': 500,
+    }
 }
 
 # ------------------------------------------------------------

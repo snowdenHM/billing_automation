@@ -584,6 +584,7 @@ def process_analysis_data(bill, json_data, organization):
                 vendor=vendor,
                 bill_no=invoice_number,
                 bill_date=bill_date,
+                due_date=due_date,
                 igst=igst_rounded,
                 cgst=cgst_rounded,
                 sgst=sgst_rounded,
@@ -1065,106 +1066,49 @@ def vendor_bills_upload(request, org_id):
                     )
                     created_bills.append(bill)
 
-        # Auto-analyze uploaded bills and check for duplicates
-        analysis_results = []
-        all_duplicate_warnings = []
-
+        # Start background processing for all created bills
+        job_results = []
         for bill in created_bills:
-            # Auto-analyze the bill if it's in Draft status
-            if bill.status == TallyVendorBill.BillStatus.DRAFT:
-                try:
-                    logger.info(f"Auto-analyzing Tally vendor bill: {bill.bill_munshi_name}")
-
-                    # Analyze with AI - this returns a TallyVendorAnalyzedBill instance
-                    analyzed_bill_instance = analyze_bill_with_ai(bill, organization)
-
-                    if analyzed_bill_instance:
-                        # Check for duplicates after analysis
-                        is_duplicate, duplicate_bills, max_similarity = check_duplicate_tally_vendor_bill(bill, organization)
-
-                        analysis_data = {
-                            'bill_id': str(bill.id),
-                            'bill_name': bill.bill_munshi_name,
-                            'analysis_successful': True,
-                            'duplicate_detected': is_duplicate
-                        }
-
-                        if is_duplicate:
-                            duplicate_warnings = []
-                            for dup in duplicate_bills:
-                                duplicate_warnings.append({
-                                    "duplicate_bill_id": str(dup['bill'].id),
-                                    "duplicate_bill_name": dup['bill'].bill_munshi_name,
-                                    "similarity_score": round(dup['similarity_score'], 2),
-                                    "match_reasons": dup['match_reasons'],
-                                    "invoice_number": dup['invoice_number'],
-                                    "vendor_name": dup['vendor_name'],
-                                    "total": dup['total'],
-                                    "date": dup['date'],
-                                    "status": dup['bill'].status
-                                })
-
-                            analysis_data.update({
-                                "duplicate_count": len(duplicate_bills),
-                                "max_similarity": round(max_similarity, 2),
-                                "duplicate_bills": duplicate_warnings,
-                                "warning_message": f"⚠️ DUPLICATE DETECTED: Tally Vendor Bill '{bill.bill_munshi_name}' appears to be {round(max_similarity, 1)}% similar to {len(duplicate_bills)} existing bill(s)."
-                            })
-
-                            all_duplicate_warnings.extend(duplicate_warnings)
-                            logger.warning(f"Tally vendor duplicate detected for {bill.bill_munshi_name} - {len(duplicate_bills)} similar bills found")
-
-                        analysis_results.append(analysis_data)
-                        logger.info(f"Successfully analyzed Tally vendor bill: {bill.bill_munshi_name}")
-                    else:
-                        analysis_results.append({
-                            'bill_id': str(bill.id),
-                            'bill_name': bill.bill_munshi_name,
-                            'analysis_successful': False,
-                            'error': 'Analysis failed - no analyzed bill created',
-                            'duplicate_detected': False
-                        })
-
-                except Exception as analysis_error:
-                    logger.error(f"Auto-analysis failed for Tally vendor bill {bill.bill_munshi_name}: {str(analysis_error)}")
-                    analysis_results.append({
-                        'bill_id': str(bill.id),
-                        'bill_name': bill.bill_munshi_name,
-                        'analysis_successful': False,
-                        'error': str(analysis_error),
-                        'duplicate_detected': False
-                    })
+            try:
+                # Import here to avoid circular imports
+                from .tasks import enqueue_vendor_bill_processing
+                job = enqueue_vendor_bill_processing(str(bill.id))
+                bill.job_id = job.id
+                bill.is_processing = True
+                bill.save(update_fields=['job_id', 'is_processing'])
+                
+                job_results.append({
+                    'bill_id': str(bill.id),
+                    'bill_name': bill.bill_munshi_name,
+                    'job_id': job.id,
+                    'status': 'queued_for_processing'
+                })
+                logger.info(f"Queued vendor bill {bill.bill_munshi_name} for background processing")
+            except Exception as e:
+                logger.error(f"Failed to queue vendor bill {bill.bill_munshi_name}: {str(e)}")
+                job_results.append({
+                    'bill_id': str(bill.id),
+                    'bill_name': bill.bill_munshi_name,
+                    'job_id': None,
+                    'status': 'failed_to_queue',
+                    'error': str(e)
+                })
 
         response_serializer = TallyVendorBillSerializer(created_bills, many=True, context={'request': request})
 
         response_data = {
-            'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} bill(s)',
+            'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} bill(s). Processing started in background.',
             'files_uploaded': len(files),
             'bills_created': len(created_bills),
             'bills': response_serializer.data,
-            'auto_analysis_results': analysis_results
+            'processing_jobs': job_results,
+            'note': 'Bills are being processed in the background. Use the bill status endpoint to check progress.'
         }
 
-        # Add comprehensive warnings
-        warnings_count = len(upload_warnings) + len(all_duplicate_warnings)
-        if upload_warnings or all_duplicate_warnings:
-            warning_messages = []
-
-            if upload_warnings:
-                warning_messages.append(f"📁 FILE WARNING: {len(upload_warnings)} file(s) may be duplicates based on filename/size")
-                response_data['upload_warnings'] = upload_warnings
-
-            if all_duplicate_warnings:
-                warning_messages.append(f"🔍 CONTENT WARNING: {len(all_duplicate_warnings)} duplicate(s) detected after analyzing Tally vendor bill content")
-                response_data['duplicate_warnings'] = all_duplicate_warnings
-
-            response_data.update({
-                'total_warnings': warnings_count,
-                'warning_message': " | ".join(warning_messages) + " | Please review carefully before proceeding."
-            })
-
-            logger.warning(f"Tally vendor bills - Total warnings generated: {warnings_count} (Upload: {len(upload_warnings)}, Content: {len(all_duplicate_warnings)})")
-
+        # Add file-level warnings if any
+        if upload_warnings:
+            response_data['upload_warnings'] = upload_warnings
+            response_data['warning_message'] = f"📁 FILE WARNING: {len(upload_warnings)} file(s) may be duplicates based on filename/size"
         return Response(response_data, status=status.HTTP_201_CREATED)
 
     except Exception as e:
@@ -1174,6 +1118,64 @@ def vendor_bills_upload(request, org_id):
             'message': 'There was an error processing the uploaded files. This could be due to file corruption, unsupported format, or server issues.',
             'details': str(e),
             'error_code': 'UPLOAD_PROCESSING_FAILED'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ✅
+@extend_schema(
+    summary="Check Bill Processing Status",
+    description="Check the status of background processing for a vendor bill",
+    responses={200: "Bill processing status information"},
+    tags=['Tally Vendor Bills']
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def vendor_bill_processing_status(request, org_id, bill_id):
+    """Check the processing status of a vendor bill"""
+    organization = get_organization_from_request(request, org_id)
+    if not organization:
+        return Response({
+            'error': 'Organization not found',
+            'message': f'Organization with ID {org_id} not found or access denied.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
+        
+        status_data = {
+            'bill_id': str(bill.id),
+            'bill_name': bill.bill_munshi_name,
+            'is_processing': bill.is_processing,
+            'processing_error': bill.processing_error,
+            'status': bill.status,
+            'is_duplicate': bill.is_duplicate,
+            'duplicate_description': bill.duplicate_description,
+            'duplicate_score': bill.duplicate_score,
+            'duplicate_matched_bills': bill.duplicate_matched_bills
+        }
+        
+        # Get job status if job_id exists
+        if bill.job_id:
+            # Import here to avoid circular imports
+            from .tasks import get_job_status
+            job_status = get_job_status(bill.job_id)
+            if job_status:
+                status_data['job_status'] = job_status
+            else:
+                status_data['job_status'] = {'status': 'unknown', 'message': 'Job status unavailable'}
+        
+        return Response(status_data)
+        
+    except TallyVendorBill.DoesNotExist:
+        return Response({
+            'error': 'Bill not found',
+            'message': f'Vendor bill with ID {bill_id} not found in organization {org_id}.'
+        }, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error checking vendor bill processing status: {str(e)}")
+        return Response({
+            'error': 'Status check failed',
+            'message': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

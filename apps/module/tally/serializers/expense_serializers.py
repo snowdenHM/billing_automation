@@ -24,7 +24,9 @@ class TallyExpenseBillSerializer(serializers.ModelSerializer):
         model = TallyExpenseBill
         fields = [
             'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
-            'status', 'process', 'uploaded_by', 'uploaded_by_name', 'created_at', 'updated_at'
+            'status', 'process', 'uploaded_by', 'uploaded_by_name', 
+            'is_duplicate', 'duplicate_description', 'duplicate_score', 'duplicate_matched_bills',
+            'is_processing', 'processing_error', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'bill_munshi_name', 'file', 'uploaded_by', 'uploaded_by_name', 'created_at', 'updated_at']
 
