@@ -102,14 +102,14 @@ def process_vendor_bill_analysis(bill_id, **kwargs):
                 if is_duplicate:
                     # Create detailed duplicate description
                     duplicate_info = []
-                    for dup_bill in duplicate_bills[:3]:  # Limit to top 3 matches
-                        dup_data = dup_bill.analysed_data or {}
+                    for dup_data in duplicate_bills[:3]:  # Limit to top 3 matches
                         duplicate_info.append({
-                            'bill_id': str(dup_bill.id),
-                            'invoice_number': dup_data.get('invoiceNumber', 'N/A'),
-                            'vendor_name': dup_data.get('from', {}).get('name', 'N/A'),
+                            'bill_id': str(dup_data['bill'].id),
+                            'invoice_number': dup_data.get('invoice_number', 'N/A'),
+                            'vendor_name': dup_data.get('vendor_name', 'N/A'),
                             'total': dup_data.get('total', 0),
-                            'date': dup_data.get('dateIssued', 'N/A')
+                            'date': dup_data.get('date', 'N/A'),
+                            'similarity_score': dup_data.get('similarity_score', 0)
                         })
                     
                     bill.duplicate_matched_bills = duplicate_info
@@ -193,14 +193,14 @@ def process_expense_bill_analysis(bill_id, **kwargs):
                 if is_duplicate:
                     # Create detailed duplicate description
                     duplicate_info = []
-                    for dup_bill in duplicate_bills[:3]:  # Limit to top 3 matches
-                        dup_data = dup_bill.analysed_data or {}
+                    for dup_data in duplicate_bills[:3]:  # Limit to top 3 matches
                         duplicate_info.append({
-                            'bill_id': str(dup_bill.id),
-                            'bill_number': dup_data.get('billNumber', 'N/A'),
-                            'vendor_name': dup_data.get('from', {}).get('name', 'N/A'),
+                            'bill_id': str(dup_data['bill'].id),
+                            'invoice_number': dup_data.get('invoice_number', 'N/A'),
+                            'vendor_name': dup_data.get('vendor_name', 'N/A'),
                             'total': dup_data.get('total', 0),
-                            'date': dup_data.get('dateIssued', 'N/A')
+                            'date': dup_data.get('date', 'N/A'),
+                            'similarity_score': dup_data.get('similarity_score', 0)
                         })
                     
                     bill.duplicate_matched_bills = duplicate_info
