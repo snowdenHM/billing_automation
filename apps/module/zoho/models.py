@@ -172,7 +172,7 @@ class ZohoVendor(BaseTeamModel):
     Used for associating bills with specific vendors.
     """
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
-    contactId = models.CharField(max_length=100, unique=True)
+    contactId = models.CharField(max_length=100)
     companyName = models.CharField(max_length=100)
     gstNo = models.CharField(max_length=30)
     gst_treatment = models.CharField(max_length=100, null=True, blank=True)
