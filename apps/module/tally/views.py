@@ -426,7 +426,8 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet for getting ParentLedger options for TallyConfig forms"""
     serializer_class = ParentLedgerSerializer
     permission_classes = [OrganizationAPIKeyOrBearerToken]
-    
+    pagination_class = None  # Disable pagination to return all data
+
     def get_organization(self):
         """Get organization from URL UUID parameter or API key"""
         # Extract organization UUID from URL
