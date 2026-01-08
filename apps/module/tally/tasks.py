@@ -103,8 +103,24 @@ def process_vendor_bill_analysis(bill_id, **kwargs):
                     # Create detailed duplicate description
                     duplicate_info = []
                     for dup_data in duplicate_bills[:3]:  # Limit to top 3 matches
+                        duplicate_bill = dup_data['bill']
+                        # Build bill URL
+                        bill_url = None
+                        if duplicate_bill.file:
+                            try:
+                                # Construct the full URL for the bill file
+                                from django.conf import settings
+                                if hasattr(settings, 'SITE_URL'):
+                                    bill_url = f"{settings.SITE_URL.rstrip('/')}{duplicate_bill.file.url}"
+                                else:
+                                    bill_url = duplicate_bill.file.url
+                            except Exception:
+                                bill_url = None
+
                         duplicate_info.append({
-                            'bill_id': str(dup_data['bill'].id),
+                            'bill_id': str(duplicate_bill.id),
+                            'bill_name': duplicate_bill.bill_munshi_name,
+                            'bill_url': bill_url,
                             'invoice_number': dup_data.get('invoice_number', 'N/A'),
                             'vendor_name': dup_data.get('vendor_name', 'N/A'),
                             'total': dup_data.get('total', 0),
@@ -194,8 +210,24 @@ def process_expense_bill_analysis(bill_id, **kwargs):
                     # Create detailed duplicate description
                     duplicate_info = []
                     for dup_data in duplicate_bills[:3]:  # Limit to top 3 matches
+                        duplicate_bill = dup_data['bill']
+                        # Build bill URL
+                        bill_url = None
+                        if duplicate_bill.file:
+                            try:
+                                # Construct the full URL for the bill file
+                                from django.conf import settings
+                                if hasattr(settings, 'SITE_URL'):
+                                    bill_url = f"{settings.SITE_URL.rstrip('/')}{duplicate_bill.file.url}"
+                                else:
+                                    bill_url = duplicate_bill.file.url
+                            except Exception:
+                                bill_url = None
+
                         duplicate_info.append({
-                            'bill_id': str(dup_data['bill'].id),
+                            'bill_id': str(duplicate_bill.id),
+                            'bill_name': duplicate_bill.bill_munshi_name,
+                            'bill_url': bill_url,
                             'invoice_number': dup_data.get('invoice_number', 'N/A'),
                             'vendor_name': dup_data.get('vendor_name', 'N/A'),
                             'total': dup_data.get('total', 0),

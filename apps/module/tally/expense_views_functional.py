@@ -1258,16 +1258,26 @@ def expense_bill_analyze(request, org_id):
         if is_duplicate:
             duplicate_warnings = []
             for dup in duplicate_bills:
+                duplicate_bill = dup['bill']
+                # Build bill URL
+                bill_url = None
+                if duplicate_bill.file:
+                    try:
+                        bill_url = request.build_absolute_uri(duplicate_bill.file.url)
+                    except Exception:
+                        bill_url = duplicate_bill.file.url
+
                 duplicate_warnings.append({
-                    "duplicate_bill_id": str(dup['bill'].id),
-                    "duplicate_bill_name": dup['bill'].bill_munshi_name,
+                    "duplicate_bill_id": str(duplicate_bill.id),
+                    "duplicate_bill_name": duplicate_bill.bill_munshi_name,
+                    "duplicate_bill_url": bill_url,
                     "similarity_score": round(dup['similarity_score'], 2),
                     "match_reasons": dup['match_reasons'],
                     "invoice_number": dup['invoice_number'],
                     "vendor_name": dup['vendor_name'],
                     "total": dup['total'],
                     "date": dup['date'],
-                    "status": dup['bill'].status
+                    "status": duplicate_bill.status
                 })
 
             response_data.update({
