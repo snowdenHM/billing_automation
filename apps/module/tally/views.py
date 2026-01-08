@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, BasePermission, AllowAny
 from rest_framework_api_key.permissions import HasAPIKey
+from rest_framework.pagination import PageNumberPagination
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, OpenApiParameter
@@ -25,6 +26,23 @@ from apps.module.tally.serializers import (
     StockItemSerializer,
     StockItemBulkCreateSerializer
 )
+
+
+class NoPagination(PageNumberPagination):
+    """Custom pagination that returns all results but maintains the paginated response format"""
+    def paginate_queryset(self, queryset, request, view=None):
+        # Don't actually paginate - just store the full queryset
+        self.queryset = queryset
+        return list(queryset)
+
+    def get_paginated_response(self, data):
+        # Return all data in the same format as paginated response but without pagination metadata
+        return Response({
+            'count': len(data),
+            'next': None,
+            'previous': None,
+            'results': data
+        })
 
 
 class OrganizationAPIKeyOrBearerToken(BasePermission):
@@ -426,7 +444,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet for getting ParentLedger options for TallyConfig forms"""
     serializer_class = ParentLedgerSerializer
     permission_classes = [OrganizationAPIKeyOrBearerToken]
-    pagination_class = None  # Disable pagination to return all data
+    pagination_class = NoPagination  # Custom pagination that returns all data but keeps results format
 
     def get_organization(self):
         """Get organization from URL UUID parameter or API key"""
