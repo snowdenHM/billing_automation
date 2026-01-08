@@ -82,12 +82,18 @@ def process_vendor_bill_analysis(bill_id, **kwargs):
             analyzed_bill = analyze_bill_with_ai(bill, organization)
             logger.info(f"AI analysis completed for vendor bill {bill_id}")
         except Exception as e:
-            logger.error(f"AI analysis failed for vendor bill {bill_id}: {str(e)}")
+            error_message = str(e)
+            logger.error(f"AI analysis failed for vendor bill {bill_id}: {error_message}")
+
+            # Mark as processing complete with error
             bill.is_processing = False
-            bill.processing_error = f"AI analysis failed: {str(e)}"
+            bill.processing_error = f"AI analysis failed: {error_message}"
             bill.save(update_fields=['is_processing', 'processing_error'])
-            raise
-        
+
+            # Don't raise the exception - let the task complete gracefully
+            logger.warning(f"Vendor bill {bill_id} processing completed with error, skipping duplicate check")
+            return
+
         # Step 2: Check for duplicates
         try:
             duplicate_result = check_duplicate_tally_vendor_bill(bill, organization)
@@ -189,12 +195,18 @@ def process_expense_bill_analysis(bill_id, **kwargs):
             analyzed_bill = analyze_expense_bill_with_ai(bill, organization)
             logger.info(f"AI analysis completed for expense bill {bill_id}")
         except Exception as e:
-            logger.error(f"AI analysis failed for expense bill {bill_id}: {str(e)}")
+            error_message = str(e)
+            logger.error(f"AI analysis failed for expense bill {bill_id}: {error_message}")
+
+            # Mark as processing complete with error
             bill.is_processing = False
-            bill.processing_error = f"AI analysis failed: {str(e)}"
+            bill.processing_error = f"AI analysis failed: {error_message}"
             bill.save(update_fields=['is_processing', 'processing_error'])
-            raise
-        
+
+            # Don't raise the exception - let the task complete gracefully
+            logger.warning(f"Expense bill {bill_id} processing completed with error, skipping duplicate check")
+            return
+
         # Step 2: Check for duplicates
         try:
             duplicate_result = check_duplicate_tally_expense_bill(bill, organization)

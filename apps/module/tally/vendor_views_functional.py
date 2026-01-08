@@ -482,10 +482,57 @@ def analyze_bill_with_ai(bill, organization):
             raise Exception("Empty response from OpenAI API")
 
         logger.info("Successfully received response from OpenAI API")
-        logger.info(f"Raw OpenAI response: {response.choices[0].message.content}")
+        raw_response = response.choices[0].message.content.strip()
+        logger.info(f"Raw OpenAI response: {raw_response}")
 
-        json_data = json.loads(response.choices[0].message.content)
-        logger.info("Successfully parsed JSON response from OpenAI")
+        # Try to parse JSON with error recovery
+        json_data = None
+        try:
+            json_data = json.loads(raw_response)
+            logger.info("Successfully parsed JSON response from OpenAI")
+        except json.JSONDecodeError as e:
+            logger.warning(f"Initial JSON parse failed: {str(e)}")
+
+            # Attempt to fix common JSON issues
+            try:
+                # Try to extract JSON from markdown code blocks
+                if "```json" in raw_response and "```" in raw_response:
+                    json_start = raw_response.find("```json") + 7
+                    json_end = raw_response.find("```", json_start)
+                    if json_end > json_start:
+                        json_content = raw_response[json_start:json_end].strip()
+                        logger.info(f"Extracted JSON from markdown: {json_content}")
+                        json_data = json.loads(json_content)
+                        logger.info("Successfully parsed JSON from markdown extraction")
+
+                # Try to extract JSON between first { and last }
+                elif "{" in raw_response and "}" in raw_response:
+                    json_start = raw_response.find("{")
+                    json_end = raw_response.rfind("}") + 1
+                    if json_end > json_start:
+                        json_content = raw_response[json_start:json_end]
+                        logger.info(f"Extracted JSON by braces: {json_content}")
+                        json_data = json.loads(json_content)
+                        logger.info("Successfully parsed JSON from brace extraction")
+
+            except json.JSONDecodeError as recovery_error:
+                logger.error(f"JSON recovery also failed: {str(recovery_error)}")
+
+                # If all parsing fails, create a minimal fallback response
+                logger.warning("Creating fallback minimal JSON response")
+                json_data = {
+                    "error": "json_parse_failed",
+                    "raw_response": raw_response[:500] + "..." if len(raw_response) > 500 else raw_response,
+                    "fallback_data": {
+                        "invoiceNumber": "PARSE_ERROR",
+                        "dateIssued": "",
+                        "dueDate": "",
+                        "from": {"name": "VENDOR_PARSE_ERROR"},
+                        "to": {"name": ""},
+                        "totalAmount": 0,
+                        "lineItems": []
+                    }
+                }
 
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse JSON from OpenAI response: {str(e)}")
@@ -510,7 +557,11 @@ def process_analysis_data(bill, json_data, organization):
 
         # Handle different JSON response formats from OpenAI
         if isinstance(json_data, dict):
-            if "properties" in json_data:
+            # Check if this is a fallback response due to parsing error
+            if "error" in json_data and json_data.get("error") == "json_parse_failed":
+                logger.warning("Processing fallback JSON data due to parsing error")
+                relevant_data = json_data.get("fallback_data", {})
+            elif "properties" in json_data:
                 # Handle schema format - extract from properties with safe access
                 try:
                     relevant_data = {
@@ -827,7 +878,7 @@ def process_pdf_splitting(pdf_file, organization, file_type, uploaded_by):
                 image_io = BytesIO()
                 page_image.save(image_io, format='JPEG')
                 image_content = ContentFile(image_io.getvalue(), name=f"page_{page_num + 1}_{unique_id}.jpg")
-                
+
                 # Create separate bill for this page
                 bill = TallyVendorBill.objects.create(
                     file=image_content,
@@ -1078,7 +1129,7 @@ def vendor_bills_upload(request, org_id):
                 bill.job_id = job.id
                 bill.is_processing = True
                 bill.save(update_fields=['job_id', 'is_processing'])
-                
+
                 job_results.append({
                     'bill_id': str(bill.id),
                     'bill_name': bill.bill_munshi_name,
@@ -1143,7 +1194,7 @@ def vendor_bill_processing_status(request, org_id, bill_id):
 
     try:
         bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
-        
+
         status_data = {
             'bill_id': str(bill.id),
             'bill_name': bill.bill_munshi_name,
@@ -1155,7 +1206,7 @@ def vendor_bill_processing_status(request, org_id, bill_id):
             'duplicate_score': bill.duplicate_score,
             'duplicate_matched_bills': bill.duplicate_matched_bills
         }
-        
+
         # Get job status if job_id exists
         if bill.job_id:
             # Import here to avoid circular imports
@@ -1165,9 +1216,9 @@ def vendor_bill_processing_status(request, org_id, bill_id):
                 status_data['job_status'] = job_status
             else:
                 status_data['job_status'] = {'status': 'unknown', 'message': 'Job status unavailable'}
-        
+
         return Response(status_data)
-        
+
     except TallyVendorBill.DoesNotExist:
         return Response({
             'error': 'Bill not found',
@@ -1556,32 +1607,32 @@ def _to_int(val, default=0):
 def calculate_product_gst(amount, product_gst_str, gst_type):
     """
     Calculate IGST, CGST, and SGST based on amount, product_gst percentage, and gst_type.
-    
+
     Args:
         amount: Product amount (Decimal or float)
         product_gst_str: GST percentage string (e.g., "18%", "12%")
         gst_type: GST type from TallyVendorAnalyzedBill.GSTType
-    
+
     Returns:
         tuple: (igst, cgst, sgst) as Decimal values
     """
     try:
         # Convert amount to Decimal
         amount_decimal = _to_decimal(amount, "0")
-        
+
         # Extract GST percentage from string (e.g., "18%" -> 18.0)
         if not product_gst_str or product_gst_str == "":
             return Decimal("0"), Decimal("0"), Decimal("0")
-        
+
         gst_percentage_str = str(product_gst_str).strip().replace('%', '')
         if not gst_percentage_str:
             return Decimal("0"), Decimal("0"), Decimal("0")
-        
+
         gst_percentage = Decimal(gst_percentage_str)
-        
+
         # Calculate total GST amount
         gst_amount = (amount_decimal * gst_percentage) / Decimal("100")
-        
+
         # Distribute GST based on gst_type
         if gst_type == TallyVendorAnalyzedBill.GSTType.IGST:
             # All GST goes to IGST
@@ -1593,7 +1644,7 @@ def calculate_product_gst(amount, product_gst_str, gst_type):
         else:
             # Unknown GST type - return zeros
             return Decimal("0"), Decimal("0"), Decimal("0")
-    
+
     except (ValueError, InvalidOperation) as e:
         logger.warning(f"Error calculating product GST: {str(e)}")
         return Decimal("0"), Decimal("0"), Decimal("0")
@@ -1631,7 +1682,29 @@ def vendor_bill_verify(request, org_id):
 
     try:
         bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
-        analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill, organization=organization)
+
+        # Handle potential multiple analyzed bills - use the most recent one
+        try:
+            analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill, organization=organization)
+        except TallyVendorAnalyzedBill.MultipleObjectsReturned:
+            # Multiple analyzed bills exist - use the most recent one and log warning
+            logger.warning(f"Multiple TallyVendorAnalyzedBill found for bill {bill_id}, using the most recent one")
+            analyzed_bill = TallyVendorAnalyzedBill.objects.filter(
+                selected_bill=bill,
+                organization=organization
+            ).order_by('-created_at').first()
+
+            # Optionally clean up duplicate records (keep only the most recent)
+            duplicate_bills = TallyVendorAnalyzedBill.objects.filter(
+                selected_bill=bill,
+                organization=organization
+            ).exclude(id=analyzed_bill.id)
+
+            if duplicate_bills.exists():
+                duplicate_count = duplicate_bills.count()
+                duplicate_bills.delete()
+                logger.info(f"Cleaned up {duplicate_count} duplicate TallyVendorAnalyzedBill records for bill {bill_id}")
+
     except (TallyVendorBill.DoesNotExist, TallyVendorAnalyzedBill.DoesNotExist):
         return Response({
             'error': 'Bill or Analysis Data Not Found',
@@ -1661,7 +1734,7 @@ def vendor_bill_verify(request, org_id):
         consolidate_flag = request.data.get('consolidate', analyzed_data.get('consolidate', False))
         logger.info(f"Received consolidate flag: {consolidate_flag}")
         logger.info(f"Current analyzed_bill consolidate value: {getattr(analyzed_bill, 'consolidate', 'NOT SET')}")
-        
+
         # Always update the consolidate flag regardless of current value
         try:
             analyzed_bill.consolidate = consolidate_flag
@@ -1698,7 +1771,7 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
 
     if not analyzed_data:
         return analyzed_bill
-    
+
     # Add defensive check to ensure analyzed_bill is the correct type
     from .models import TallyVendorAnalyzedBill
     if not isinstance(analyzed_bill, TallyVendorAnalyzedBill):
@@ -1813,17 +1886,17 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
 
         # Update line items (products) and handle consolidated products
         consolidate_flag = analyzed_data.get('consolidate', False)
-        
+
         logger.info(f"Processing products with consolidate flag: {consolidate_flag}")
-        
+
         if consolidate_flag:
             # Handle consolidation mode - use consolidate_prod array
             logger.info("Processing in consolidation mode - looking for consolidate_prod array")
-            
+
             consolidate_prod_array = analyzed_data.get('consolidate_prod', [])
             if consolidate_prod_array:
                 logger.info(f"Found {len(consolidate_prod_array)} items in consolidate_prod array")
-                
+
                 try:
                     # 🔄 FIRST: Clear existing consolidated products to prevent duplicates (like Zoho)
                     existing_consolidated = TallyVendorConsolidatedProduct.objects.filter(vendor_bill_analyzed=analyzed_bill)
@@ -1831,19 +1904,19 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                         existing_count = existing_consolidated.count()
                         existing_consolidated.delete()
                         logger.info(f"Deleted {existing_count} existing consolidated products before creating new ones")
-                    
+
                     # Handle consolidated product creation (always create new after clearing)
                     for idx, consolidated_product_data in enumerate(consolidate_prod_array):
                         item_id = consolidated_product_data.get('item_id')
                         item_name = consolidated_product_data.get('item_name', 'Unnamed')
                         logger.info(f"Creating consolidated product {idx + 1}: {item_name} (item_id: {item_id}, type: {type(item_id)})")
-                        
+
                         try:
                             # Find or create tax ledger with better logging
                             tax_ledger = None
                             tax_ledger_name = consolidated_product_data.get('tax_ledger')
                             logger.info(f"Processing tax_ledger: '{tax_ledger_name}' for item {idx + 1}")
-                            
+
                             if tax_ledger_name and tax_ledger_name not in [None, '', 'No Tax Ledger']:
                                 tax_ledger = find_or_create_tax_ledger(tax_ledger_name, 'purchase', organization)
                                 if tax_ledger:
@@ -1856,7 +1929,7 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                                     logger.warning(f"Failed to find/create tax ledger: {tax_ledger_name}")
                             else:
                                 logger.info(f"No tax ledger specified or invalid value: '{tax_ledger_name}'")
-                            
+
                             # Create new consolidated product (Tally now uses ForeignKey, multiple supported)
                             consolidated_product = TallyVendorConsolidatedProduct.objects.create(
                                 vendor_bill_analyzed=analyzed_bill,
@@ -1874,30 +1947,30 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                                 original_items_count=consolidated_product_data.get('original_items_count', 1),
                                 consolidation_notes='Created from frontend verification'
                             )
-                            
+
                             # Log the saved tax ledger info
                             logger.info(f"Created consolidated product {consolidated_product.id} with:")
                             logger.info(f"  - Item: {consolidated_product.item_name}")
                             logger.info(f"  - Tax Ledger: {consolidated_product.taxes.name if consolidated_product.taxes else 'None'}")
                             logger.info(f"  - Tax Ledger ID: {consolidated_product.taxes.id if consolidated_product.taxes else 'None'}")
-                            
+
                             # Double-check by re-fetching from database to ensure tax ledger was saved
                             saved_product = TallyVendorConsolidatedProduct.objects.get(id=consolidated_product.id)
                             if saved_product.taxes:
                                 logger.info(f"✅ VERIFIED: Tax ledger saved correctly - {saved_product.taxes.name}")
                             else:
                                 logger.error(f"❌ ERROR: Tax ledger not saved to database for product {consolidated_product.id}")
-                            
+
                             # Since Tally now uses ForeignKey, multiple consolidated products are supported
                             # We can create each consolidated product from the array
-                            
+
                         except Exception as consolidate_item_error:
                             logger.error(f"Error creating consolidated product {idx + 1}: {consolidate_item_error}")
                             continue
-                            
+
                 except Exception as consolidate_error:
                     logger.error(f"Error processing consolidate_prod array: {consolidate_error}")
-                
+
                 # Keep individual products intact since users might switch between layouts
                 existing_individual_products = analyzed_bill.products.all()
                 if existing_individual_products.exists() and len(consolidate_prod_array) > 0:
@@ -1905,25 +1978,25 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                     # Individual products are preserved for layout flexibility
                 elif len(consolidate_prod_array) == 0:
                     logger.warning("No consolidated products provided - keeping existing individual products")
-                    
+
             else:
                 logger.warning("Consolidate=true but no consolidate_prod array found in payload")
-                
+
                 # Fallback: Check if consolidated product exists in regular products array
                 line_items = analyzed_data.get('products', [])
                 if line_items:
                     logger.info("Attempting to find consolidated product in products array as fallback")
-                    
+
                     consolidated_product_from_payload = None
                     for item in line_items:
                         # Check if this is a consolidated product (has consolidated item details)
-                        if (item.get('item_details') and 
+                        if (item.get('item_details') and
                             'Consolidated' in str(item.get('item_details')) and
                             'items:' in str(item.get('item_details'))):
                             consolidated_product_from_payload = item
                             logger.info(f"Found consolidated product in products array: {item.get('item_name')}")
                             break
-                    
+
                     if consolidated_product_from_payload:
                         # Process consolidated product from products array fallback
                         try:
@@ -1931,14 +2004,14 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                             tax_ledger = None
                             tax_ledger_name = consolidated_product_from_payload.get('tax_ledger')
                             logger.info(f"Processing fallback tax_ledger: '{tax_ledger_name}'")
-                            
+
                             if tax_ledger_name and tax_ledger_name not in [None, '', "No Tax Ledger"]:
                                 tax_ledger = find_or_create_tax_ledger(tax_ledger_name, 'purchase', organization)
                                 if tax_ledger:
                                     logger.info(f"Found/created tax ledger for fallback: {tax_ledger.name} (ID: {tax_ledger.id})")
                                 else:
                                     logger.warning(f"Failed to find/create tax ledger for fallback: {tax_ledger_name}")
-                            
+
                             # Create new consolidated product (since we allow multiple now)
                             consolidated_data = {
                                 'vendor_bill_analyzed': analyzed_bill,
@@ -1956,11 +2029,11 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                                 'original_items_count': consolidated_product_from_payload.get('original_items_count', 1),
                                 'consolidation_notes': "Updated via verification (fallback from products array)"
                             }
-                            
+
                             # Create new consolidated product (since we allow multiple now)
                             consolidated_product = TallyVendorConsolidatedProduct.objects.create(**consolidated_data)
                             logger.info(f"Created new consolidated product (fallback): {consolidated_product.id}")
-                            
+
                             # Keep individual products intact for layout switching support
                             existing_individual_products = analyzed_bill.products.all()
                             if existing_individual_products.exists() and consolidated_product:
@@ -1971,16 +2044,16 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                             logger.error(f"Error processing consolidated product (fallback): {str(e)}")
                     else:
                         logger.warning("No consolidated product found in payload, but consolidate=true. Keeping existing state.")
-                        
+
         else:
             # Handle individual products mode - use products array
             logger.info("Processing in individual products mode")
             line_items = analyzed_data.get('products', [])
-            
+
             if line_items:
                 logger.info(f"Processing {len(line_items)} individual products")
                 update_analyzed_products(analyzed_bill, line_items, organization)
-                
+
                 # Keep any existing consolidated products for layout switching support
                 existing_consolidated = TallyVendorConsolidatedProduct.objects.filter(vendor_bill_analyzed=analyzed_bill)
                 if existing_consolidated.exists():
@@ -2063,7 +2136,7 @@ def find_or_create_tax_ledger(ledger_name, tax_type, organization):
     """Find existing tax ledger or create new one using TallyConfig"""
     try:
         logger.info(f"Looking for tax ledger: '{ledger_name}' (type: {tax_type}) in org: {organization.id}")
-        
+
         # First try to find exact match
         tax_ledger = Ledger.objects.filter(
             name__iexact=ledger_name.strip(),
@@ -2073,7 +2146,7 @@ def find_or_create_tax_ledger(ledger_name, tax_type, organization):
         if tax_ledger:
             logger.info(f"Found existing tax ledger: {tax_ledger.name} (ID: {tax_ledger.id})")
             return tax_ledger
-        
+
         logger.info(f"Tax ledger '{ledger_name}' not found, creating new one...")
 
         # Get TallyConfig for the organization
@@ -2179,18 +2252,18 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
             if 'product_gst' in item and product.product_gst != item.get('product_gst'):
                 product.product_gst = item.get('product_gst')
                 needs_update = True
-            
+
             # Calculate GST values based on gst_type from analyzed_bill
             # This ensures GST is correctly distributed according to bill's GST type
             current_amount = _to_decimal(item.get('amount'), str(product.amount))
             current_product_gst = item.get('product_gst', product.product_gst)
-            
+
             calc_igst, calc_cgst, calc_sgst = calculate_product_gst(
-                current_amount, 
-                current_product_gst, 
+                current_amount,
+                current_product_gst,
                 analyzed_bill.gst_type
             )
-            
+
             # Update GST values if calculated values differ
             if product.igst != calc_igst:
                 product.igst = calc_igst
@@ -2201,7 +2274,7 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
             if product.sgst != calc_sgst:
                 product.sgst = calc_sgst
                 needs_update = True
-            
+
             # Tax ledger
             if 'tax_ledger' in item and item['tax_ledger'] != "No Tax Ledger":
                 current_name = str(product.taxes) if product.taxes else "No Tax Ledger"
@@ -2219,14 +2292,14 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
             # Create new product
             product_amount = _to_decimal(item.get('amount'), "0")
             product_gst_str = item.get('product_gst', '')
-            
+
             # Calculate GST values based on gst_type from analyzed_bill
             calc_igst, calc_cgst, calc_sgst = calculate_product_gst(
-                product_amount, 
-                product_gst_str, 
+                product_amount,
+                product_gst_str,
                 analyzed_bill.gst_type
             )
-            
+
             product = TallyVendorAnalyzedProduct(
                 vendor_bill_analyzed=analyzed_bill,
                 organization=organization,
@@ -2256,7 +2329,7 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
         for existing_id, product in existing.items():
             if existing_id not in updated_ids:
                 products_to_delete.append(product)
-        
+
         if products_to_delete:
             deleted_count = len(products_to_delete)
             for product in products_to_delete:
@@ -2265,10 +2338,10 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
             logger.info(f"Deleted {deleted_count} products not present in frontend payload")
     else:
         logger.info("Consolidation mode active - preserving individual products")
-    
+
     # Calculate deletion count for summary
     deletion_count = 0 if getattr(analyzed_bill, 'consolidate', False) else len([existing_id for existing_id in existing.keys() if existing_id not in updated_ids])
-    
+
     logger.info(
         f"Product update summary: {len(updated_ids)} updated, "
         f"{len(line_items or []) - len(updated_ids)} created, "
@@ -2357,7 +2430,27 @@ def vendor_bill_sync(request, org_id):
 
     try:
         bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
-        analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill)
+
+        # Handle potential multiple analyzed bills - use the most recent one
+        try:
+            analyzed_bill = TallyVendorAnalyzedBill.objects.get(selected_bill=bill)
+        except TallyVendorAnalyzedBill.MultipleObjectsReturned:
+            # Multiple analyzed bills exist - use the most recent one and log warning
+            logger.warning(f"Multiple TallyVendorAnalyzedBill found for bill {bill_id} in sync, using the most recent one")
+            analyzed_bill = TallyVendorAnalyzedBill.objects.filter(
+                selected_bill=bill
+            ).order_by('-created_at').first()
+
+            # Optionally clean up duplicate records (keep only the most recent)
+            duplicate_bills = TallyVendorAnalyzedBill.objects.filter(
+                selected_bill=bill
+            ).exclude(id=analyzed_bill.id)
+
+            if duplicate_bills.exists():
+                duplicate_count = duplicate_bills.count()
+                duplicate_bills.delete()
+                logger.info(f"Cleaned up {duplicate_count} duplicate TallyVendorAnalyzedBill records for bill {bill_id} during sync")
+
     except (TallyVendorBill.DoesNotExist, TallyVendorAnalyzedBill.DoesNotExist):
         return Response({
             'error': 'Bill or Analysis Data Not Found',
@@ -2577,7 +2670,7 @@ def prepare_sync_data(analyzed_bill, organization):
     vendor_name = vendor_ledger.name if vendor_ledger and vendor_ledger.name else "Unknown Vendor"
     bill_url = f"https://billmunshi.com/tally/vendor-bill/{analyzed_bill.selected_bill.id}"
     notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
-    
+
     bill_data = {
         "vendor_name": vendor_name,
         "bill_no": analyzed_bill.bill_no,
@@ -2626,7 +2719,7 @@ def prepare_sync_data(analyzed_bill, organization):
                     total_base_amount = 0
                     for consolidated_product in consolidated_products:
                         total_base_amount += float(consolidated_product.amount or 0)
-                    
+
                     total_tax = float(analyzed_bill.igst or 0) + float(analyzed_bill.cgst or 0) + float(analyzed_bill.sgst or 0)
 
                     if total_base_amount > 0 and total_tax > 0:
@@ -2794,4 +2887,5 @@ def vendor_bill_sync_external(request, org_id):
             'details': str(e),
             'error_code': 'EXTERNAL_SYNC_FAILED'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
