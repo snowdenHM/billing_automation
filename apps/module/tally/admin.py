@@ -313,6 +313,9 @@ class TallyExpenseAnalyzedBillAdmin(admin.ModelAdmin):
         ('GST Details', {
             'fields': ('total', 'igst', 'igst_taxes', 'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes')
         }),
+        ('TDS & Other Adjustments', {
+            'fields': ('tds', 'tds_taxes', 'other_adjustment', 'other_adjustment_taxes')
+        }),
         ('Meta', {
             'fields': ('organization', 'created_at')
         }),

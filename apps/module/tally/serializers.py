@@ -255,11 +255,12 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
     class Meta:
         model = TallyExpenseAnalyzedBill
         fields = [
-            'id', 'selected_bill', 'vendor', 'bill_no', 'bill_date', 'voucher',
+            'id', 'selected_bill', 'vendor', 'bill_no', 'bill_date', 'voucher', 'due_date',
             'total', 'igst', 'cgst', 'sgst', 'tds', 'igst_taxes', 'cgst_taxes', 'sgst_taxes', 'tds_taxes',
             'vendor_amount', 'vendor_debit_or_credit', 'igst_debit_or_credit',
-            'cgst_debit_or_credit', 'sgst_debit_or_credit', 'tds_debit_or_credit', 'note', 'gst_type',
-            'consolidate', 'created_at', 'products'
+            'cgst_debit_or_credit', 'sgst_debit_or_credit', 'tds_debit_or_credit',
+            'other_adjustment', 'other_adjustment_taxes', 'other_adjustment_debit_or_credit',
+            'note', 'gst_type', 'consolidate', 'created_at', 'products'
         ]
         read_only_fields = ['id', 'created_at', 'products']
 

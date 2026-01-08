@@ -552,6 +552,15 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
         choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT
     )
 
+    # Other Adjustment Fields
+    other_adjustment = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    other_adjustment_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="other_adjustment_tally_expense_analysed_bills"
+    )
+    other_adjustment_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT
+    )
+
     note = models.CharField(max_length=100, blank=True, null=True, default="Enter Your Description")
 
     # Line Items Consolidation Setting

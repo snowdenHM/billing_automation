@@ -132,8 +132,10 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'selected_bill', 'selected_bill_name', 'vendor', 'vendor_name',
             'voucher', 'bill_no', 'bill_date', 'due_date', 'total', 'vendor_amount', 'vendor_debit_or_credit',
-            'igst', 'igst_taxes', 'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes', 
-            'tds', 'tds_taxes', 'note', 'consolidate', 'products', 'created_at'
+            'igst', 'igst_taxes', 'igst_debit_or_credit', 'cgst', 'cgst_taxes', 'cgst_debit_or_credit',
+            'sgst', 'sgst_taxes', 'sgst_debit_or_credit', 'tds', 'tds_taxes', 'tds_debit_or_credit',
+            'other_adjustment', 'other_adjustment_taxes', 'other_adjustment_debit_or_credit',
+            'note', 'consolidate', 'products', 'created_at'
         ]
         read_only_fields = ['id', 'created_at', 'vendor_name', 'selected_bill_name', 'products']
 
@@ -212,10 +214,12 @@ class ExpenseBillVerificationSerializer(serializers.Serializer):
     cgst = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
     sgst = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
     tds = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
+    other_adjustment = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
     igst_taxes_id = serializers.UUIDField(required=False, allow_null=True)
     cgst_taxes_id = serializers.UUIDField(required=False, allow_null=True)
     sgst_taxes_id = serializers.UUIDField(required=False, allow_null=True)
     tds_taxes_id = serializers.UUIDField(required=False, allow_null=True)
+    other_adjustment_taxes_id = serializers.UUIDField(required=False, allow_null=True)
 
     products = serializers.ListField(
         child=serializers.DictField(),

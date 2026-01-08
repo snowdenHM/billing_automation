@@ -1665,6 +1665,17 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
             if 'debit_or_credit' in tds_data:
                 analyzed_bill.tds_debit_or_credit = tds_data['debit_or_credit']
 
+            # Handle Other Adjustment data
+            other_adjustment_data = taxes_data.get('other_adjustment', {})
+            if 'amount' in other_adjustment_data:
+                analyzed_bill.other_adjustment = _to_decimal(other_adjustment_data['amount'])
+            if 'ledger' in other_adjustment_data and other_adjustment_data['ledger'] != "No Tax Ledger":
+                other_adj_ledger = find_or_create_expense_tax_ledger(other_adjustment_data['ledger'], 'OTHER', organization)
+                if other_adj_ledger:
+                    analyzed_bill.other_adjustment_taxes = other_adj_ledger
+            if 'debit_or_credit' in other_adjustment_data:
+                analyzed_bill.other_adjustment_debit_or_credit = other_adjustment_data['debit_or_credit']
+
         # Determine GST type based on updated amounts
         if analyzed_bill.igst and analyzed_bill.igst > 0:
             analyzed_bill.gst_type = TallyExpenseAnalyzedBill.GSTType.IGST
@@ -2088,18 +2099,27 @@ def get_structured_expense_bill_data(analyzed_bill, organization):
             "igst": {
                 "amount": float(analyzed_bill.igst or 0),
                 "ledger": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "No Tax Ledger",
+                "debit_or_credit": analyzed_bill.igst_debit_or_credit or "debit",
             },
             "cgst": {
                 "amount": float(analyzed_bill.cgst or 0),
                 "ledger": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "No Tax Ledger",
+                "debit_or_credit": analyzed_bill.cgst_debit_or_credit or "debit",
             },
             "sgst": {
                 "amount": float(analyzed_bill.sgst or 0),
                 "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
+                "debit_or_credit": analyzed_bill.sgst_debit_or_credit or "debit",
             },
             "tds": {
                 "amount": float(analyzed_bill.tds or 0),
                 "ledger": str(analyzed_bill.tds_taxes) if analyzed_bill.tds_taxes else "No Tax Ledger",
+                "debit_or_credit": analyzed_bill.tds_debit_or_credit or "debit",
+            },
+            "other_adjustment": {
+                "amount": float(analyzed_bill.other_adjustment or 0),
+                "ledger": str(analyzed_bill.other_adjustment_taxes) if analyzed_bill.other_adjustment_taxes else "No Tax Ledger",
+                "debit_or_credit": analyzed_bill.other_adjustment_debit_or_credit or "debit",
             }
         },
         "expense_items": [
@@ -2457,6 +2477,17 @@ def prepare_expense_sync_data(analyzed_bill, organization):
             dr_ledger.append(tds_entry)
         elif analyzed_bill.tds_debit_or_credit == 'credit':
             cr_ledger.append(tds_entry)
+
+    # Process Other Adjustment based on debit_or_credit field
+    if analyzed_bill.other_adjustment and analyzed_bill.other_adjustment > 0 and analyzed_bill.other_adjustment_taxes:
+        other_adjustment_entry = {
+            "LEDGERNAME": str(analyzed_bill.other_adjustment_taxes),
+            "AMOUNT": float(analyzed_bill.other_adjustment)
+        }
+        if analyzed_bill.other_adjustment_debit_or_credit == 'debit':
+            dr_ledger.append(other_adjustment_entry)
+        elif analyzed_bill.other_adjustment_debit_or_credit == 'credit':
+            cr_ledger.append(other_adjustment_entry)
 
     # Process vendor based on vendor_debit_or_credit field using vendor_amount
     if vendor_ledger and analyzed_bill.vendor_amount and analyzed_bill.vendor_amount > 0:
