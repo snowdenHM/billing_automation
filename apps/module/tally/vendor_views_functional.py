@@ -627,10 +627,12 @@ def process_analysis_data(bill, json_data, organization):
             from decimal import Decimal, ROUND_HALF_UP
 
             total_val = safe_float_convert(relevant_data.get('total', 0))
+            discount_val = safe_float_convert(relevant_data.get('discount', 0))
             igst_rounded = Decimal(str(igst_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             cgst_rounded = Decimal(str(cgst_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             sgst_rounded = Decimal(str(sgst_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             total_rounded = Decimal(str(total_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            discount_rounded = Decimal(str(discount_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
             analyzed_bill = TallyVendorAnalyzedBill.objects.create(
                 selected_bill=bill,
@@ -641,6 +643,7 @@ def process_analysis_data(bill, json_data, organization):
                 igst=igst_rounded,
                 cgst=cgst_rounded,
                 sgst=sgst_rounded,
+                discount=discount_rounded,
                 total=total_rounded,
                 note="AI Analyzed Bill",
                 organization=organization,
@@ -1396,6 +1399,7 @@ def process_existing_analysis_data(bill, existing_data, organization):
                 igst=igst_val,
                 cgst=cgst_val,
                 sgst=sgst_val,
+                discount=0,  # Default discount value for existing data
                 total=total_val,
                 note="AI Analyzed Bill (Existing Data)",
                 organization=organization,
@@ -1863,6 +1867,18 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                     sgst_ledger = find_or_create_tax_ledger(sgst_data['ledger'], 'SGST', organization)
                     if sgst_ledger:
                         analyzed_bill.sgst_taxes = sgst_ledger
+
+            # Update Discount
+            discount_data = taxes_data.get('discount', {})
+            if 'amount' in discount_data:
+                analyzed_bill.discount = round(float(discount_data['amount']), 2)
+            if 'ledger' in discount_data and discount_data['ledger'] != "No Tax Ledger":
+                # Check if current discount tax ledger is different
+                current_discount_ledger = analyzed_bill.discount_taxes
+                if not current_discount_ledger or str(current_discount_ledger) != discount_data['ledger']:
+                    discount_ledger = find_or_create_tax_ledger(discount_data['ledger'], 'DISCOUNT', organization)
+                    if discount_ledger:
+                        analyzed_bill.discount_taxes = discount_ledger
 
         # Determine GST type based on updated amounts
         if analyzed_bill.igst and analyzed_bill.igst > 0:
@@ -2381,6 +2397,10 @@ def get_structured_bill_data(analyzed_bill, organization):
             "sgst": {
                 "amount": float(analyzed_bill.sgst or 0),
                 "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
+            },
+            "discount": {
+                "amount": float(analyzed_bill.discount or 0),
+                "ledger": str(analyzed_bill.discount_taxes) if analyzed_bill.discount_taxes else "No Tax Ledger",
             }
         },
         "products": [
@@ -2690,6 +2710,10 @@ def prepare_sync_data(analyzed_bill, organization):
             "sgst": {
                 "amount": float(analyzed_bill.sgst or 0),
                 "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
+            },
+            "discount": {
+                "amount": float(analyzed_bill.discount or 0),
+                "ledger": str(analyzed_bill.discount_taxes) if analyzed_bill.discount_taxes else "No Tax Ledger",
             }
         },
         "products": []

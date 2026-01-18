@@ -170,6 +170,20 @@ class TallyConfig(BaseOrgModel):
         verbose_name="Expense COA Parent Ledgers",
         db_table='tally_config_expense_coa_parents'
     )
+    tds_parents = models.ManyToManyField(
+        'ParentLedger',
+        blank=True,
+        related_name="tds_tally_configs",
+        verbose_name="TDS Parent Ledgers",
+        db_table='tally_config_tds_parents'
+    )
+    payment_parents = models.ManyToManyField(
+        'ParentLedger',
+        blank=True,
+        related_name="payment_tally_configs",
+        verbose_name="Payment Parent Ledgers",
+        db_table='tally_config_payment_parents'
+    )
 
     class Meta:
         verbose_name = "Tally Configuration"
@@ -302,6 +316,11 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
     sgst = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     sgst_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="sgst_tally_vendor_analysed_bills"
+    )
+
+    discount = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    discount_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="discount_tally_vendor_analysed_bills"
     )
 
     gst_type = models.CharField(max_length=20, choices=GSTType.choices, default=GSTType.UNKNOWN)

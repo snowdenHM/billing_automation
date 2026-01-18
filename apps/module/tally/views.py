@@ -111,7 +111,9 @@ def get_tally_config(request, org_id):
             'sgst_parents',
             'vendor_parents',
             'chart_of_accounts_parents',
-            'chart_of_accounts_expense_parents'
+            'chart_of_accounts_expense_parents',
+            'tds_parents',
+            'payment_parents'
         ).first()
         
         if not tally_config:
@@ -161,8 +163,8 @@ def create_or_update_tally_config(request, org_id):
         print(f"Found organization: {organization.name}")
         
         # Debug the parent ledger data being sent
-        parent_fields = ['igst_parents', 'cgst_parents', 'sgst_parents', 'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents']
-        
+        parent_fields = ['igst_parents', 'cgst_parents', 'sgst_parents', 'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents', 'tds_parents', 'payment_parents']
+
         for field in parent_fields:
             if field in request.data:
                 parent_ids = request.data[field]
@@ -265,7 +267,9 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
             'sgst_parents',
             'vendor_parents',
             'chart_of_accounts_parents',
-            'chart_of_accounts_expense_parents'
+            'chart_of_accounts_expense_parents',
+            'tds_parents',
+            'payment_parents'
         ).order_by('-id')
 
     def get_organization(self):
@@ -327,7 +331,9 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
             'sgst_parents',
             'vendor_parents',
             'chart_of_accounts_parents',
-            'chart_of_accounts_expense_parents'
+            'chart_of_accounts_expense_parents',
+            'tds_parents',
+            'payment_parents'
         ]
 
         if parent_type not in valid_parent_types:
@@ -534,7 +540,9 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
             'sgst_parents',
             'vendor_parents',
             'chart_of_accounts_parents',
-            'chart_of_accounts_expense_parents'
+            'chart_of_accounts_expense_parents',
+            'tds_parents',
+            'payment_parents'
         ]
 
         if parent_type not in valid_parent_types:

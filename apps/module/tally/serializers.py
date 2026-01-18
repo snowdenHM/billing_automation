@@ -53,18 +53,23 @@ class TallyConfigSerializer(serializers.ModelSerializer):
     vendor_parent_names = serializers.SerializerMethodField()
     coa_parent_names = serializers.SerializerMethodField()
     expense_coa_parent_names = serializers.SerializerMethodField()
-    
+    tds_parent_names = serializers.SerializerMethodField()
+    payment_parent_names = serializers.SerializerMethodField()
+
     class Meta:
         model = TallyConfig
         fields = [
             'id', 'tally_product_allow_sync', 'igst_parents', 'cgst_parents', 'sgst_parents',
             'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents',
-            'igst_parent_names', 'cgst_parent_names', 'sgst_parent_names', 
-            'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names'
+            'tds_parents', 'payment_parents',
+            'igst_parent_names', 'cgst_parent_names', 'sgst_parent_names',
+            'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names',
+            'tds_parent_names', 'payment_parent_names'
         ]
         read_only_fields = ['id', 'igst_parent_names', 'cgst_parent_names', 'sgst_parent_names',
-                           'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names']
-    
+                           'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names',
+                           'tds_parent_names', 'payment_parent_names']
+
     def validate_igst_parents(self, value):
         # Skip validation - let Django handle it at the database level
         return value
@@ -88,7 +93,15 @@ class TallyConfigSerializer(serializers.ModelSerializer):
     def validate_chart_of_accounts_expense_parents(self, value):
         # Skip validation - let Django handle it at the database level
         return value
-    
+
+    def validate_tds_parents(self, value):
+        # Skip validation - let Django handle it at the database level
+        return value
+
+    def validate_payment_parents(self, value):
+        # Skip validation - let Django handle it at the database level
+        return value
+
     def get_igst_parent_names(self, obj):
         return [parent.parent for parent in obj.igst_parents.all() if parent.parent]
     
@@ -106,6 +119,12 @@ class TallyConfigSerializer(serializers.ModelSerializer):
     
     def get_expense_coa_parent_names(self, obj):
         return [parent.parent for parent in obj.chart_of_accounts_expense_parents.all() if parent.parent]
+
+    def get_tds_parent_names(self, obj):
+        return [parent.parent for parent in obj.tds_parents.all() if parent.parent]
+
+    def get_payment_parent_names(self, obj):
+        return [parent.parent for parent in obj.payment_parents.all() if parent.parent]
 
 
 class LedgerBulkCreateSerializer(serializers.Serializer):
@@ -198,6 +217,7 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'selected_bill', 'vendor', 'bill_no', 'bill_date', 'due_date',
             'total', 'igst', 'cgst', 'sgst', 'igst_taxes', 'cgst_taxes', 'sgst_taxes',
+            'discount', 'discount_taxes',
             'note', 'gst_type', 'consolidate', 'created_at', 'products'
         ]
         read_only_fields = ['id', 'created_at', 'products']
