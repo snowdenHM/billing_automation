@@ -92,6 +92,10 @@ class TallyConfigAdmin(admin.ModelAdmin):
             'fields': ('vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents'),
             'description': 'Map parent ledgers for vendor bills and chart of accounts.'
         }),
+        ('TDS & Payment Mappings', {
+            'fields': ('tds_parents', 'payment_parents'),
+            'description': 'Map parent ledgers for TDS and payment transactions.'
+        }),
     )
 
     def get_queryset(self, request):
@@ -103,7 +107,9 @@ class TallyConfigAdmin(admin.ModelAdmin):
             'sgst_parents',
             'vendor_parents',
             'chart_of_accounts_parents',
-            'chart_of_accounts_expense_parents'
+            'chart_of_accounts_expense_parents',
+            'tds_parents',
+            'payment_parents'
         )
 
         # Filter by user organization if not superuser
@@ -160,13 +166,15 @@ class TallyConfigAdmin(admin.ModelAdmin):
     def display_mappings(self, obj):
         """Display a summary of the number of ledger mappings"""
         return format_html(
-            "<strong>IGST:</strong> {} | <strong>CGST:</strong> {} | <strong>SGST:</strong> {} | <strong>Vendors:</strong> {} | <strong>COA:</strong> {} | <strong>Expense COA:</strong> {}",
+            "<strong>IGST:</strong> {} | <strong>CGST:</strong> {} | <strong>SGST:</strong> {} | <strong>Vendors:</strong> {} | <strong>COA:</strong> {} | <strong>Expense COA:</strong> {} | <strong>TDS:</strong> {} | <strong>Payment:</strong> {}",
             obj.igst_parents.count(),
             obj.cgst_parents.count(),
             obj.sgst_parents.count(),
             obj.vendor_parents.count(),
             obj.chart_of_accounts_parents.count(),
             obj.chart_of_accounts_expense_parents.count(),
+            obj.tds_parents.count(),
+            obj.payment_parents.count(),
         )
     display_mappings.short_description = "Configuration Summary"
 
@@ -206,6 +214,22 @@ class TallyConfigAdmin(admin.ModelAdmin):
                 vendor_display += f" (+{obj.vendor_parents.count() - 3} more)"
             details.append(f"<strong>Vendors:</strong> {vendor_display}")
 
+        # TDS Parents
+        tds_names = [parent.parent for parent in obj.tds_parents.all()[:3]]
+        if tds_names:
+            tds_display = ", ".join(tds_names)
+            if obj.tds_parents.count() > 3:
+                tds_display += f" (+{obj.tds_parents.count() - 3} more)"
+            details.append(f"<strong>TDS:</strong> {tds_display}")
+
+        # Payment Parents
+        payment_names = [parent.parent for parent in obj.payment_parents.all()[:3]]
+        if payment_names:
+            payment_display = ", ".join(payment_names)
+            if obj.payment_parents.count() > 3:
+                payment_display += f" (+{obj.payment_parents.count() - 3} more)"
+            details.append(f"<strong>Payment:</strong> {payment_display}")
+
         return format_html("<br>".join(details)) if details else "No mappings configured"
 
     display_parent_ledgers.short_description = "Parent Ledger Details"
@@ -223,7 +247,7 @@ class TallyVendorAnalyzedProductInline(admin.TabularInline):
 
 
 class TallyVendorAnalyzedBillAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'vendor', 'bill_no', 'bill_date', 'due_date', 'total', 'gst_type', 'organization')
+    list_display = ('__str__', 'vendor', 'bill_no', 'bill_date', 'due_date', 'total', 'discount', 'gst_type', 'organization')
     list_filter = ('organization', 'gst_type', 'created_at')
     search_fields = ('bill_no', 'vendor__name', 'selected_bill__bill_munshi_name')
     readonly_fields = ('created_at',)
@@ -236,6 +260,10 @@ class TallyVendorAnalyzedBillAdmin(admin.ModelAdmin):
         }),
         ('GST Details', {
             'fields': ('gst_type', 'total', 'igst', 'igst_taxes', 'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes')
+        }),
+        ('Discount Details', {
+            'fields': ('discount', 'discount_taxes'),
+            'description': 'Discount amount and associated ledger mapping.'
         }),
         ('Meta', {
             'fields': ('organization', 'created_at')
