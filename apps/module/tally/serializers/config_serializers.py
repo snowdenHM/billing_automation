@@ -36,6 +36,16 @@ class TallyConfigSerializer(serializers.ModelSerializer):
         queryset=ParentLedger.objects.none(),
         required=False
     )
+    tds_parents = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=ParentLedger.objects.none(),
+        required=False
+    )
+    payment_parents = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=ParentLedger.objects.none(),
+        required=False
+    )
 
     # Read-only fields for displaying parent ledger names in response
     igst_parent_names = serializers.SerializerMethodField()
@@ -44,6 +54,8 @@ class TallyConfigSerializer(serializers.ModelSerializer):
     vendor_parent_names = serializers.SerializerMethodField()
     coa_parent_names = serializers.SerializerMethodField()
     expense_coa_parent_names = serializers.SerializerMethodField()
+    tds_parent_names = serializers.SerializerMethodField()
+    payment_parent_names = serializers.SerializerMethodField()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -62,7 +74,7 @@ class TallyConfigSerializer(serializers.ModelSerializer):
         # Set queryset for all ManyToMany fields
         for field_name in ['igst_parents', 'cgst_parents', 'sgst_parents',
                           'vendor_parents', 'chart_of_accounts_parents',
-                          'chart_of_accounts_expense_parents']:
+                          'chart_of_accounts_expense_parents', 'tds_parents', 'payment_parents']:
             if field_name in self.fields:
                 self.fields[field_name].queryset = org_queryset
 
@@ -74,12 +86,15 @@ class TallyConfigSerializer(serializers.ModelSerializer):
             # ManyToMany fields - now properly handled with PrimaryKeyRelatedField
             'igst_parents', 'cgst_parents', 'sgst_parents',
             'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents',
+            'tds_parents', 'payment_parents',
             # Read-only name fields for output
             'igst_parent_names', 'cgst_parent_names', 'sgst_parent_names',
-            'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names'
+            'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names',
+            'tds_parent_names', 'payment_parent_names'
         ]
         read_only_fields = ['id', 'igst_parent_names', 'cgst_parent_names', 'sgst_parent_names',
-                           'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names']
+                           'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names',
+                           'tds_parent_names', 'payment_parent_names']
 
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_igst_parent_names(self, obj) -> List[str]:
@@ -104,3 +119,12 @@ class TallyConfigSerializer(serializers.ModelSerializer):
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_expense_coa_parent_names(self, obj) -> List[str]:
         return [parent.parent for parent in obj.chart_of_accounts_expense_parents.all()]
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_tds_parent_names(self, obj) -> List[str]:
+        return [parent.parent for parent in obj.tds_parents.all()]
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_payment_parent_names(self, obj) -> List[str]:
+        return [parent.parent for parent in obj.payment_parents.all()]
+

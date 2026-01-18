@@ -73,23 +73,23 @@ class TallyConfigSerializer(serializers.ModelSerializer):
     def validate_igst_parents(self, value):
         # Skip validation - let Django handle it at the database level
         return value
-    
+
     def validate_cgst_parents(self, value):
         # Skip validation - let Django handle it at the database level
         return value
-    
+
     def validate_sgst_parents(self, value):
         # Skip validation - let Django handle it at the database level
         return value
-    
+
     def validate_vendor_parents(self, value):
         # Skip validation - let Django handle it at the database level
         return value
-    
+
     def validate_chart_of_accounts_parents(self, value):
         # Skip validation - let Django handle it at the database level
         return value
-    
+
     def validate_chart_of_accounts_expense_parents(self, value):
         # Skip validation - let Django handle it at the database level
         return value
@@ -104,19 +104,19 @@ class TallyConfigSerializer(serializers.ModelSerializer):
 
     def get_igst_parent_names(self, obj):
         return [parent.parent for parent in obj.igst_parents.all() if parent.parent]
-    
+
     def get_cgst_parent_names(self, obj):
         return [parent.parent for parent in obj.cgst_parents.all() if parent.parent]
-    
+
     def get_sgst_parent_names(self, obj):
         return [parent.parent for parent in obj.sgst_parents.all() if parent.parent]
-    
+
     def get_vendor_parent_names(self, obj):
         return [parent.parent for parent in obj.vendor_parents.all() if parent.parent]
-    
+
     def get_coa_parent_names(self, obj):
         return [parent.parent for parent in obj.chart_of_accounts_parents.all() if parent.parent]
-    
+
     def get_expense_coa_parent_names(self, obj):
         return [parent.parent for parent in obj.chart_of_accounts_expense_parents.all() if parent.parent]
 
