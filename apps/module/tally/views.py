@@ -18,6 +18,7 @@ from apps.organizations.models import Organization
 from apps.common.permissions import IsOrgAdmin
 
 from apps.module.tally.models import Ledger, ParentLedger, TallyConfig, StockItem, TallyVendorBill, TallyExpenseBill
+from apps.module.tally.vendor_views_functional import get_organization_from_request
 from apps.module.tally.serializers import (
     LedgerSerializer,
     ParentLedgerSerializer,
@@ -1447,7 +1448,7 @@ def clean_decimal_value(value_str):
 )
 @api_view(['POST'])
 @permission_classes([OrganizationAPIKeyOrBearerToken])
-def update_bill_tally_sync_status(request):
+def update_bill_tally_sync_status(request, org_id):
     """
     Update the tally_synced status for a bill based on mode (vendor or expense).
 
@@ -1457,6 +1458,14 @@ def update_bill_tally_sync_status(request):
     - mode: String 'vendor' or 'expense' to determine which model to use
     """
     try:
+        # Get and validate organization
+        organization = get_organization_from_request(request, org_id)
+        if not organization:
+            return Response({
+                'success': False,
+                'message': f'Organization with ID {org_id} not found or you do not have access to it'
+            }, status=status.HTTP_404_NOT_FOUND)
+
         # Get the request data
         bill_id = request.data.get('id')
         sync_status = request.data.get('status')
@@ -1489,13 +1498,13 @@ def update_bill_tally_sync_status(request):
         elif mode == 'expense':
             model = TallyExpenseBill
 
-        # Find the bill by ID
+        # Find the bill by ID and organization
         try:
-            bill = model.objects.get(id=bill_id)
+            bill = model.objects.get(id=bill_id, organization=organization)
         except model.DoesNotExist:
             return Response({
                 'success': False,
-                'message': f'{mode.capitalize()} bill with ID {bill_id} not found'
+                'message': f'{mode.capitalize()} bill with ID {bill_id} not found in your organization'
             }, status=status.HTTP_404_NOT_FOUND)
         except ValueError:
             return Response({
