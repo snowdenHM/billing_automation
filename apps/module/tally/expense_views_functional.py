@@ -2358,10 +2358,11 @@ def expense_bills_sync_list(request, org_id):
             status=status.HTTP_404_NOT_FOUND
         )
 
-    # Get all analyzed bills where the main bill status is "Synced"
+    # Get all analyzed bills where the main bill status is "Synced" and tally_synced status is False
     analyzed_bills = TallyExpenseAnalyzedBill.objects.filter(
         organization=organization,
-        selected_bill__status=TallyExpenseBill.BillStatus.SYNCED
+        selected_bill__status=TallyExpenseBill.BillStatus.SYNCED,
+        selected_bill__tally_synced=False
     ).select_related(
         'selected_bill', 'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes'
     ).prefetch_related(
@@ -2512,7 +2513,7 @@ def prepare_expense_sync_data(analyzed_bill, organization):
     notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
 
     bill_data = {
-        "id": str(analyzed_bill.id),
+        "id": str(analyzed_bill.selected_bill.id),
         "voucher": analyzed_bill.voucher or "",
         "bill_no": analyzed_bill.bill_no or "",
         "bill_date": bill_date_str,

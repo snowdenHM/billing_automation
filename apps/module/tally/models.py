@@ -211,7 +211,7 @@ class TallyVendorBill(BaseOrgModel):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
     bill_munshi_name = models.CharField(max_length=100, blank=True, null=True)  # Fixed: was billmunshiName
     file = models.FileField(upload_to="bills/", validators=[validate_file_extension])
-    file_type = models.CharField(  # Fixed: was fileType
+    file_type = models.CharField(
         choices=BillType.choices, max_length=100, blank=True, null=True, default=BillType.SINGLE
     )
     analysed_data = models.JSONField(default=dict, blank=True, null=True)
@@ -238,6 +238,9 @@ class TallyVendorBill(BaseOrgModel):
     is_processing = models.BooleanField(default=False, help_text="Whether this bill is currently being processed in background")
     processing_error = models.TextField(blank=True, null=True, help_text="Error message if processing failed")
     job_id = models.CharField(max_length=100, blank=True, null=True, help_text="Background job ID for tracking")
+
+    # Tally sync status
+    tally_synced = models.BooleanField(default=False, help_text="Whether this bill has been synced with Tally")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -383,7 +386,7 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
 
 class TallyVendorAnalyzedProduct(BaseOrgModel):
     """
-    Analysed products from vendor bills.
+    Analyzed products from vendor bills.
     """
     GST_CHOICES = [
         ("0%", "0%"),
@@ -468,6 +471,9 @@ class TallyExpenseBill(BaseOrgModel):
     is_processing = models.BooleanField(default=False, help_text="Whether this bill is currently being processed in background")
     processing_error = models.TextField(blank=True, null=True, help_text="Error message if processing failed")
     job_id = models.CharField(max_length=100, blank=True, null=True, help_text="Background job ID for tracking")
+
+    # Tally sync status
+    tally_synced = models.BooleanField(default=False, help_text="Whether this bill has been synced with Tally")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

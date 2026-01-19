@@ -2647,7 +2647,8 @@ def vendor_bills_sync_list(request, org_id):
     analyzed_bills = (
         TallyVendorAnalyzedBill.objects.filter(
             organization=organization,
-            selected_bill__status=TallyVendorBill.BillStatus.SYNCED
+            selected_bill__status=TallyVendorBill.BillStatus.SYNCED,
+            selected_bill__tally_synced=False
         )
         .select_related('selected_bill', 'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes')
         .prefetch_related('products__taxes')
@@ -2692,6 +2693,7 @@ def prepare_sync_data(analyzed_bill, organization):
     notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
 
     bill_data = {
+        "id": str(analyzed_bill.selected_bill.id),
         "vendor_name": vendor_name,
         "bill_no": analyzed_bill.bill_no,
         "bill_date": bill_date_str,

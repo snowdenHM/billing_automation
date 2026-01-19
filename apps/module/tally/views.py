@@ -17,7 +17,7 @@ from drf_spectacular.openapi import OpenApiTypes
 from apps.organizations.models import Organization
 from apps.common.permissions import IsOrgAdmin
 
-from apps.module.tally.models import Ledger, ParentLedger, TallyConfig, StockItem
+from apps.module.tally.models import Ledger, ParentLedger, TallyConfig, StockItem, TallyVendorBill, TallyExpenseBill
 from apps.module.tally.serializers import (
     LedgerSerializer,
     ParentLedgerSerializer,
@@ -1398,3 +1398,128 @@ def clean_decimal_value(value_str):
     except (ValueError, TypeError) as e:
         print(f"Error cleaning decimal value '{value_str}': {str(e)}")
         return '0.00'
+
+
+@extend_schema(
+    tags=['Tally Bill Sync'],
+    request={
+        'application/json': {
+            'type': 'object',
+            'properties': {
+                'id': {'type': 'string', 'format': 'uuid', 'description': 'Bill ID to update'},
+                'status': {'type': 'boolean', 'description': 'Tally sync status to set'},
+                'mode': {'type': 'string', 'enum': ['vendor', 'expense'], 'description': 'Bill type mode'}
+            },
+            'required': ['id', 'status', 'mode']
+        }
+    },
+    responses={
+        200: {
+            'type': 'object',
+            'properties': {
+                'success': {'type': 'boolean'},
+                'message': {'type': 'string'},
+                'data': {
+                    'type': 'object',
+                    'properties': {
+                        'id': {'type': 'string'},
+                        'tally_synced': {'type': 'boolean'},
+                        'mode': {'type': 'string'}
+                    }
+                }
+            }
+        },
+        400: {
+            'type': 'object',
+            'properties': {
+                'success': {'type': 'boolean'},
+                'message': {'type': 'string'}
+            }
+        },
+        404: {
+            'type': 'object',
+            'properties': {
+                'success': {'type': 'boolean'},
+                'message': {'type': 'string'}
+            }
+        }
+    }
+)
+@api_view(['POST'])
+@permission_classes([OrganizationAPIKeyOrBearerToken])
+def update_bill_tally_sync_status(request):
+    """
+    Update the tally_synced status for a bill based on mode (vendor or expense).
+
+    Accepts POST request with:
+    - id: UUID of the bill to update
+    - status: Boolean value to set for tally_synced field
+    - mode: String 'vendor' or 'expense' to determine which model to use
+    """
+    try:
+        # Get the request data
+        bill_id = request.data.get('id')
+        sync_status = request.data.get('status')
+        mode = request.data.get('mode')
+
+        # Validate required fields
+        if not all([bill_id is not None, sync_status is not None, mode is not None]):
+            return Response({
+                'success': False,
+                'message': 'Missing required fields: id, status, and mode are all required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate mode
+        if mode not in ['vendor', 'expense']:
+            return Response({
+                'success': False,
+                'message': 'Invalid mode. Must be either "vendor" or "expense"'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate status is boolean
+        if not isinstance(sync_status, bool):
+            return Response({
+                'success': False,
+                'message': 'Status must be a boolean value'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Select the appropriate model based on mode
+        if mode == 'vendor':
+            model = TallyVendorBill
+        elif mode == 'expense':
+            model = TallyExpenseBill
+
+        # Find the bill by ID
+        try:
+            bill = model.objects.get(id=bill_id)
+        except model.DoesNotExist:
+            return Response({
+                'success': False,
+                'message': f'{mode.capitalize()} bill with ID {bill_id} not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except ValueError:
+            return Response({
+                'success': False,
+                'message': 'Invalid UUID format for bill ID'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Update the tally_synced status
+        bill.tally_synced = sync_status
+        bill.save()
+
+        return Response({
+            'success': True,
+            'message': f'{mode.capitalize()} bill tally sync status updated successfully',
+            'data': {
+                'id': str(bill.id),
+                'tally_synced': bill.tally_synced,
+                'mode': mode
+            }
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({
+            'success': False,
+            'message': f'Error updating bill tally sync status: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+

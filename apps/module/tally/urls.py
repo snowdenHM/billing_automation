@@ -27,7 +27,7 @@ from .vendor_views_functional import (
 from .bill_move_view import move_tally_bills_between_modules_view
 from .views import (
     LedgerViewSet, TallyConfigViewSet, ParentLedgerViewSet, MasterAPIView,
-    get_tally_config, create_or_update_tally_config
+    get_tally_config, create_or_update_tally_config, update_bill_tally_sync_status
 )
 from .organization_data_views import organization_tally_data
 
@@ -81,5 +81,8 @@ urlpatterns = [
         path('expense-bills/sync/', expense_bill_sync, name='expense-bill-sync'),
         path('expense-bills/sync_bills/', expense_bills_sync_list, name='expense-bills-sync-list'),
         path('expense-bills/sync_external/', expense_bill_sync_external, name='expense-bill-sync-external'),
+
+        # Bill tally sync status update endpoint
+        path('bills/tally_status/', update_bill_tally_sync_status, name='update-bill-tally-sync-status'),
     ])),
 ]
