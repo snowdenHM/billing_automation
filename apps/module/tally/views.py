@@ -1500,7 +1500,7 @@ def update_bill_tally_sync_status(request, org_id):
 
         # Find the bill by ID and organization
         try:
-            bill = model.objects.get(id=bill_id, organization=organization)
+            bill = model.objects.get(id=bill_id)
         except model.DoesNotExist:
             return Response({
                 'success': False,
