@@ -1450,12 +1450,17 @@ def clean_decimal_value(value_str):
 @permission_classes([OrganizationAPIKeyOrBearerToken])
 def update_bill_tally_sync_status(request, org_id):
     """
-    Update the tally_synced status for a bill based on mode (vendor or expense).
+    Update the tally_synced status for bills based on mode (vendor or expense).
+    Supports both single and bulk updates.
 
     Accepts POST request with:
+    Single update format:
     - id: UUID of the bill to update
-    - status: Boolean value to set for tally_synced field
+    - status: Boolean value or string (True/true/TRUE/False/false/FALSE) to set for tally_synced field
     - mode: String 'vendor' or 'expense' to determine which model to use
+
+    Bulk update format:
+    - Data: Array of objects with id, status, and mode fields
     """
     try:
         # Get and validate organization
@@ -1466,65 +1471,116 @@ def update_bill_tally_sync_status(request, org_id):
                 'message': f'Organization with ID {org_id} not found or you do not have access to it'
             }, status=status.HTTP_404_NOT_FOUND)
 
-        # Get the request data
-        bill_id = request.data.get('id')
-        sync_status = request.data.get('status')
-        mode = request.data.get('mode')
+        # Helper function to normalize status to boolean
+        def normalize_status(status_value):
+            if isinstance(status_value, bool):
+                return status_value
+            if isinstance(status_value, str):
+                if status_value.lower() in ['true', '1']:
+                    return True
+                elif status_value.lower() in ['false', '0']:
+                    return False
+                else:
+                    raise ValueError(f"Invalid status string: {status_value}")
+            raise ValueError(f"Status must be boolean or string, got {type(status_value)}")
 
-        # Validate required fields
-        if not all([bill_id is not None, sync_status is not None, mode is not None]):
-            return Response({
-                'success': False,
-                'message': 'Missing required fields: id, status, and mode are all required'
-            }, status=status.HTTP_400_BAD_REQUEST)
+        # Helper function to validate and process a single bill update
+        def process_single_bill(bill_data):
+            bill_id = bill_data.get('id')
+            sync_status = bill_data.get('status')
+            mode = bill_data.get('mode')
 
-        # Validate mode
-        if mode not in ['vendor', 'expense']:
-            return Response({
-                'success': False,
-                'message': 'Invalid mode. Must be either "vendor" or "expense"'
-            }, status=status.HTTP_400_BAD_REQUEST)
+            # Validate required fields
+            if not all([bill_id is not None, sync_status is not None, mode is not None]):
+                return {'error': 'Missing required fields: id, status, and mode are all required'}
 
-        # Validate status is boolean
-        if not isinstance(sync_status, bool):
-            return Response({
-                'success': False,
-                'message': 'Status must be a boolean value'
-            }, status=status.HTTP_400_BAD_REQUEST)
+            # Validate mode
+            if mode not in ['vendor', 'expense']:
+                return {'error': 'Invalid mode. Must be either "vendor" or "expense"'}
 
-        # Select the appropriate model based on mode
-        if mode == 'vendor':
-            model = TallyVendorBill
-        elif mode == 'expense':
-            model = TallyExpenseBill
+            # Normalize and validate status
+            try:
+                sync_status = normalize_status(sync_status)
+            except ValueError as e:
+                return {'error': str(e)}
 
-        # Find the bill by ID and organization
-        try:
-            bill = model.objects.get(id=bill_id)
-        except model.DoesNotExist:
-            return Response({
-                'success': False,
-                'message': f'{mode.capitalize()} bill with ID {bill_id} not found in your organization'
-            }, status=status.HTTP_404_NOT_FOUND)
-        except ValueError:
-            return Response({
-                'success': False,
-                'message': 'Invalid UUID format for bill ID'
-            }, status=status.HTTP_400_BAD_REQUEST)
+            # Select the appropriate model based on mode
+            model = TallyVendorBill if mode == 'vendor' else TallyExpenseBill
 
-        # Update the tally_synced status
-        bill.tally_synced = sync_status
-        bill.save()
+            # Find the bill by ID
+            try:
+                bill = model.objects.get(id=bill_id)
+            except model.DoesNotExist:
+                return {'error': f'{mode.capitalize()} bill with ID {bill_id} not found'}
+            except ValueError:
+                return {'error': f'Invalid UUID format for bill ID {bill_id}'}
 
-        return Response({
-            'success': True,
-            'message': f'{mode.capitalize()} bill tally sync status updated successfully',
-            'data': {
+            # Update the tally_synced status
+            bill.tally_synced = sync_status
+            bill.save()
+
+            return {
+                'success': True,
                 'id': str(bill.id),
                 'tally_synced': bill.tally_synced,
                 'mode': mode
             }
-        }, status=status.HTTP_200_OK)
+
+        # Check if this is a bulk update request
+        bulk_data = request.data.get('Data')
+        if bulk_data is not None:
+            # Handle bulk update
+            if not isinstance(bulk_data, list):
+                return Response({
+                    'success': False,
+                    'message': 'Data must be an array for bulk updates'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            results = []
+            errors = []
+
+            for i, bill_data in enumerate(bulk_data):
+                result = process_single_bill(bill_data)
+                if 'error' in result:
+                    errors.append({
+                        'index': i,
+                        'id': bill_data.get('id', 'unknown'),
+                        'error': result['error']
+                    })
+                else:
+                    results.append(result)
+
+            # Return response with results and errors
+            response_data = {
+                'success': len(errors) == 0,
+                'updated_count': len(results),
+                'error_count': len(errors),
+                'results': results
+            }
+
+            if errors:
+                response_data['errors'] = errors
+
+            return Response(response_data, status=status.HTTP_200_OK if len(errors) == 0 else status.HTTP_207_MULTI_STATUS)
+
+        else:
+            # Handle single update (backward compatibility)
+            result = process_single_bill(request.data)
+            if 'error' in result:
+                return Response({
+                    'success': False,
+                    'message': result['error']
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            return Response({
+                'success': True,
+                'message': f'{result["mode"].capitalize()} bill tally sync status updated successfully',
+                'data': {
+                    'id': result['id'],
+                    'tally_synced': result['tally_synced'],
+                    'mode': result['mode']
+                }
+            }, status=status.HTTP_200_OK)
 
     except Exception as e:
         return Response({
