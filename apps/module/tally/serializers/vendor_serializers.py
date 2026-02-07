@@ -43,16 +43,19 @@ class TallyVendorBillSerializer(serializers.ModelSerializer):
     file = serializers.SerializerMethodField()
     uploaded_by = UploadedByUserSerializer(read_only=True)
     uploaded_by_name = serializers.SerializerMethodField()
+    bill_belong_your_org = serializers.SerializerMethodField()
+    description = serializers.SerializerMethodField()
 
     class Meta:
         model = TallyVendorBill
         fields = [
             'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
             'status', 'process', 'uploaded_by', 'uploaded_by_name', 
+            'bill_belong_your_org', 'description',
             'is_duplicate', 'duplicate_description', 'duplicate_score', 'duplicate_matched_bills',
             'is_processing', 'processing_error', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'bill_munshi_name', 'file', 'uploaded_by', 'uploaded_by_name', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'bill_munshi_name', 'file', 'uploaded_by', 'uploaded_by_name', 'bill_belong_your_org', 'description', 'created_at', 'updated_at']
 
     def get_file(self, obj):
         """Return complete file URL"""
@@ -72,6 +75,62 @@ class TallyVendorBillSerializer(serializers.ModelSerializer):
                 return f"{obj.uploaded_by.first_name} {obj.uploaded_by.last_name}".strip()
             return obj.uploaded_by.username
         return None
+
+    def get_bill_belong_your_org(self, obj):
+        """Get bill ownership status - calculate if not set"""
+        if obj.bill_belong_your_org is not None:
+            return obj.bill_belong_your_org
+        
+        # Calculate on-the-fly if not set and analysed_data exists
+        if obj.analysed_data and obj.organization:
+            belongs_to_org, _ = self._validate_ownership(obj.analysed_data, obj.organization)
+            return belongs_to_org
+        
+        return False
+
+    def get_description(self, obj):
+        """Get ownership description - calculate if not set"""
+        if obj.description:
+            return obj.description
+        
+        # Calculate on-the-fly if not set and analysed_data exists
+        if obj.analysed_data and obj.organization:
+            _, description = self._validate_ownership(obj.analysed_data, obj.organization)
+            return description
+        
+        return "Not analyzed yet"
+
+    def _validate_ownership(self, json_data, organization):
+        """Private method to validate ownership"""
+        try:
+            from_data = json_data.get('from', {})
+            if isinstance(from_data, dict):
+                vendor_name = from_data.get('name', '').strip()
+                vendor_gst = from_data.get('gst_number', '').strip()
+            else:
+                vendor_name = ''
+                vendor_gst = ''
+
+            # GST number match
+            if vendor_gst and organization.gst_number:
+                if vendor_gst.replace(' ', '').upper() == organization.gst_number.replace(' ', '').upper():
+                    return True, f"GST number match: {vendor_gst}"
+
+            # Company name match
+            if vendor_name and organization.name:
+                org_name_clean = organization.name.lower().strip()
+                vendor_name_clean = vendor_name.lower().strip()
+                
+                if org_name_clean == vendor_name_clean:
+                    return True, f"Exact company name match: {vendor_name}"
+                
+                if org_name_clean in vendor_name_clean or vendor_name_clean in org_name_clean:
+                    return True, f"Partial company name match: {vendor_name}"
+            
+            return False, f"No match found. Vendor: {vendor_name}, GST: {vendor_gst}"
+            
+        except Exception as e:
+            return False, f"Validation error: {str(e)}"
 
 
 class TallyVendorAnalyzedProductSerializer(serializers.ModelSerializer):
