@@ -83,8 +83,16 @@ class TallyVendorBillSerializer(serializers.ModelSerializer):
         
         # Calculate on-the-fly if not set and analysed_data exists
         if obj.analysed_data and obj.organization:
-            belongs_to_org, _ = self._validate_ownership(obj.analysed_data, obj.organization)
-            return belongs_to_org
+            try:
+                validation_result = self._validate_ownership(obj.analysed_data, obj.organization)
+                if validation_result and isinstance(validation_result, tuple) and len(validation_result) >= 2:
+                    belongs_to_org, _ = validation_result
+                    return belongs_to_org
+            except Exception as e:
+                # Log error but don't break the API
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error in ownership validation: {str(e)}")
         
         return False
 
@@ -95,14 +103,27 @@ class TallyVendorBillSerializer(serializers.ModelSerializer):
         
         # Calculate on-the-fly if not set and analysed_data exists
         if obj.analysed_data and obj.organization:
-            _, description = self._validate_ownership(obj.analysed_data, obj.organization)
-            return description
+            try:
+                validation_result = self._validate_ownership(obj.analysed_data, obj.organization)
+                if validation_result and isinstance(validation_result, tuple) and len(validation_result) >= 2:
+                    _, description = validation_result
+                    return description
+            except Exception as e:
+                # Log error but don't break the API
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error in ownership validation: {str(e)}")
+                return f"Validation error: {str(e)}"
         
         return "Not analyzed yet"
 
     def _validate_ownership(self, json_data, organization):
         """Private method to validate if organization is the vendor (from field)"""
         try:
+            # Null checks for input parameters
+            if not json_data or not organization:
+                return False, "Missing data or organization"
+                
             from_data = json_data.get('from', {})
             if isinstance(from_data, dict):
                 vendor_name = from_data.get('name', '').strip()
@@ -177,6 +198,7 @@ class TallyVendorBillSerializer(serializers.ModelSerializer):
             
             # Bill NOT issued by organization
             debug_info = f"❌ Bill NOT issued by your organization. Vendor: '{vendor_name}' (GST: '{vendor_gst}') ≠ Your Org: '{getattr(organization, 'name', 'Unknown')}' (GST: '{getattr(organization, 'gst_number', 'None')}')"
+            return False, debug_info
             
         except Exception as e:
             return False, f"Validation error: {str(e)}"
