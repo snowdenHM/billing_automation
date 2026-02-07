@@ -241,6 +241,10 @@ class TallyVendorBill(BaseOrgModel):
 
     # Tally sync status
     tally_synced = models.BooleanField(default=False, help_text="Whether this bill has been synced with Tally")
+    
+    # Bill ownership and description
+    bill_belong_your_org = models.BooleanField(default=False, help_text="Whether this bill belongs to your organization")
+    description = models.TextField(blank=True, null=True, help_text="Description of the bill")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -474,6 +478,10 @@ class TallyExpenseBill(BaseOrgModel):
 
     # Tally sync status
     tally_synced = models.BooleanField(default=False, help_text="Whether this bill has been synced with Tally")
+    
+    # Bill ownership and description
+    bill_belong_your_org = models.BooleanField(default=False, help_text="Whether this bill belongs to your organization")
+    description = models.TextField(blank=True, null=True, help_text="Description of the bill")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

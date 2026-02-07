@@ -144,7 +144,8 @@ class TallyVendorBillSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
             'status', 'process', 'uploaded_by', 'uploaded_by_username',
-            'organization_name', 'created_at', 'updated_at'
+            'organization_name', 'bill_belong_your_org', 'description', 
+            'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'uploaded_by_username', 'organization_name']
 
@@ -158,7 +159,8 @@ class TallyExpenseBillSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
             'status', 'process', 'uploaded_by', 'uploaded_by_username',
-            'organization_name', 'created_at', 'updated_at'
+            'organization_name', 'bill_belong_your_org', 'description',
+            'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'uploaded_by_username', 'organization_name']
 

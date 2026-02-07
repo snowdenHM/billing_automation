@@ -405,18 +405,19 @@ def analyze_bill_with_ai(bill, organization):
         logger.error(f"Error reading/processing bill file: {str(e)}")
         raise Exception(f"Error reading bill file: {str(e)}")
 
-    # Enhanced prompt for Indian invoices (from successful test script)
+    # Enhanced prompt for Indian invoices with GST number extraction
     enhanced_prompt = """
     Analyze this invoice/bill image carefully and extract ALL visible information in JSON format.
     This appears to be an Indian business invoice/bill. Look for:
     
     1. Invoice/Bill Number (may be labeled as Invoice No, Bill No, Receipt No, etc.)
     2. Dates (Invoice Date, Bill Date, Due Date - convert to YYYY-MM-DD format)
-    3. Vendor/Company details in "from" section (name and address)
-    4. Customer details in "to" section (name and address) 
+    3. Vendor/Company details in "from" section (name, address, and GST number)
+    4. Customer details in "to" section (name, address, and GST number) 
     5. Line items with descriptions, quantities, and prices
     6. Tax amounts (IGST, CGST, SGST - look for percentages and amounts)
     7. Total amount (may include terms like "Total", "Grand Total", "Amount Payable")
+    8. GST Numbers (look for GSTIN, GST No, Tax ID - usually 15 digit alphanumeric codes)
     
     IMPORTANT RULES:
     - Extract EXACT text as it appears on the document
@@ -424,6 +425,7 @@ def analyze_bill_with_ai(bill, organization):
     - If any field is not visible or unclear, use empty string "" or 0 for numbers
     - Look carefully at the entire document, including headers, footers, and margins
     - Pay special attention to tax sections which may be in tables or separate areas
+    - GST numbers are usually 15-character alphanumeric codes (format: 22AAAAA0000A1Z5)
     
     Return data in this JSON structure:
     {
@@ -432,11 +434,13 @@ def analyze_bill_with_ai(bill, organization):
         "dueDate": "Due date in YYYY-MM-DD format if mentioned",
         "from": {
             "name": "Vendor/Company name",
-            "address": "Vendor address"
+            "address": "Vendor address",
+            "gst_number": "Vendor GST number if visible"
         },
         "to": {
             "name": "Customer name", 
-            "address": "Customer address"
+            "address": "Customer address",
+            "gst_number": "Customer GST number if visible"
         },
         "items": [
             {
@@ -546,11 +550,57 @@ def analyze_bill_with_ai(bill, organization):
     return process_analysis_data(bill, json_data, organization)
 
 
+def validate_bill_ownership(json_data, organization):
+    """Validate if the bill belongs to the organization based on vendor GST number or company name"""
+    try:
+        # Extract vendor info ("from" field - who sent the bill)
+        from_data = json_data.get('from', {})
+        if isinstance(from_data, dict):
+            vendor_name = from_data.get('name', '').strip()
+            vendor_gst = from_data.get('gst_number', '').strip()
+        else:
+            vendor_name = ''
+            vendor_gst = ''
+
+        # Check GST number match first (most accurate)
+        if vendor_gst and organization.gst_number:
+            if vendor_gst.replace(' ', '').upper() == organization.gst_number.replace(' ', '').upper():
+                return True, f"GST number match: {vendor_gst}"
+
+        # Check organization name match (case-insensitive, partial match)
+        if vendor_name and organization.name:
+            org_name_clean = organization.name.lower().strip()
+            vendor_name_clean = vendor_name.lower().strip()
+            
+            # Exact match
+            if org_name_clean == vendor_name_clean:
+                return True, f"Exact company name match: {vendor_name}"
+            
+            # Partial match (if organization name is contained in vendor name or vice versa)
+            if org_name_clean in vendor_name_clean or vendor_name_clean in org_name_clean:
+                return True, f"Partial company name match: {vendor_name}"
+        
+        return False, f"No match found. Vendor: {vendor_name}, GST: {vendor_gst}"
+        
+    except Exception as e:
+        logger.error(f"Error validating bill ownership: {str(e)}")
+        return False, f"Validation error: {str(e)}"
+
+
 def process_analysis_data(bill, json_data, organization):
     """Process AI extracted data and create analyzed bill"""
     try:
         # Log the raw JSON data for debugging
         logger.info(f"Raw JSON data from OpenAI: {json.dumps(json_data, indent=2)}")
+
+        # Validate bill ownership
+        bill_belongs_to_org, ownership_description = validate_bill_ownership(json_data, organization)
+        
+        # Update bill ownership fields
+        bill.bill_belong_your_org = bill_belongs_to_org
+        bill.description = ownership_description
+        
+        logger.info(f"Bill ownership validation: {bill_belongs_to_org}, Description: {ownership_description}")
 
         # Extract relevant data with robust error handling
         relevant_data = {}
@@ -586,9 +636,9 @@ def process_analysis_data(bill, json_data, organization):
             logger.warning(f"Unexpected JSON data type: {type(json_data)}")
             raise Exception("Invalid JSON data format from OpenAI")
 
-        # Save analyzed data to bill
+        # Save analyzed data to bill with ownership information
         bill.analysed_data = relevant_data
-        bill.save(update_fields=['analysed_data'])
+        bill.save(update_fields=['analysed_data', 'bill_belong_your_org', 'description'])
 
         # Extract required fields with safe access
         invoice_number = str(relevant_data.get('invoiceNumber', '')).strip()
@@ -948,6 +998,14 @@ def vendor_bills_list(request, org_id):
         bills = bills.filter(status__in=['Analysed', 'Verified'])
     elif status_param == 'synced':
         bills = bills.filter(status='Synced')
+
+    # Filter by ownership based on query parameters
+    ownership_param = request.query_params.get('ownership', '').lower()
+    if ownership_param == 'mine':
+        bills = bills.filter(bill_belong_your_org=True)
+    elif ownership_param == 'others':
+        bills = bills.filter(bill_belong_your_org=False)
+    # If no ownership parameter, show all bills
 
     bills = bills.order_by('-created_at')
 
@@ -1348,6 +1406,17 @@ def vendor_bill_analyze(request, org_id):
 def process_existing_analysis_data(bill, existing_data, organization):
     """Process existing analyzed data without calling OpenAI again"""
     try:
+        logger.info(f"Processing existing analysis data for bill {bill.id}")
+        
+        # Validate bill ownership with existing data
+        bill_belongs_to_org, ownership_description = validate_bill_ownership(existing_data, organization)
+        
+        # Update bill ownership fields
+        bill.bill_belong_your_org = bill_belongs_to_org
+        bill.description = ownership_description
+        bill.save(update_fields=['bill_belong_your_org', 'description'])
+        
+        logger.info(f"Updated ownership for existing bill: {bill_belongs_to_org}, Description: {ownership_description}")
         logger.info(f"Processing existing analyzed data for bill {bill.id}")
 
         # Check if analyzed bill already exists
