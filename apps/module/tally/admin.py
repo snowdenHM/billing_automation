@@ -278,11 +278,11 @@ class TallyVendorAnalyzedBillAdmin(admin.ModelAdmin):
 
 
 class TallyVendorBillAdmin(admin.ModelAdmin):
-    list_display = ('bill_munshi_name', 'status', 'tally_synced', 'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'display_file', 'created_at')
-    list_filter = ('status', 'tally_synced', 'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'created_at')
-    search_fields = ('bill_munshi_name', 'uploaded_by__username', 'uploaded_by__first_name', 'uploaded_by__last_name', 'organization__name')
+    list_display = ('bill_munshi_name', 'status', 'display_ownership', 'tally_synced', 'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'display_file', 'created_at')
+    list_filter = ('status', 'bill_belong_your_org', 'tally_synced', 'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'created_at')
+    search_fields = ('bill_munshi_name', 'description', 'uploaded_by__username', 'uploaded_by__first_name', 'uploaded_by__last_name', 'organization__name')
     readonly_fields = ('created_at', 'updated_at')
-    fields = ('bill_munshi_name', 'file', 'file_type', 'status', 'tally_synced', 'process', 'uploaded_by', 'organization', 'is_duplicate', 'duplicate_description', 'duplicate_score', 'duplicate_matched_bills', 'is_processing', 'processing_error', 'analysed_data', 'created_at', 'updated_at')
+    fields = ('bill_munshi_name', 'file', 'file_type', 'status', 'bill_belong_your_org', 'description', 'tally_synced', 'process', 'uploaded_by', 'organization', 'is_duplicate', 'duplicate_description', 'duplicate_score', 'duplicate_matched_bills', 'is_processing', 'processing_error', 'analysed_data', 'created_at', 'updated_at')
     autocomplete_fields = ('uploaded_by', 'organization')
 
     def get_queryset(self, request):
@@ -296,14 +296,22 @@ class TallyVendorBillAdmin(admin.ModelAdmin):
             return format_html('<a href="{}" target="_blank">View File</a>', obj.file.url)
         return "-"
     display_file.short_description = "File"
+    
+    def display_ownership(self, obj):
+        if obj.bill_belong_your_org:
+            return format_html('<span style="color: green;">✓ Own Bill</span>')
+        else:
+            return format_html('<span style="color: orange;">⚬ Vendor Bill</span>')
+    display_ownership.short_description = "Ownership"
+    display_ownership.admin_order_field = 'bill_belong_your_org'
 
 
 class TallyExpenseBillAdmin(admin.ModelAdmin):
-    list_display = ('bill_munshi_name', 'status', 'tally_synced', 'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'display_file', 'created_at')
-    list_filter = ('status', 'tally_synced', 'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'created_at')
-    search_fields = ('bill_munshi_name', 'uploaded_by__username', 'uploaded_by__first_name', 'uploaded_by__last_name', 'organization__name')
+    list_display = ('bill_munshi_name', 'status', 'display_ownership', 'tally_synced', 'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'display_file', 'created_at')
+    list_filter = ('status', 'bill_belong_your_org', 'tally_synced', 'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'created_at')
+    search_fields = ('bill_munshi_name', 'description', 'uploaded_by__username', 'uploaded_by__first_name', 'uploaded_by__last_name', 'organization__name')
     readonly_fields = ('created_at', 'updated_at')
-    fields = ('bill_munshi_name', 'file', 'file_type', 'status', 'tally_synced', 'process', 'uploaded_by', 'organization', 'is_duplicate', 'duplicate_description', 'duplicate_score', 'duplicate_matched_bills', 'is_processing', 'processing_error', 'analysed_data', 'created_at', 'updated_at')
+    fields = ('bill_munshi_name', 'file', 'file_type', 'status', 'bill_belong_your_org', 'description', 'tally_synced', 'process', 'uploaded_by', 'organization', 'is_duplicate', 'duplicate_description', 'duplicate_score', 'duplicate_matched_bills', 'is_processing', 'processing_error', 'analysed_data', 'created_at', 'updated_at')
     autocomplete_fields = ('uploaded_by', 'organization')
 
     def get_queryset(self, request):
@@ -317,6 +325,14 @@ class TallyExpenseBillAdmin(admin.ModelAdmin):
             return format_html('<a href="{}" target="_blank">View File</a>', obj.file.url)
         return "-"
     display_file.short_description = "File"
+    
+    def display_ownership(self, obj):
+        if obj.bill_belong_your_org:
+            return format_html('<span style="color: green;">✓ Own Bill</span>')
+        else:
+            return format_html('<span style="color: orange;">⚬ Vendor Bill</span>')
+    display_ownership.short_description = "Ownership"
+    display_ownership.admin_order_field = 'bill_belong_your_org'
 
 
 class TallyExpenseAnalyzedProductInline(admin.TabularInline):
