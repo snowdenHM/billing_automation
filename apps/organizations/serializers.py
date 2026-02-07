@@ -53,6 +53,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "unique_name",
             "slug",
             "status",
+            "gst_number",
             "owner",
             "created_by",
             "owner_email",

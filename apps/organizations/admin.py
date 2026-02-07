@@ -4,8 +4,8 @@ from .models import Organization, OrgMembership, OrganizationAPIKey, Module, Org
 
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "slug", "status", "owner", "created_by", "created_at")
-    search_fields = ("name", "slug")
+    list_display = ("id", "name", "slug", "gst_number", "status", "owner", "created_by", "created_at")
+    search_fields = ("name", "slug", "gst_number")
     list_filter = ("status",)
 
 

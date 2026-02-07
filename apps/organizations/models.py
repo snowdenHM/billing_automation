@@ -38,6 +38,7 @@ class Organization(TimeStampedModel):
     unique_name = models.CharField(max_length=50, unique=True, default=generate_unique_org_name)
     slug = models.SlugField(max_length=255, unique=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=ACTIVE)
+    gst_number = models.CharField(max_length=15, blank=True, null=True, help_text="GST registration number")
 
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
