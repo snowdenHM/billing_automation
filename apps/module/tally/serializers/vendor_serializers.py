@@ -101,33 +101,82 @@ class TallyVendorBillSerializer(serializers.ModelSerializer):
         return "Not analyzed yet"
 
     def _validate_ownership(self, json_data, organization):
-        """Private method to validate ownership"""
+        """Private method to validate if organization is the vendor (from field)"""
         try:
             from_data = json_data.get('from', {})
             if isinstance(from_data, dict):
                 vendor_name = from_data.get('name', '').strip()
                 vendor_gst = from_data.get('gst_number', '').strip()
+                vendor_address = from_data.get('address', '').strip()
             else:
                 vendor_name = ''
                 vendor_gst = ''
+                vendor_address = ''
 
-            # GST number match
-            if vendor_gst and organization.gst_number:
-                if vendor_gst.replace(' ', '').upper() == organization.gst_number.replace(' ', '').upper():
-                    return True, f"GST number match: {vendor_gst}"
+            # If GST number is missing from extraction, try to find it in the address
+            if not vendor_gst and vendor_address:
+                import re
+                gst_patterns = [
+                    r'GST\s*NO\.?\s*:?\s*([A-Z0-9]{15})',
+                    r'GSTIN/UIN\s*:?\s*([A-Z0-9]{15})',
+                    r'GSTIN\s*:?\s*([A-Z0-9]{15})',
+                    r'Tax\s*ID\s*:?\s*([A-Z0-9]{15})',
+                    r'UIN\s*:?\s*([A-Z0-9]{15})',
+                    r'Registration\s*No\.?\s*:?\s*([A-Z0-9]{15})',
+                    r'\b([A-Z0-9]{15})\b'
+                ]
+                
+                for pattern in gst_patterns:
+                    match = re.search(pattern, vendor_address.upper(), re.IGNORECASE)
+                    if match:
+                        vendor_gst = match.group(1).strip()
+                        break
 
-            # Company name match
-            if vendor_name and organization.name:
+            # Check if organization IS the vendor (from field) - bill issued BY organization
+            # Priority 1: GST number match
+            if vendor_gst and hasattr(organization, 'gst_number') and organization.gst_number:
+                org_gst_clean = organization.gst_number.replace(' ', '').replace('-', '').upper()
+                vendor_gst_clean = vendor_gst.replace(' ', '').replace('-', '').upper()
+                
+                if org_gst_clean == vendor_gst_clean:
+                    return True, f"✅ Organization GST match: {vendor_gst} - Bill issued BY your organization"
+                
+                # Partial match for truncated GST numbers
+                if len(vendor_gst_clean) >= 10 and len(org_gst_clean) >= 10:
+                    if org_gst_clean[:10] == vendor_gst_clean[:10]:
+                        return True, f"✅ Partial organization GST match: {vendor_gst} - Bill issued BY your organization"
+
+            # Priority 2: Organization name match with vendor name
+            if vendor_name and hasattr(organization, 'name') and organization.name:
                 org_name_clean = organization.name.lower().strip()
                 vendor_name_clean = vendor_name.lower().strip()
                 
+                # Exact match
                 if org_name_clean == vendor_name_clean:
-                    return True, f"Exact company name match: {vendor_name}"
+                    return True, f"✅ Exact organization name match: {vendor_name} - Bill issued BY your organization"
                 
+                # Partial match
                 if org_name_clean in vendor_name_clean or vendor_name_clean in org_name_clean:
-                    return True, f"Partial company name match: {vendor_name}"
+                    return True, f"✅ Partial organization name match: {vendor_name} - Bill issued BY your organization"
+                
+                # Word-based similarity
+                org_words = set(org_name_clean.replace(',', '').replace('.', '').split())
+                vendor_words = set(vendor_name_clean.replace(',', '').replace('.', '').split())
+                
+                common_stopwords = {'ltd', 'limited', 'pvt', 'private', 'llp', 'co', 'company', 'inc', 'incorporated'}
+                org_words = org_words - common_stopwords
+                vendor_words = vendor_words - common_stopwords
+                
+                if len(org_words) > 0 and len(vendor_words) > 0:
+                    overlap = len(org_words.intersection(vendor_words))
+                    total_words = len(org_words.union(vendor_words))
+                    similarity = overlap / total_words if total_words > 0 else 0
+                    
+                    if similarity >= 0.6:  # 60% for organization match
+                        return True, f"✅ Similar organization name match ({int(similarity*100)}% similarity): {vendor_name} - Bill issued BY your organization"
             
-            return False, f"No match found. Vendor: {vendor_name}, GST: {vendor_gst}"
+            # Bill NOT issued by organization
+            debug_info = f"❌ Bill NOT issued by your organization. Vendor: '{vendor_name}' (GST: '{vendor_gst}') ≠ Your Org: '{getattr(organization, 'name', 'Unknown')}' (GST: '{getattr(organization, 'gst_number', 'None')}')"
             
         except Exception as e:
             return False, f"Validation error: {str(e)}"

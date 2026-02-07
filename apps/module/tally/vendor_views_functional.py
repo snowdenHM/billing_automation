@@ -405,19 +405,36 @@ def analyze_bill_with_ai(bill, organization):
         logger.error(f"Error reading/processing bill file: {str(e)}")
         raise Exception(f"Error reading bill file: {str(e)}")
 
-    # Enhanced prompt for Indian invoices with GST number extraction
+    # Enhanced prompt for Indian invoices with aggressive GST number extraction
     enhanced_prompt = """
-    Analyze this invoice/bill image carefully and extract ALL visible information in JSON format.
-    This appears to be an Indian business invoice/bill. Look for:
+    Analyze this Indian invoice/bill image very carefully and extract ALL visible information in JSON format.
     
-    1. Invoice/Bill Number (may be labeled as Invoice No, Bill No, Receipt No, etc.)
+    CRITICAL FOCUS ON GST NUMBERS:
+    GST numbers in Indian invoices appear in various formats and locations:
+    - GSTIN: 22AAAAA0000A1Z5 (15-character alphanumeric code)
+    - GST No: 06AADCK7940H1ZG
+    - Tax ID: 27AABCU9603R1ZX
+    - Often embedded in addresses like "GST NO. 123456... State Name: Delhi, Code: 07"
+    - May appear as "GSTIN/UIN :" followed by the number
+    - Sometimes shown in headers, footers, or separate tax information sections
+    - Can be in vendor section (from) and customer section (to)
+    
+    SEARCH EVERYWHERE FOR GST NUMBERS:
+    1. Company headers and letterheads
+    2. Address blocks (often at the end of addresses)
+    3. Tax information sections
+    4. Registration details
+    5. Footer information
+    6. Any line containing "GST", "GSTIN", "Tax ID", "UIN", "Registration"
+    
+    EXTRACTION REQUIREMENTS:
+    1. Invoice/Bill Number (Invoice No, Bill No, Receipt No, etc.)
     2. Dates (Invoice Date, Bill Date, Due Date - convert to YYYY-MM-DD format)
-    3. Vendor/Company details in "from" section (name, address, and GST number)
-    4. Customer details in "to" section (name, address, and GST number) 
+    3. Vendor/Company details (from - who is billing)
+    4. Customer details (to - who is being billed)
     5. Line items with descriptions, quantities, and prices
     6. Tax amounts (IGST, CGST, SGST - look for percentages and amounts)
-    7. Total amount (may include terms like "Total", "Grand Total", "Amount Payable")
-    8. GST Numbers (look for GSTIN, GST No, Tax ID - usually 15 digit alphanumeric codes)
+    7. Total amount (Total, Grand Total, Amount Payable)
     
     IMPORTANT RULES:
     - Extract EXACT text as it appears on the document
@@ -425,7 +442,8 @@ def analyze_bill_with_ai(bill, organization):
     - If any field is not visible or unclear, use empty string "" or 0 for numbers
     - Look carefully at the entire document, including headers, footers, and margins
     - Pay special attention to tax sections which may be in tables or separate areas
-    - GST numbers are usually 15-character alphanumeric codes (format: 22AAAAA0000A1Z5)
+    - GST numbers are 15-character codes - extract the full code even if split across lines
+    - If you see partial GST info like "State: Haryana, Code: 06", still extract what's available
     
     Return data in this JSON structure:
     {
@@ -433,14 +451,14 @@ def analyze_bill_with_ai(bill, organization):
         "dateIssued": "Invoice/Bill date in YYYY-MM-DD format",
         "dueDate": "Due date in YYYY-MM-DD format if mentioned",
         "from": {
-            "name": "Vendor/Company name",
-            "address": "Vendor address",
-            "gst_number": "Vendor GST number if visible"
+            "name": "Vendor/Company name (who is sending the bill)",
+            "address": "Complete vendor address",
+            "gst_number": "Vendor's GST number - SEARCH THOROUGHLY for GSTIN/GST No/Tax ID near vendor details"
         },
         "to": {
-            "name": "Customer name", 
-            "address": "Customer address",
-            "gst_number": "Customer GST number if visible"
+            "name": "Customer name (who is receiving the bill)", 
+            "address": "Complete customer address",
+            "gst_number": "Customer's GST number - SEARCH THOROUGHLY for GSTIN/GST No/Tax ID near customer details"
         },
         "items": [
             {
@@ -551,36 +569,93 @@ def analyze_bill_with_ai(bill, organization):
 
 
 def validate_bill_ownership(json_data, organization):
-    """Validate if the bill belongs to the organization based on vendor GST number or company name"""
+    """Validate if the bill belongs to the organization by matching organization details with 'from' field (vendor)"""
     try:
-        # Extract vendor info ("from" field - who sent the bill)
+        # Extract vendor info ("from" field - who sent/issued the bill)
         from_data = json_data.get('from', {})
         if isinstance(from_data, dict):
             vendor_name = from_data.get('name', '').strip()
             vendor_gst = from_data.get('gst_number', '').strip()
+            vendor_address = from_data.get('address', '').strip()
         else:
             vendor_name = ''
             vendor_gst = ''
+            vendor_address = ''
 
-        # Check GST number match first (most accurate)
-        if vendor_gst and organization.gst_number:
-            if vendor_gst.replace(' ', '').upper() == organization.gst_number.replace(' ', '').upper():
-                return True, f"GST number match: {vendor_gst}"
+        # If GST number is missing from extraction, try to find it in the address
+        if not vendor_gst and vendor_address:
+            import re
+            # Common GST number patterns in Indian invoices
+            gst_patterns = [
+                r'GST\s*NO\.?\s*:?\s*([A-Z0-9]{15})',
+                r'GSTIN/UIN\s*:?\s*([A-Z0-9]{15})',
+                r'GSTIN\s*:?\s*([A-Z0-9]{15})',
+                r'Tax\s*ID\s*:?\s*([A-Z0-9]{15})',
+                r'UIN\s*:?\s*([A-Z0-9]{15})',
+                r'Registration\s*No\.?\s*:?\s*([A-Z0-9]{15})',
+                r'\b([A-Z0-9]{15})\b'  # Generic 15-character alphanumeric pattern
+            ]
+            
+            for pattern in gst_patterns:
+                match = re.search(pattern, vendor_address.upper(), re.IGNORECASE)
+                if match:
+                    vendor_gst = match.group(1).strip()
+                    logger.info(f"Found GST number in address: {vendor_gst}")
+                    break
 
-        # Check organization name match (case-insensitive, partial match)
-        if vendor_name and organization.name:
+        logger.info(f"Validating ownership - Vendor: {vendor_name}, Vendor GST: {vendor_gst}")
+        logger.info(f"Organization: {getattr(organization, 'name', 'Unknown')}, Org GST: {getattr(organization, 'gst_number', 'None')}")
+
+        # MAIN LOGIC: Check if organization IS the vendor (from field)
+        # This means the bill was issued BY the organization TO someone else
+        
+        # Priority 1: GST number match (most reliable)
+        if vendor_gst and hasattr(organization, 'gst_number') and organization.gst_number:
+            org_gst_clean = organization.gst_number.replace(' ', '').replace('-', '').upper()
+            vendor_gst_clean = vendor_gst.replace(' ', '').replace('-', '').upper()
+            
+            if org_gst_clean == vendor_gst_clean:
+                return True, f"✅ Organization GST match: {vendor_gst} - This bill was issued BY your organization"
+            
+            # Also check partial match (in case of truncated GST numbers)
+            if len(vendor_gst_clean) >= 10 and len(org_gst_clean) >= 10:
+                if org_gst_clean[:10] == vendor_gst_clean[:10]:
+                    return True, f"✅ Partial organization GST match: {vendor_gst} - This bill was issued BY your organization"
+
+        # Priority 2: Organization name match with vendor name
+        if vendor_name and hasattr(organization, 'name') and organization.name:
             org_name_clean = organization.name.lower().strip()
             vendor_name_clean = vendor_name.lower().strip()
             
             # Exact match
             if org_name_clean == vendor_name_clean:
-                return True, f"Exact company name match: {vendor_name}"
+                return True, f"✅ Exact organization name match: {vendor_name} - This bill was issued BY your organization"
             
             # Partial match (if organization name is contained in vendor name or vice versa)
             if org_name_clean in vendor_name_clean or vendor_name_clean in org_name_clean:
-                return True, f"Partial company name match: {vendor_name}"
+                return True, f"✅ Partial organization name match: {vendor_name} - This bill was issued BY your organization"
+            
+            # Check for common abbreviations and variations
+            org_words = set(org_name_clean.replace(',', '').replace('.', '').split())
+            vendor_words = set(vendor_name_clean.replace(',', '').replace('.', '').split())
+            
+            # Remove common words that don't add meaning
+            common_stopwords = {'ltd', 'limited', 'pvt', 'private', 'llp', 'co', 'company', 'inc', 'incorporated'}
+            org_words = org_words - common_stopwords
+            vendor_words = vendor_words - common_stopwords
+            
+            if len(org_words) > 0 and len(vendor_words) > 0:
+                # Calculate word overlap
+                overlap = len(org_words.intersection(vendor_words))
+                total_words = len(org_words.union(vendor_words))
+                similarity = overlap / total_words if total_words > 0 else 0
+                
+                if similarity >= 0.6:  # 60% word overlap for organization match
+                    return True, f"✅ Similar organization name match ({int(similarity*100)}% similarity): {vendor_name} - This bill was issued BY your organization"
         
-        return False, f"No match found. Vendor: {vendor_name}, GST: {vendor_gst}"
+        # If no match found, this bill was NOT issued by the organization
+        debug_info = f"❌ Bill NOT issued by your organization. Vendor: '{vendor_name}' (GST: '{vendor_gst}') ≠ Your Org: '{getattr(organization, 'name', 'Unknown')}' (GST: '{getattr(organization, 'gst_number', 'None')}')"
+        return False, debug_info
         
     except Exception as e:
         logger.error(f"Error validating bill ownership: {str(e)}")
