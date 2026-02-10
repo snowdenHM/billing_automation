@@ -292,7 +292,11 @@ def get_organization_from_request(request, org_id=None):
 def analyze_bill_with_ai(bill, organization):
     """Analyze bill using OpenAI API with enhanced PDF handling and error recovery"""
     if not client:
-        raise Exception("OpenAI client not configured")
+        return {
+            'success': False,
+            'error': 'OpenAI client not configured',
+            'analyzed_bill': None
+        }
 
     logger.info(f"Starting AI analysis for bill {bill.id}, file: {bill.file.name}")
 
@@ -403,7 +407,11 @@ def analyze_bill_with_ai(bill, organization):
 
     except Exception as e:
         logger.error(f"Error reading/processing bill file: {str(e)}")
-        raise Exception(f"Error reading bill file: {str(e)}")
+        return {
+            'success': False,
+            'error': f"Error reading bill file: {str(e)}",
+            'analyzed_bill': None
+        }
 
     # Enhanced prompt for Indian invoices with aggressive GST number extraction
     enhanced_prompt = """
@@ -572,13 +580,35 @@ def analyze_bill_with_ai(bill, organization):
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse JSON from OpenAI response: {str(e)}")
         logger.error(f"Raw response: {response.choices[0].message.content if response.choices else 'No response'}")
-        raise Exception(f"Invalid JSON response from OpenAI: {str(e)}")
+        return {
+            'success': False,
+            'error': f"Invalid JSON response from OpenAI: {str(e)}",
+            'analyzed_bill': None
+        }
     except Exception as e:
         logger.error(f"AI processing failed: {str(e)}")
-        raise Exception(f"AI processing failed: {str(e)}")
+        return {
+            'success': False,
+            'error': f"AI processing failed: {str(e)}",
+            'analyzed_bill': None
+        }
 
     # Process and save extracted data
-    return process_analysis_data(bill, json_data, organization)
+    try:
+        logger.warning(f"🚀 Starting process_analysis_data...")
+        analyzed_bill = process_analysis_data(bill, json_data, organization)
+        return {
+            'success': True,
+            'analyzed_bill': analyzed_bill,
+            'error': None
+        }
+    except Exception as e:
+        logger.error(f"🔥 Error in process_analysis_data: {str(e)}")
+        return {
+            'success': False, 
+            'error': f"Error processing analysis data: {str(e)}",
+            'analyzed_bill': None
+        }
 
 
 def validate_bill_ownership(json_data, organization):
