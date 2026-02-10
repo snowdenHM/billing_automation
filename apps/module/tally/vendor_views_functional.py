@@ -889,12 +889,38 @@ def process_analysis_data(bill, json_data, organization):
                         # Debug log for each item
                         logger.warning(f"📋 Item {idx}: '{item.get('description', 'No description')}' - Price: {price_val}, Qty: {quantity_val}, Amount: {amount_val}")
 
-                        # 🚀 AUTO-ASSIGN TAX LEDGERS BASED ON GST VALUES
-                        logger.warning(f"🏛️  Starting tax ledger search for item {idx} with GST values - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
-                        tax_ledger = find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val)
+                        # 🧮 CALCULATE PROPORTIONAL GST FOR THIS ITEM
+                        # Calculate this item's share of total GST based on its amount
+                        total_taxable_amount = total_val - (igst_val + cgst_val + sgst_val)
+                        if total_taxable_amount > 0 and amount_val > 0:
+                            # Proportional GST calculation
+                            item_proportion = amount_val / total_taxable_amount
+                            item_igst = igst_val * item_proportion
+                            item_cgst = cgst_val * item_proportion
+                            item_sgst = sgst_val * item_proportion
+                        else:
+                            # Fallback: distribute equally among items if calculation fails
+                            num_items = len([i for i in items if isinstance(i, dict) and safe_float_convert(i.get('price', 0)) > 0])
+                            if num_items > 0:
+                                item_igst = igst_val / num_items
+                                item_cgst = cgst_val / num_items
+                                item_sgst = sgst_val / num_items
+                            else:
+                                item_igst = item_cgst = item_sgst = 0
                         
-                        # Determine GST rate from tax amounts
-                        gst_rate = calculate_gst_rate(amount_val, igst_val, cgst_val, sgst_val)
+                        # Round GST values to 2 decimal places
+                        item_igst_rounded = Decimal(str(item_igst)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        item_cgst_rounded = Decimal(str(item_cgst)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        item_sgst_rounded = Decimal(str(item_sgst)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        
+                        logger.warning(f"🧮 Item {idx} proportional GST - IGST: {item_igst_rounded}, CGST: {item_cgst_rounded}, SGST: {item_sgst_rounded}")
+
+                        # 🚀 AUTO-ASSIGN TAX LEDGERS BASED ON ITEM-SPECIFIC GST VALUES
+                        logger.warning(f"🏛️  Starting tax ledger search for item {idx} with item GST values - IGST: {item_igst_rounded}, CGST: {item_cgst_rounded}, SGST: {item_sgst_rounded}")
+                        tax_ledger = find_appropriate_tax_ledger(organization, float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded))
+                        
+                        # Determine GST rate from tax amounts for this specific item
+                        gst_rate = calculate_gst_rate(amount_val, float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded))
                         
                         # Format GST rate to match choices
                         formatted_gst_rate = f"{gst_rate}%" if gst_rate not in ["0", "Exempted", "N/A"] else gst_rate
@@ -907,11 +933,14 @@ def process_analysis_data(bill, json_data, organization):
                             amount=amount_rounded,
                             taxes=tax_ledger,  # 🎯 Auto-assigned tax ledger (correct field name)
                             product_gst=formatted_gst_rate,   # 🎯 Auto-assigned GST rate with % format
+                            igst=item_igst_rounded,  # 🎯 Individual item IGST
+                            cgst=item_cgst_rounded,  # 🎯 Individual item CGST
+                            sgst=item_sgst_rounded,  # 🎯 Individual item SGST
                             organization=organization
                         )
                         product_instances.append(product)
                         
-                        logger.warning(f"📦 Created product {idx} with auto-tax: '{item.get('description', '')[:50]}...' | Tax Ledger: '{tax_ledger.name if tax_ledger else 'None'}' | GST Rate: {formatted_gst_rate}")
+                        logger.warning(f"📦 Created product {idx} with auto-tax: '{item.get('description', '')[:50]}...' | Tax Ledger: '{tax_ledger.name if tax_ledger else 'None'}' | GST Rate: {formatted_gst_rate} | Item IGST: {item_igst_rounded} | Item CGST: {item_cgst_rounded} | Item SGST: {item_sgst_rounded}")
                     else:
                         logger.warning(f"❌ Item {idx} is not a dict: {item}")
             else:
@@ -1806,31 +1835,45 @@ def vendor_bill_analyze(request, org_id):
 
     try:
         # Check if bill already has analyzed data
+        logger.warning(f"🔍 Checking if bill {bill_id} already has analyzed data...")
+        
         if bill.analysed_data:
-            logger.info(f"Using existing analyzed data for bill {bill_id}")
+            logger.warning(f"📊 Bill has existing analyzed data, using process_existing_analysis_data()")
             analyzed_bill = process_existing_analysis_data(bill, bill.analysed_data, organization)
+            logger.warning(f"✅ process_existing_analysis_data completed successfully")
         else:
-            logger.info(f"Running new OpenAI analysis for bill {bill_id}")
+            logger.warning(f"🚀 No existing data found, running new OpenAI analysis for bill {bill_id}")
             analysis_result = analyze_bill_with_ai(bill, organization)
+            
+            logger.warning(f"📋 analyze_bill_with_ai result: success={analysis_result.get('success', 'unknown')}")
+            
             if not analysis_result.get('success'):
+                logger.error(f"❌ Analysis failed: {analysis_result.get('error', 'Unknown error')}")
                 return Response({
                     'error': 'Bill Analysis Failed',
                     'message': 'The bill analysis could not be completed. This might be due to poor image quality, unsupported file format, or AI service issues.',
                     'details': analysis_result.get('error', 'Unknown error'),
                     'error_code': 'ANALYSIS_FAILED'
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
             analyzed_bill = analysis_result.get('analyzed_bill')
+            logger.warning(f"✅ Got analyzed_bill from analysis_result: {analyzed_bill}")
 
+        logger.warning(f"🔎 Starting duplicate check for bill {bill.bill_munshi_name}...")
         # Check for duplicate bills after analysis
         is_duplicate, duplicate_bills, max_similarity = check_duplicate_tally_vendor_bill(bill, organization)
+        logger.warning(f"🔍 Duplicate check complete - is_duplicate: {is_duplicate}, count: {len(duplicate_bills) if duplicate_bills else 0}")
 
         response_data = {
             "detail": "Tally vendor bill analyzed successfully",
             "analyzed_bill": TallyVendorAnalyzedBillSerializer(analyzed_bill).data
         }
+        
+        logger.warning(f"📝 Created response_data with analyzed_bill serialized")
 
         # Add duplicate warnings if found
         if is_duplicate:
+            logger.warning(f"⚠️  Processing duplicate warnings for {len(duplicate_bills)} duplicates")
             duplicate_warnings = []
             for dup in duplicate_bills:
                 duplicate_warnings.append({
@@ -1857,10 +1900,13 @@ def vendor_bill_analyze(request, org_id):
 
             logger.warning(f"Duplicate Tally vendor bill detected for {bill.bill_munshi_name} - {len(duplicate_bills)} similar bills found")
 
+        logger.warning(f"🎉 API Response ready - sending success response with status 200")
         return Response(response_data, status=status.HTTP_200_OK)
 
     except Exception as e:
-        logger.error(f"Bill analysis failed: {str(e)}")
+        logger.error(f"💥 CRITICAL ERROR in vendor_bill_analyze: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return Response({
             'error': 'Bill Analysis Failed',
             'message': 'The bill analysis could not be completed. This might be due to poor image quality, unsupported file format, or AI service issues.',
