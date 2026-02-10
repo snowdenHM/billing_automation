@@ -2045,6 +2045,10 @@ def process_existing_analysis_data(bill, existing_data, organization):
                     product_cgst = 0
                     product_sgst = 0
 
+                # 🚀 AUTO-ASSIGN TAX LEDGERS BASED ON ITEM-SPECIFIC GST VALUES (EXISTING DATA)
+                logger.warning(f"🏛️  [EXISTING] Tax ledger search for product '{item.get('description', 'No desc')[:30]}...' - IGST: {product_igst}, CGST: {product_cgst}, SGST: {product_sgst}")
+                tax_ledger = find_appropriate_tax_ledger(organization, product_igst, product_cgst, product_sgst)
+                
                 # Create product instance without validation
                 product = TallyVendorAnalyzedProduct(
                     vendor_bill_analyzed=analyzed_bill,
@@ -2052,12 +2056,15 @@ def process_existing_analysis_data(bill, existing_data, organization):
                     price=price,
                     quantity=quantity,
                     amount=amount,
+                    taxes=tax_ledger,  # 🎯 Auto-assigned tax ledger for existing data
                     product_gst=f"{gst_rate}%" if gst_rate > 0 else "",
                     igst=product_igst,
                     cgst=product_cgst,
                     sgst=product_sgst,
                     organization=organization
                 )
+                
+                logger.warning(f"📦 [EXISTING] Created product with auto-tax: '{item.get('description', 'No desc')[:30]}...' | Tax Ledger: '{tax_ledger.name if tax_ledger else 'None'}' | GST Rate: {gst_rate}%")
                 created_products.append(product)
 
             # Bulk create products without validation

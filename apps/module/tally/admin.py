@@ -11,6 +11,7 @@ from .models import (
     TallyVendorBill,
     TallyVendorAnalyzedBill,
     TallyVendorAnalyzedProduct,
+    TallyVendorConsolidatedProduct,
     TallyExpenseBill,
     TallyExpenseAnalyzedBill,
     TallyExpenseAnalyzedProduct,
@@ -372,6 +373,54 @@ class TallyExpenseAnalyzedBillAdmin(admin.ModelAdmin):
         return qs
 
 
+class TallyVendorConsolidatedProductAdmin(admin.ModelAdmin):
+    list_display = ('vendor_bill_name', 'item_name_short', 'amount', 'product_gst', 'original_items_count', 'organization', 'created_at')
+    list_filter = ('organization', 'product_gst', 'created_at')
+    search_fields = ('item_name', 'item_details', 'vendor_bill_analyzed__selected_bill__bill_munshi_name', 'organization__name')
+    readonly_fields = ('created_at', 'updated_at', 'igst', 'cgst', 'sgst')
+    autocomplete_fields = ('organization', 'vendor_bill_analyzed', 'taxes')
+    
+    fieldsets = (
+        ('Bill Information', {
+            'fields': ('vendor_bill_analyzed', 'organization')
+        }),
+        ('Item Details', {
+            'fields': ('item_name', 'item_details', 'taxes')
+        }),
+        ('Financial Details', {
+            'fields': ('price', 'quantity', 'amount', 'product_gst')
+        }),
+        ('GST Breakdown', {
+            'fields': ('igst', 'cgst', 'sgst'),
+            'classes': ('collapse',)
+        }),
+        ('Consolidation Metadata', {
+            'fields': ('original_items_count', 'consolidation_notes')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def vendor_bill_name(self, obj):
+        """Display vendor bill name"""
+        return obj.vendor_bill_analyzed.selected_bill.bill_munshi_name if obj.vendor_bill_analyzed and obj.vendor_bill_analyzed.selected_bill else 'N/A'
+    vendor_bill_name.short_description = 'Vendor Bill'
+    vendor_bill_name.admin_order_field = 'vendor_bill_analyzed__selected_bill__bill_munshi_name'
+    
+    def item_name_short(self, obj):
+        """Display shortened item name"""
+        return obj.item_name[:50] + '...' if obj.item_name and len(obj.item_name) > 50 else obj.item_name or 'N/A'
+    item_name_short.short_description = 'Item Name'
+    
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        if not request.user.is_superuser:
+            qs = qs.filter(organization__in=request.user.organizations.all())
+        return qs
+
+
 class TallyExpenseConsolidatedProductAdmin(admin.ModelAdmin):
     list_display = ('expense_bill_name', 'item_details_short', 'amount', 'debit_or_credit', 'original_entries_count', 'organization', 'created_at')
     list_filter = ('organization', 'debit_or_credit', 'created_at')
@@ -418,6 +467,7 @@ admin.site.register(Ledger, LedgerAdmin)
 admin.site.register(TallyConfig, TallyConfigAdmin)
 admin.site.register(TallyVendorBill, TallyVendorBillAdmin)
 admin.site.register(TallyVendorAnalyzedBill, TallyVendorAnalyzedBillAdmin)
+admin.site.register(TallyVendorConsolidatedProduct, TallyVendorConsolidatedProductAdmin)
 admin.site.register(TallyExpenseBill, TallyExpenseBillAdmin)
 admin.site.register(TallyExpenseAnalyzedBill, TallyExpenseAnalyzedBillAdmin)
 admin.site.register(TallyExpenseConsolidatedProduct, TallyExpenseConsolidatedProductAdmin)
