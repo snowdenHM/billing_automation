@@ -975,50 +975,67 @@ def safe_int_convert(value):
 def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val):
     """Find appropriate tax ledger based on GST values and organization configuration"""
     try:
-        # Get tax ledger configurations
-        tax_configs = TallyConfig.objects.filter(
-            organization=organization,
-            config_type='tax_ledger'
-        )
+        # Get TallyConfig for the organization
+        tally_config = TallyConfig.objects.filter(organization=organization).first()
         
-        # Determine GST type based on values
+        if not tally_config:
+            logger.warning(f"❌ No TallyConfig found for organization {organization.id}. Cannot assign tax ledgers.")
+            return None
+        
+        # Determine GST type based on values and find appropriate parent ledgers
         if igst_val > 0:
-            # IGST case - look for IGST tax ledgers
-            igst_configs = tax_configs.filter(key_name__icontains='igst')
-            if igst_configs.exists():
-                ledger_name = igst_configs.first().value
+            # IGST case - get IGST parent ledgers
+            igst_parent_ledgers = tally_config.igst_parents.all()
+            if igst_parent_ledgers.exists():
+                # Look for IGST tax ledger under these parents
                 tax_ledger = Ledger.objects.filter(
                     organization=organization,
-                    name__iexact=ledger_name
+                    parent__in=igst_parent_ledgers
                 ).first()
+                
                 if tax_ledger:
                     logger.warning(f"🎯 Auto-assigned IGST tax ledger: {tax_ledger.name}")
                     return tax_ledger
         
         elif cgst_val > 0 or sgst_val > 0:
-            # CGST/SGST case - look for CGST tax ledgers (assuming SGST will be handled similarly)
-            cgst_configs = tax_configs.filter(key_name__icontains='cgst')
-            if cgst_configs.exists():
-                ledger_name = cgst_configs.first().value
+            # CGST/SGST case - get CGST parent ledgers first
+            cgst_parent_ledgers = tally_config.cgst_parents.all()
+            if cgst_parent_ledgers.exists():
+                # Look for CGST tax ledger under these parents
                 tax_ledger = Ledger.objects.filter(
                     organization=organization,
-                    name__iexact=ledger_name
+                    parent__in=cgst_parent_ledgers
                 ).first()
+                
                 if tax_ledger:
                     logger.warning(f"🎯 Auto-assigned CGST tax ledger: {tax_ledger.name}")
                     return tax_ledger
+            
+            # If no CGST ledger found, try SGST parent ledgers
+            sgst_parent_ledgers = tally_config.sgst_parents.all()
+            if sgst_parent_ledgers.exists():
+                tax_ledger = Ledger.objects.filter(
+                    organization=organization,
+                    parent__in=sgst_parent_ledgers
+                ).first()
+                
+                if tax_ledger:
+                    logger.warning(f"🎯 Auto-assigned SGST tax ledger: {tax_ledger.name}")
+                    return tax_ledger
         
-        # Fallback: try to find any tax ledger with 'tax' in parent ledger
-        tax_parent_ledgers = TallyConfig.objects.filter(
-            organization=organization,
-            config_type='parent_ledger',
-            key_name__icontains='tax'
-        ).values_list('value', flat=True)
+        # Fallback: try any available tax-related parent ledgers
+        all_tax_parents = []
+        if hasattr(tally_config, 'igst_parents'):
+            all_tax_parents.extend(list(tally_config.igst_parents.all()))
+        if hasattr(tally_config, 'cgst_parents'):
+            all_tax_parents.extend(list(tally_config.cgst_parents.all()))
+        if hasattr(tally_config, 'sgst_parents'):
+            all_tax_parents.extend(list(tally_config.sgst_parents.all()))
         
-        if tax_parent_ledgers:
+        if all_tax_parents:
             tax_ledger = Ledger.objects.filter(
                 organization=organization,
-                parent_ledger__name__in=tax_parent_ledgers
+                parent__in=all_tax_parents
             ).first()
             
             if tax_ledger:
@@ -1137,37 +1154,28 @@ def find_vendor_ledger(company_name, organization, vendor_gst=None):
     try:
         logger.warning(f"🔍 Finding vendor - Name: '{company_name}', GST: '{vendor_gst}', Organization: {organization.id}")
         
-        # Step 1: Get configured parent ledgers for Sundry Creditors
-        parent_ledgers = TallyConfig.objects.filter(
-            organization=organization,
-            config_type='parent_ledger',
-            key_name='sundry_creditors'
-        ).values_list('value', flat=True)
+        # Get TallyConfig for the organization
+        tally_config = TallyConfig.objects.filter(organization=organization).first()
         
-        if not parent_ledgers:
-            logger.warning(f"❌ No configured parent ledgers found for Sundry Creditors in organization {organization.id}")
-            # Fallback to TallyConfig vendor_parents if available
-            tally_config = TallyConfig.objects.filter(organization=organization).first()
-            if tally_config and hasattr(tally_config, 'vendor_parents'):
-                vendor_parent_ledgers = tally_config.vendor_parents.all()
-                if vendor_parent_ledgers.exists():
-                    parent_ledgers = [vpl.name for vpl in vendor_parent_ledgers]
-                    logger.warning(f"🔄 Using fallback vendor_parents: {list(parent_ledgers)}")
-                else:
-                    logger.error(f"❌ No vendor parent ledgers configured")
-                    return None
-            else:
-                return None
-            
+        if not tally_config:
+            logger.error(f"❌ No TallyConfig found for organization {organization.id}. Cannot fetch vendor ledgers.")
+            return None
+        
+        # Use configured vendor parent ledgers directly
+        vendor_parent_ledgers = tally_config.vendor_parents.all()
+        if not vendor_parent_ledgers.exists():
+            logger.error(f"❌ No vendor parent ledgers configured in TallyConfig for organization {organization.id}")
+            return None
+        
         # Get all vendor ledgers under configured parent ledgers
         vendor_ledgers = Ledger.objects.filter(
             organization=organization, 
-            parent_ledger__name__in=parent_ledgers
+            parent__in=vendor_parent_ledgers  # Use parent directly, not parent_ledger__name__in
         )
         
         logger.warning(f"📊 Found {vendor_ledgers.count()} total vendor ledgers in configured parent ledgers")
         
-        # Step 2: If GST number is provided, try exact GST match first
+        # Step 1: If GST number is provided, try exact GST match first
         if vendor_gst and vendor_gst.strip():
             gst_matches = vendor_ledgers.filter(gst_in__iexact=vendor_gst.strip())
             if gst_matches.exists():
@@ -1177,7 +1185,7 @@ def find_vendor_ledger(company_name, organization, vendor_gst=None):
             else:
                 logger.warning(f"🔍 No exact GST match found for: {vendor_gst}")
         
-        # Step 3: Enhanced name-based matching with normalization
+        # Step 2: Enhanced name-based matching with normalization
         if company_name and company_name.strip():
             logger.warning(f"🏢 Searching for vendor by name: '{company_name}'")
             
@@ -1230,7 +1238,7 @@ def find_vendor_ledger(company_name, organization, vendor_gst=None):
             else:
                 logger.warning(f"❌ No vendor found with adequate similarity for: {company_name} (best: {best_similarity:.2f})")
         
-        # Step 4: Log available vendors for debugging
+        # Step 3: Log available vendors for debugging
         logger.warning(f"📋 Available vendors in configured parent ledgers (first 10):")
         for i, vendor in enumerate(vendor_ledgers[:10], 1):
             normalized_name = normalize_company_name(vendor.name)
