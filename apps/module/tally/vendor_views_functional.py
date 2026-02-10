@@ -786,12 +786,17 @@ def process_analysis_data(bill, json_data, organization):
         cgst_val = safe_float_convert(relevant_data.get('cgst', 0))
         sgst_val = safe_float_convert(relevant_data.get('sgst', 0))
 
+        # Log GST values for debugging
+        logger.warning(f"💰 GST Values extracted - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
+
         if igst_val > 0:
             gst_type = TallyVendorAnalyzedBill.GSTType.IGST
         elif cgst_val > 0 or sgst_val > 0:
             gst_type = TallyVendorAnalyzedBill.GSTType.CGST_SGST
         else:
             gst_type = TallyVendorAnalyzedBill.GSTType.UNKNOWN
+
+        logger.warning(f"🏷️  Determined GST Type: {gst_type}")
 
         # Create analyzed bill
         with transaction.atomic():
@@ -825,8 +830,13 @@ def process_analysis_data(bill, json_data, organization):
             # Create analyzed products with safe item extraction and tax ledger automation
             product_instances = []
             items = relevant_data.get('items', [])
+            
+            # Debug log for items extraction
+            logger.warning(f"📝 Items extraction - Found {len(items) if isinstance(items, list) else 0} items: {items}")
+            
             if isinstance(items, list):
-                for item in items:
+                logger.warning(f"🔄 Processing {len(items)} items for product creation...")
+                for idx, item in enumerate(items, 1):
                     if isinstance(item, dict):
                         # Handle decimal precision for product amounts
                         price_val = safe_float_convert(item.get('price', 0))
@@ -837,11 +847,18 @@ def process_analysis_data(bill, json_data, organization):
                         price_rounded = Decimal(str(price_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                         amount_rounded = Decimal(str(amount_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
+                        # Debug log for each item
+                        logger.warning(f"📋 Item {idx}: '{item.get('description', 'No description')}' - Price: {price_val}, Qty: {quantity_val}, Amount: {amount_val}")
+
                         # 🚀 AUTO-ASSIGN TAX LEDGERS BASED ON GST VALUES
+                        logger.warning(f"🏛️  Starting tax ledger search for item {idx} with GST values - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
                         tax_ledger = find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val)
                         
                         # Determine GST rate from tax amounts
                         gst_rate = calculate_gst_rate(amount_val, igst_val, cgst_val, sgst_val)
+                        
+                        # Format GST rate to match choices
+                        formatted_gst_rate = f"{gst_rate}%" if gst_rate not in ["0", "Exempted", "N/A"] else gst_rate
 
                         product = TallyVendorAnalyzedProduct(
                             vendor_bill_analyzed=analyzed_bill,
@@ -850,12 +867,16 @@ def process_analysis_data(bill, json_data, organization):
                             quantity=quantity_val,
                             amount=amount_rounded,
                             taxes=tax_ledger,  # 🎯 Auto-assigned tax ledger (correct field name)
-                            product_gst=gst_rate,   # 🎯 Auto-assigned GST rate  
+                            product_gst=formatted_gst_rate,   # 🎯 Auto-assigned GST rate with % format
                             organization=organization
                         )
                         product_instances.append(product)
                         
-                        logger.warning(f"📦 Created product with auto-tax: '{item.get('description', '')[:50]}...' | Tax Ledger: '{tax_ledger.name if tax_ledger else 'None'}' | GST Rate: {gst_rate}%")
+                        logger.warning(f"📦 Created product {idx} with auto-tax: '{item.get('description', '')[:50]}...' | Tax Ledger: '{tax_ledger.name if tax_ledger else 'None'}' | GST Rate: {formatted_gst_rate}")
+                    else:
+                        logger.warning(f"❌ Item {idx} is not a dict: {item}")
+            else:
+                logger.warning(f"❌ Items is not a list: {type(items)} - {items}")
 
             if product_instances:
                 TallyVendorAnalyzedProduct.objects.bulk_create(product_instances)
@@ -1102,11 +1123,15 @@ def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val):
 def calculate_gst_rate(amount, igst_val, cgst_val, sgst_val):
     """Calculate GST rate percentage based on tax amounts and item amount"""
     try:
+        logger.warning(f"📊 GST Rate Calculation - Amount: {amount}, IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
+        
         if amount <= 0:
+            logger.warning(f"⚠️  Amount is zero or negative, returning 0%")
             return "0"
         
         total_tax = igst_val + cgst_val + sgst_val
         if total_tax <= 0:
+            logger.warning(f"⚠️  Total tax is zero, returning 0%")
             return "0"
         
         # Calculate rate: (total_tax / taxable_amount) * 100
@@ -1121,7 +1146,9 @@ def calculate_gst_rate(amount, igst_val, cgst_val, sgst_val):
         standard_rates = [0, 5, 12, 18, 28]
         closest_rate = min(standard_rates, key=lambda x: abs(x - gst_rate))
         
-        logger.warning(f"📊 GST calculation: Amount:{amount}, Tax:{total_tax}, Calculated:{gst_rate:.2f}%, Rounded:{closest_rate}%")
+        logger.warning(f"📊 GST calculation: Amount:{amount}, Tax:{total_tax}, Taxable:{taxable_amount}, Calculated:{gst_rate:.2f}%, Rounded:{closest_rate}%")
+        
+        # Return the number as string (will be formatted with % later)
         return str(closest_rate)
         
     except Exception as e:
