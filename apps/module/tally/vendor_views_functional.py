@@ -922,8 +922,8 @@ def process_analysis_data(bill, json_data, organization):
                         # Determine GST rate from tax amounts for this specific item
                         gst_rate = calculate_gst_rate(amount_val, float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded))
                         
-                        # Format GST rate to match choices
-                        formatted_gst_rate = f"{gst_rate}%" if gst_rate not in ["0", "Exempted", "N/A"] else gst_rate
+                        # Format GST rate to match choices using normalization
+                        formatted_gst_rate = normalize_product_gst(gst_rate)
 
                         product = TallyVendorAnalyzedProduct(
                             vendor_bill_analyzed=analyzed_bill,
@@ -971,6 +971,10 @@ def process_analysis_data(bill, json_data, organization):
 
                         consolidated_details = f'Consolidated {items_count} items:\n' + '\n'.join(item_details)
 
+                        # Get most common GST rate from product instances
+                        gst_rates = [p.product_gst for p in product_instances if p.product_gst]
+                        most_common_gst = normalize_product_gst(max(set(gst_rates), key=gst_rates.count) if gst_rates else "18%")
+
                         # Create consolidated product
                         consolidated_product = TallyVendorConsolidatedProduct.objects.create(
                             vendor_bill_analyzed=analyzed_bill,
@@ -980,7 +984,7 @@ def process_analysis_data(bill, json_data, organization):
                             price=total_rounded,  # Total as rate
                             quantity=1,  # Always 1 for consolidated
                             amount=total_rounded,
-                            product_gst="",  # Empty - let user select GST rate
+                            product_gst=most_common_gst,  # 🎯 Most common GST rate from items
                             igst=igst_rounded,
                             cgst=cgst_rounded,
                             sgst=sgst_rounded,
@@ -1227,6 +1231,46 @@ def calculate_gst_rate(amount, igst_val, cgst_val, sgst_val):
     except Exception as e:
         logger.error(f"❌ Error calculating GST rate: {str(e)}")
         return "18"  # Default fallback to 18%
+
+
+def normalize_product_gst(gst_value):
+    """
+    Normalize GST value to match GST_CHOICES format.
+    
+    Args:
+        gst_value: GST value as string or number (e.g., "18", 18, "18%", "Exempted")
+    
+    Returns:
+        String in format matching GST_CHOICES: "0%", "5%", "12%", "18%", "28%", "Exempted", "N/A"
+    """
+    if not gst_value:
+        return "N/A"
+    
+    # Convert to string and cleanup
+    gst_str = str(gst_value).strip().upper()
+    
+    # Handle special cases
+    if "EXEMPT" in gst_str:
+        return "Exempted"
+    if gst_str in ["N/A", "NA", "NONE", ""]:
+        return "N/A"
+    
+    # Extract numeric value
+    try:
+        # Remove % sign and other characters
+        numeric_str = gst_str.replace('%', '').replace('GST', '').strip()
+        gst_numeric = float(numeric_str)
+        
+        # Round to nearest standard GST rate
+        standard_rates = [0, 5, 12, 18, 28]
+        closest_rate = min(standard_rates, key=lambda x: abs(x - gst_numeric))
+        
+        return f"{closest_rate}%"
+        
+    except (ValueError, AttributeError):
+        # If conversion fails, default to N/A
+        logger.warning(f"Could not normalize GST value: {gst_value}, defaulting to N/A")
+        return "N/A"
 
 
 def normalize_company_name(name):
@@ -2057,7 +2101,7 @@ def process_existing_analysis_data(bill, existing_data, organization):
                     quantity=quantity,
                     amount=amount,
                     taxes=tax_ledger,  # 🎯 Auto-assigned tax ledger for existing data
-                    product_gst=f"{gst_rate}%" if gst_rate > 0 else "",
+                    product_gst=normalize_product_gst(gst_rate),  # 🎯 Properly formatted GST rate
                     igst=product_igst,
                     cgst=product_cgst,
                     sgst=product_sgst,
@@ -2091,7 +2135,7 @@ def process_existing_analysis_data(bill, existing_data, organization):
 
                         # Get most common GST rate from created products
                         gst_rates = [p.product_gst for p in created_products if p.product_gst]
-                        most_common_gst = max(set(gst_rates), key=gst_rates.count) if gst_rates else "18%"
+                        most_common_gst = normalize_product_gst(max(set(gst_rates), key=gst_rates.count) if gst_rates else "18%")
 
                         # Create consolidated product
                         consolidated_product = TallyVendorConsolidatedProduct.objects.create(
@@ -2102,7 +2146,7 @@ def process_existing_analysis_data(bill, existing_data, organization):
                             price=total_amount,  # Total as rate
                             quantity=1,  # Always 1 for consolidated
                             amount=total_amount,
-                            product_gst=most_common_gst,
+                            product_gst=most_common_gst,  # 🎯 Normalized GST rate
                             igst=igst_val,
                             cgst=cgst_val,
                             sgst=sgst_val,
@@ -2853,9 +2897,11 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 if product.amount != new_amount:
                     product.amount = new_amount
                     needs_update = True
-            if 'product_gst' in item and product.product_gst != item.get('product_gst'):
-                product.product_gst = item.get('product_gst')
-                needs_update = True
+            if 'product_gst' in item:
+                normalized_gst = normalize_product_gst(item.get('product_gst'))
+                if product.product_gst != normalized_gst:
+                    product.product_gst = normalized_gst
+                    needs_update = True
 
             # Calculate GST values based on gst_type from analyzed_bill
             # This ensures GST is correctly distributed according to bill's GST type
@@ -2895,7 +2941,7 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
         else:
             # Create new product
             product_amount = _to_decimal(item.get('amount'), "0")
-            product_gst_str = item.get('product_gst', '')
+            product_gst_str = normalize_product_gst(item.get('product_gst', '18%'))  # 🎯 Normalize GST value
 
             # Calculate GST values based on gst_type from analyzed_bill
             calc_igst, calc_cgst, calc_sgst = calculate_product_gst(
@@ -2912,7 +2958,7 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 price=_to_decimal(item.get('price'), "0"),
                 quantity=_to_int(item.get('quantity'), 0),
                 amount=product_amount,
-                product_gst=product_gst_str,
+                product_gst=product_gst_str,  # 🎯 Already normalized above
                 igst=calc_igst,
                 cgst=calc_cgst,
                 sgst=calc_sgst,
