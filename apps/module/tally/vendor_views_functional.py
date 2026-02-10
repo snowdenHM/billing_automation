@@ -735,6 +735,13 @@ def process_analysis_data(bill, json_data, organization):
 
         # Find vendor ledger using both name and GST number
         vendor = find_vendor_ledger(company_name, organization, vendor_gst)
+        
+        # Log vendor finding result
+        if vendor:
+            logger.info(f"✅ Successfully found vendor: {vendor.name} (ID: {vendor.id}, GST: {getattr(vendor, 'gst_in', 'None')})")
+        else:
+            logger.warning(f"❌ No vendor found for Company: '{company_name}', GST: '{vendor_gst}'")
+            logger.info("This will create an analyzed bill without vendor assignment")
 
         # Determine GST type with safe conversion
         igst_val = safe_float_convert(relevant_data.get('igst', 0))
@@ -944,6 +951,8 @@ def parse_bill_date(date_string):
 def find_vendor_ledger(company_name, organization, vendor_gst=None):
     """Find matching vendor ledger using GST number first, then name matching with TallyConfig"""
     try:
+        logger.info(f"Finding vendor - Name: '{company_name}', GST: '{vendor_gst}', Organization: {organization.id}")
+        
         # Get TallyConfig for the organization
         tally_config = TallyConfig.objects.filter(organization=organization).first()
 
@@ -961,31 +970,53 @@ def find_vendor_ledger(company_name, organization, vendor_gst=None):
             parent__in=vendor_parent_ledgers,
             organization=organization
         )
+        
+        logger.info(f"Found {vendor_list.count()} total vendor ledgers in configured parent ledgers")
 
         # Priority 1: Match by GST number if available (most reliable)
         if vendor_gst and vendor_gst.strip():
-            vendor = vendor_list.filter(gst_in__iexact=vendor_gst.strip()).first()
+            vendor_gst_clean = vendor_gst.strip().upper()  # Normalize to uppercase
+            logger.info(f"Searching for vendor by GST: '{vendor_gst_clean}'")
+            
+            # Try exact match first
+            vendor = vendor_list.filter(gst_in__iexact=vendor_gst_clean).first()
             if vendor:
-                logger.info(f"Found vendor by GST match: {vendor.name} (GST: {vendor.gst_in})")
+                logger.info(f"✅ Found vendor by exact GST match: {vendor.name} (GST: {vendor.gst_in})")
                 return vendor
-            else:
-                logger.info(f"No vendor found with GST: {vendor_gst}")
+            
+            # Try partial GST match (in case of formatting differences)
+            vendor = vendor_list.filter(gst_in__icontains=vendor_gst_clean).first()
+            if vendor:
+                logger.info(f"✅ Found vendor by partial GST match: {vendor.name} (GST: {vendor.gst_in})")
+                return vendor
+            
+            logger.info(f"❌ No vendor found with GST: {vendor_gst_clean}")
 
         # Priority 2: Match by company name if GST matching failed
         if company_name and company_name.strip():
+            company_name_clean = company_name.strip()
+            logger.info(f"Searching for vendor by name: '{company_name_clean}'")
+            
             # Try exact match first (case-insensitive)
-            vendor = vendor_list.filter(name__iexact=company_name.strip()).first()
+            vendor = vendor_list.filter(name__iexact=company_name_clean).first()
             if vendor:
-                logger.info(f"Found vendor by exact name match: {vendor.name}")
+                logger.info(f"✅ Found vendor by exact name match: {vendor.name} (GST: {getattr(vendor, 'gst_in', 'None')})")
                 return vendor
 
             # Try partial match
-            vendor = vendor_list.filter(name__icontains=company_name.strip()).first()
+            vendor = vendor_list.filter(name__icontains=company_name_clean).first()
             if vendor:
-                logger.info(f"Found vendor by partial name match: {vendor.name}")
+                logger.info(f"✅ Found vendor by partial name match: {vendor.name} (GST: {getattr(vendor, 'gst_in', 'None')})")
                 return vendor
+                
+            logger.info(f"❌ No vendor found with name containing: {company_name_clean}")
 
-        logger.info(f"No vendor found for company: {company_name}, GST: {vendor_gst}")
+        # Debug: Log all available vendors for troubleshooting
+        logger.info("Available vendors in configured parent ledgers:")
+        for vendor in vendor_list[:10]:  # Log first 10 vendors
+            logger.info(f"  - {vendor.name} (GST: {getattr(vendor, 'gst_in', 'None')})")
+
+        logger.info(f"❌ No vendor found for company: {company_name}, GST: {vendor_gst}")
         return None
 
     except Exception as e:
