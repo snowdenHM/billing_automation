@@ -849,7 +849,7 @@ def process_analysis_data(bill, json_data, organization):
                             price=price_rounded,
                             quantity=quantity_val,
                             amount=amount_rounded,
-                            tax_ledger=tax_ledger,  # 🎯 Auto-assigned tax ledger
+                            taxes=tax_ledger,  # 🎯 Auto-assigned tax ledger (correct field name)
                             product_gst=gst_rate,   # 🎯 Auto-assigned GST rate  
                             organization=organization
                         )
@@ -975,6 +975,8 @@ def safe_int_convert(value):
 def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val):
     """Find appropriate tax ledger based on GST values and organization configuration"""
     try:
+        logger.warning(f"🏛️  Searching for tax ledger - IGST:{igst_val}, CGST:{cgst_val}, SGST:{sgst_val}")
+        
         # Get TallyConfig for the organization
         tally_config = TallyConfig.objects.filter(organization=organization).first()
         
@@ -986,67 +988,114 @@ def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val):
         if igst_val > 0:
             # IGST case - get IGST parent ledgers
             igst_parent_ledgers = tally_config.igst_parents.all()
+            logger.warning(f"🔍 IGST case: Found {igst_parent_ledgers.count()} IGST parent ledgers configured")
+            
             if igst_parent_ledgers.exists():
                 # Look for IGST tax ledger under these parents
-                tax_ledger = Ledger.objects.filter(
+                tax_ledgers = Ledger.objects.filter(
                     organization=organization,
                     parent__in=igst_parent_ledgers
-                ).first()
+                )
                 
+                logger.warning(f"📊 Found {tax_ledgers.count()} tax ledgers under IGST parents")
+                for ledger in tax_ledgers[:5]:
+                    logger.warning(f"  - '{ledger.name}' (Parent: {ledger.parent.parent})")
+                
+                # Try to find IGST-specific ledger first
+                igst_ledger = tax_ledgers.filter(name__icontains='igst').first()
+                if igst_ledger:
+                    logger.warning(f"🎯 Auto-assigned IGST tax ledger: {igst_ledger.name}")
+                    return igst_ledger
+                
+                # Fallback to first available tax ledger under IGST parents
+                tax_ledger = tax_ledgers.first()
                 if tax_ledger:
-                    logger.warning(f"🎯 Auto-assigned IGST tax ledger: {tax_ledger.name}")
+                    logger.warning(f"🎯 Auto-assigned IGST fallback tax ledger: {tax_ledger.name}")
                     return tax_ledger
         
         elif cgst_val > 0 or sgst_val > 0:
             # CGST/SGST case - get CGST parent ledgers first
             cgst_parent_ledgers = tally_config.cgst_parents.all()
+            logger.warning(f"🔍 CGST/SGST case: Found {cgst_parent_ledgers.count()} CGST parent ledgers configured")
+            
             if cgst_parent_ledgers.exists():
                 # Look for CGST tax ledger under these parents
-                tax_ledger = Ledger.objects.filter(
+                tax_ledgers = Ledger.objects.filter(
                     organization=organization,
                     parent__in=cgst_parent_ledgers
-                ).first()
+                )
                 
+                logger.warning(f"📊 Found {tax_ledgers.count()} tax ledgers under CGST parents")
+                for ledger in tax_ledgers[:5]:
+                    logger.warning(f"  - '{ledger.name}' (Parent: {ledger.parent.parent})")
+                
+                # Try to find CGST-specific ledger first
+                cgst_ledger = tax_ledgers.filter(name__icontains='cgst').first()
+                if cgst_ledger:
+                    logger.warning(f"🎯 Auto-assigned CGST tax ledger: {cgst_ledger.name}")
+                    return cgst_ledger
+                
+                # Fallback to first available tax ledger under CGST parents
+                tax_ledger = tax_ledgers.first()
                 if tax_ledger:
-                    logger.warning(f"🎯 Auto-assigned CGST tax ledger: {tax_ledger.name}")
+                    logger.warning(f"🎯 Auto-assigned CGST fallback tax ledger: {tax_ledger.name}")
                     return tax_ledger
             
             # If no CGST ledger found, try SGST parent ledgers
             sgst_parent_ledgers = tally_config.sgst_parents.all()
+            logger.warning(f"🔍 Checking SGST parents: Found {sgst_parent_ledgers.count()} SGST parent ledgers configured")
+            
             if sgst_parent_ledgers.exists():
-                tax_ledger = Ledger.objects.filter(
+                tax_ledgers = Ledger.objects.filter(
                     organization=organization,
                     parent__in=sgst_parent_ledgers
-                ).first()
+                )
                 
+                # Try to find SGST-specific ledger first
+                sgst_ledger = tax_ledgers.filter(name__icontains='sgst').first()
+                if sgst_ledger:
+                    logger.warning(f"🎯 Auto-assigned SGST tax ledger: {sgst_ledger.name}")
+                    return sgst_ledger
+                
+                # Fallback to first available tax ledger under SGST parents
+                tax_ledger = tax_ledgers.first()
                 if tax_ledger:
-                    logger.warning(f"🎯 Auto-assigned SGST tax ledger: {tax_ledger.name}")
+                    logger.warning(f"🎯 Auto-assigned SGST fallback tax ledger: {tax_ledger.name}")
                     return tax_ledger
         
-        # Fallback: try any available tax-related parent ledgers
-        all_tax_parents = []
-        if hasattr(tally_config, 'igst_parents'):
-            all_tax_parents.extend(list(tally_config.igst_parents.all()))
-        if hasattr(tally_config, 'cgst_parents'):
-            all_tax_parents.extend(list(tally_config.cgst_parents.all()))
-        if hasattr(tally_config, 'sgst_parents'):
-            all_tax_parents.extend(list(tally_config.sgst_parents.all()))
+        # Final fallback: try any available tax-related parent ledgers
+        logger.warning("🔄 No specific GST ledger found, trying fallback approach...")
+        
+        all_tax_parents = list(tally_config.igst_parents.all()) + list(tally_config.cgst_parents.all()) + list(tally_config.sgst_parents.all())
         
         if all_tax_parents:
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_tax_parents = []
+            for parent in all_tax_parents:
+                if parent.id not in seen:
+                    seen.add(parent.id)
+                    unique_tax_parents.append(parent)
+            
+            logger.warning(f"📋 Checking all {len(unique_tax_parents)} unique tax parent ledgers for fallback")
+            
             tax_ledger = Ledger.objects.filter(
                 organization=organization,
-                parent__in=all_tax_parents
+                parent__in=unique_tax_parents
             ).first()
             
             if tax_ledger:
-                logger.warning(f"🎯 Auto-assigned fallback tax ledger: {tax_ledger.name}")
+                logger.warning(f"🎯 Auto-assigned ultimate fallback tax ledger: {tax_ledger.name}")
                 return tax_ledger
         
         logger.warning(f"⚠️  No tax ledger found for IGST:{igst_val}, CGST:{cgst_val}, SGST:{sgst_val}")
+        logger.warning(f"💡 TallyConfig Summary - IGST parents: {tally_config.igst_parents.count()}, CGST parents: {tally_config.cgst_parents.count()}, SGST parents: {tally_config.sgst_parents.count()}")
         return None
         
     except Exception as e:
         logger.error(f"❌ Error finding tax ledger: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 
 
