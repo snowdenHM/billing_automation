@@ -832,6 +832,25 @@ def process_analysis_data(bill, json_data, organization):
 
         logger.warning(f"🏷️  Determined GST Type: {gst_type}")
 
+        # 🏛️ FIND APPROPRIATE TAX LEDGERS FOR BILL-LEVEL GST VALUES
+        logger.warning(f"🏛️ [NEW BILL] Finding bill-level tax ledgers - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
+        
+        igst_tax_ledger = None
+        cgst_tax_ledger = None
+        sgst_tax_ledger = None
+        
+        if igst_val > 0:
+            igst_tax_ledger = find_appropriate_tax_ledger(organization, igst_val, 0, 0)
+            logger.warning(f"🎯 [NEW BILL] IGST Tax Ledger: {igst_tax_ledger.name if igst_tax_ledger else 'None'}")
+        
+        if cgst_val > 0:
+            cgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, cgst_val, 0)
+            logger.warning(f"🎯 [NEW BILL] CGST Tax Ledger: {cgst_tax_ledger.name if cgst_tax_ledger else 'None'}")
+        
+        if sgst_val > 0:
+            sgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, 0, sgst_val)
+            logger.warning(f"🎯 [NEW BILL] SGST Tax Ledger: {sgst_tax_ledger.name if sgst_tax_ledger else 'None'}")
+
         # Create analyzed bill
         logger.warning(f"🏗️  Starting analyzed bill creation...")
         with transaction.atomic():
@@ -857,6 +876,9 @@ def process_analysis_data(bill, json_data, organization):
                 igst=igst_rounded,
                 cgst=cgst_rounded,
                 sgst=sgst_rounded,
+                igst_taxes=igst_tax_ledger,  # 🎯 Assign IGST tax ledger
+                cgst_taxes=cgst_tax_ledger,  # 🎯 Assign CGST tax ledger
+                sgst_taxes=sgst_tax_ledger,  # 🎯 Assign SGST tax ledger
                 discount=discount_rounded,
                 total=total_rounded,
                 note="AI Analyzed Bill",
@@ -865,6 +887,7 @@ def process_analysis_data(bill, json_data, organization):
             )
             
             logger.warning(f"✅ Created TallyVendorAnalyzedBill with ID: {analyzed_bill.id}")
+            logger.warning(f"✅ [NEW BILL] Saved analyzed bill with tax ledgers - IGST: {analyzed_bill.igst_taxes}, CGST: {analyzed_bill.cgst_taxes}, SGST: {analyzed_bill.sgst_taxes}")
 
             # Create analyzed products with safe item extraction and tax ledger automation
             product_instances = []
@@ -2013,6 +2036,25 @@ def process_existing_analysis_data(bill, existing_data, organization):
         else:
             gst_type = TallyVendorAnalyzedBill.GSTType.UNKNOWN
 
+        # 🏛️ FIND APPROPRIATE TAX LEDGERS FOR BILL-LEVEL GST VALUES
+        logger.warning(f"🏛️ [EXISTING BILL] Finding tax ledgers - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
+        
+        igst_tax_ledger = None
+        cgst_tax_ledger = None
+        sgst_tax_ledger = None
+        
+        if igst_val > 0:
+            igst_tax_ledger = find_appropriate_tax_ledger(organization, igst_val, 0, 0)
+            logger.warning(f"🎯 [EXISTING BILL] IGST Tax Ledger: {igst_tax_ledger.name if igst_tax_ledger else 'None'}")
+        
+        if cgst_val > 0:
+            cgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, cgst_val, 0)
+            logger.warning(f"🎯 [EXISTING BILL] CGST Tax Ledger: {cgst_tax_ledger.name if cgst_tax_ledger else 'None'}")
+        
+        if sgst_val > 0:
+            sgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, 0, sgst_val)
+            logger.warning(f"🎯 [EXISTING BILL] SGST Tax Ledger: {sgst_tax_ledger.name if sgst_tax_ledger else 'None'}")
+
         # Create analyzed bill without Django validation to avoid GST mismatch errors
         with transaction.atomic():
             # Create the analyzed bill instance without calling save() initially
@@ -2024,6 +2066,9 @@ def process_existing_analysis_data(bill, existing_data, organization):
                 igst=igst_val,
                 cgst=cgst_val,
                 sgst=sgst_val,
+                igst_taxes=igst_tax_ledger,  # 🎯 Assign IGST tax ledger
+                cgst_taxes=cgst_tax_ledger,  # 🎯 Assign CGST tax ledger
+                sgst_taxes=sgst_tax_ledger,  # 🎯 Assign SGST tax ledger
                 discount=0,  # Default discount value for existing data
                 total=total_val,
                 note="AI Analyzed Bill (Existing Data)",
@@ -2033,6 +2078,7 @@ def process_existing_analysis_data(bill, existing_data, organization):
 
             # Save without calling clean() to skip validation
             analyzed_bill.save(skip_validation=True)
+            logger.warning(f"✅ [EXISTING BILL] Saved analyzed bill with tax ledgers - IGST: {analyzed_bill.igst_taxes}, CGST: {analyzed_bill.cgst_taxes}, SGST: {analyzed_bill.sgst_taxes}")
 
             # Create analyzed products with proper GST calculation
             product_instances = []
