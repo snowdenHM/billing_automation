@@ -723,16 +723,18 @@ def process_analysis_data(bill, json_data, organization):
         # Handle 'from' field safely
         from_data = relevant_data.get('from', {})
         if isinstance(from_data, dict):
-            company_name = str(from_data.get('name', '')).strip().lower()
+            company_name = str(from_data.get('name', '')).strip()
+            vendor_gst = str(from_data.get('gst_number', '')).strip()
         else:
-            company_name = str(from_data).strip().lower()
+            company_name = str(from_data).strip()
+            vendor_gst = ''
 
         # Parse date with multiple format support
         bill_date = parse_bill_date(date_issued)
         due_date = parse_bill_date(due_date_str) if due_date_str else None
 
-        # Find vendor ledger
-        vendor = find_vendor_ledger(company_name, organization)
+        # Find vendor ledger using both name and GST number
+        vendor = find_vendor_ledger(company_name, organization, vendor_gst)
 
         # Determine GST type with safe conversion
         igst_val = safe_float_convert(relevant_data.get('igst', 0))
@@ -939,43 +941,52 @@ def parse_bill_date(date_string):
     return None
 
 
-def find_vendor_ledger(company_name, organization):
-    """Find matching vendor ledger using TallyConfig"""
+def find_vendor_ledger(company_name, organization, vendor_gst=None):
+    """Find matching vendor ledger using GST number first, then name matching with TallyConfig"""
     try:
         # Get TallyConfig for the organization
         tally_config = TallyConfig.objects.filter(organization=organization).first()
 
         if not tally_config:
-            # Fallback to default "Sundry Creditors" if no config exists
-            parent_ledger = ParentLedger.objects.filter(
-                parent="Sundry Creditors",
-                organization=organization
-            ).first()
+            logger.warning(f"No TallyConfig found for organization {organization.id}. Cannot fetch vendor ledgers.")
+            return None
 
-            if parent_ledger:
-                vendor_list = Ledger.objects.filter(
-                    parent=parent_ledger,
-                    organization=organization
-                )
+        # Use configured vendor parent ledgers
+        vendor_parent_ledgers = tally_config.vendor_parents.all()
+        if not vendor_parent_ledgers.exists():
+            logger.warning(f"No vendor parent ledgers configured in TallyConfig for organization {organization.id}")
+            return None
+
+        vendor_list = Ledger.objects.filter(
+            parent__in=vendor_parent_ledgers,
+            organization=organization
+        )
+
+        # Priority 1: Match by GST number if available (most reliable)
+        if vendor_gst and vendor_gst.strip():
+            vendor = vendor_list.filter(gst_in__iexact=vendor_gst.strip()).first()
+            if vendor:
+                logger.info(f"Found vendor by GST match: {vendor.name} (GST: {vendor.gst_in})")
+                return vendor
             else:
-                return None
-        else:
-            # Use configured vendor parent ledgers
-            vendor_parent_ledgers = tally_config.vendor_parents.all()
-            if not vendor_parent_ledgers.exists():
-                return None
+                logger.info(f"No vendor found with GST: {vendor_gst}")
 
-            vendor_list = Ledger.objects.filter(
-                parent__in=vendor_parent_ledgers,
-                organization=organization
-            )
+        # Priority 2: Match by company name if GST matching failed
+        if company_name and company_name.strip():
+            # Try exact match first (case-insensitive)
+            vendor = vendor_list.filter(name__iexact=company_name.strip()).first()
+            if vendor:
+                logger.info(f"Found vendor by exact name match: {vendor.name}")
+                return vendor
 
-        # Find matching vendor (case-insensitive exact match first)
-        vendor = vendor_list.filter(name__iexact=company_name).first()
-        if not vendor:
-            vendor = vendor_list.filter(name__icontains=company_name).first()
+            # Try partial match
+            vendor = vendor_list.filter(name__icontains=company_name.strip()).first()
+            if vendor:
+                logger.info(f"Found vendor by partial name match: {vendor.name}")
+                return vendor
 
-        return vendor
+        logger.info(f"No vendor found for company: {company_name}, GST: {vendor_gst}")
+        return None
 
     except Exception as e:
         logger.error(f"Error finding vendor ledger: {str(e)}")
