@@ -781,7 +781,11 @@ def process_analysis_data(bill, json_data, organization):
             logger.error(f"❌ No vendor found for Company: '{company_name}', GST: '{vendor_gst}'")
             logger.warning("⚠️  This will create an analyzed bill without vendor assignment")
 
+        # Continue with bill processing regardless of vendor status
+        logger.warning(f"🔄 Continuing with bill processing - Company: '{company_name}'")
+
         # Determine GST type with safe conversion
+        logger.warning(f"📋 Starting GST values extraction from relevant_data...")
         igst_val = safe_float_convert(relevant_data.get('igst', 0))
         cgst_val = safe_float_convert(relevant_data.get('cgst', 0))
         sgst_val = safe_float_convert(relevant_data.get('sgst', 0))
@@ -799,6 +803,7 @@ def process_analysis_data(bill, json_data, organization):
         logger.warning(f"🏷️  Determined GST Type: {gst_type}")
 
         # Create analyzed bill
+        logger.warning(f"🏗️  Starting analyzed bill creation...")
         with transaction.atomic():
             # Round decimal values to 2 decimal places to avoid validation errors
             from decimal import Decimal, ROUND_HALF_UP
@@ -810,6 +815,8 @@ def process_analysis_data(bill, json_data, organization):
             sgst_rounded = Decimal(str(sgst_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             total_rounded = Decimal(str(total_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             discount_rounded = Decimal(str(discount_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+            logger.warning(f"💵 Bill amounts - Total: {total_rounded}, IGST: {igst_rounded}, CGST: {cgst_rounded}, SGST: {sgst_rounded}")
 
             analyzed_bill = TallyVendorAnalyzedBill.objects.create(
                 selected_bill=bill,
@@ -826,6 +833,8 @@ def process_analysis_data(bill, json_data, organization):
                 organization=organization,
                 gst_type=gst_type
             )
+            
+            logger.warning(f"✅ Created TallyVendorAnalyzedBill with ID: {analyzed_bill.id}")
 
             # Create analyzed products with safe item extraction and tax ledger automation
             product_instances = []
@@ -879,8 +888,9 @@ def process_analysis_data(bill, json_data, organization):
                 logger.warning(f"❌ Items is not a list: {type(items)} - {items}")
 
             if product_instances:
+                logger.warning(f"💾 Saving {len(product_instances)} product instances to database...")
                 TallyVendorAnalyzedProduct.objects.bulk_create(product_instances)
-                logger.info(f"Successfully created {len(product_instances)} products for bill {analyzed_bill.id}")
+                logger.warning(f"✅ Successfully created {len(product_instances)} products for bill {analyzed_bill.id}")
 
                 # ✅ AUTO-CREATE CONSOLIDATED PRODUCT FOR MULTI-ITEM BILLS
                 if len(product_instances) > 1:
@@ -931,11 +941,15 @@ def process_analysis_data(bill, json_data, organization):
             bill.status = TallyVendorBill.BillStatus.ANALYSED
             bill.process = True
             bill.save(update_fields=['status', 'process'])
+            
+            logger.warning(f"🎉 ANALYSIS COMPLETE - Bill {bill.id} status updated to ANALYSED")
 
             return analyzed_bill
 
     except Exception as e:
-        logger.error(f"Error processing analysis data: {str(e)} - Data: {json_data}")
+        logger.error(f"💥 ERROR in process_analysis_data: {str(e)} - Data: {json_data}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise Exception(f"Error processing analysis data: {str(e)}")
 
 
