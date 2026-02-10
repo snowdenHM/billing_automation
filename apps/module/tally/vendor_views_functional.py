@@ -409,23 +409,32 @@ def analyze_bill_with_ai(bill, organization):
     enhanced_prompt = """
     Analyze this Indian invoice/bill image very carefully and extract ALL visible information in JSON format.
     
+    CRITICAL: ALWAYS include gst_number field in both 'from' and 'to' sections, even if empty.
+    
     CRITICAL FOCUS ON GST NUMBERS:
     GST numbers in Indian invoices appear in various formats and locations:
     - GSTIN: 22AAAAA0000A1Z5 (15-character alphanumeric code)
     - GST No: 06AADCK7940H1ZG
     - Tax ID: 27AABCU9603R1ZX
+    - Registration No: followed by GST number
     - Often embedded in addresses like "GST NO. 123456... State Name: Delhi, Code: 07"
     - May appear as "GSTIN/UIN :" followed by the number
     - Sometimes shown in headers, footers, or separate tax information sections
     - Can be in vendor section (from) and customer section (to)
+    - Look for patterns like "06AADCK7940H1ZG", "22AAAAA0000A1Z5"
+    - Check every line of text for 15-character alphanumeric codes
     
     SEARCH EVERYWHERE FOR GST NUMBERS:
     1. Company headers and letterheads
     2. Address blocks (often at the end of addresses)
     3. Tax information sections
-    4. Registration details
+    4. Registration details sections
     5. Footer information
-    6. Any line containing "GST", "GSTIN", "Tax ID", "UIN", "Registration"
+    6. Any line containing "GST", "GSTIN", "Tax ID", "UIN", "Registration", "REG"
+    7. Business registration details
+    8. Company information boxes
+    9. Billing address sections
+    10. Shipping address sections
     
     EXTRACTION REQUIREMENTS:
     1. Invoice/Bill Number (Invoice No, Bill No, Receipt No, etc.)
@@ -435,30 +444,34 @@ def analyze_bill_with_ai(bill, organization):
     5. Line items with descriptions, quantities, and prices
     6. Tax amounts (IGST, CGST, SGST - look for percentages and amounts)
     7. Total amount (Total, Grand Total, Amount Payable)
+    8. GST NUMBERS - MANDATORY FIELD, use empty string if not found
     
     IMPORTANT RULES:
+    - ALWAYS include "gst_number": "" field in both from and to sections
     - Extract EXACT text as it appears on the document
     - For numbers, remove currency symbols (₹, Rs.) and commas
-    - If any field is not visible or unclear, use empty string "" or 0 for numbers
+    - If GST number is not visible or unclear, use empty string ""
+    - If any other field is not visible, use empty string "" or 0 for numbers
     - Look carefully at the entire document, including headers, footers, and margins
     - Pay special attention to tax sections which may be in tables or separate areas
     - GST numbers are 15-character codes - extract the full code even if split across lines
-    - If you see partial GST info like "State: Haryana, Code: 06", still extract what's available
+    - Check every text line for potential GST numbers
+    - Look for format: 2 digits + 10 alphanumeric characters + 1 digit + 2 characters
     
-    Return data in this JSON structure:
+    Return data in this EXACT JSON structure (all fields mandatory):
     {
         "invoiceNumber": "Invoice/Bill number as shown on document",
         "dateIssued": "Invoice/Bill date in YYYY-MM-DD format",
-        "dueDate": "Due date in YYYY-MM-DD format if mentioned",
+        "dueDate": "Due date in YYYY-MM-DD format if mentioned, empty string if not",
         "from": {
             "name": "Vendor/Company name (who is sending the bill)",
             "address": "Complete vendor address",
-            "gst_number": "Vendor's GST number - SEARCH THOROUGHLY for GSTIN/GST No/Tax ID near vendor details"
+            "gst_number": "Vendor's GST number - SEARCH THOROUGHLY or empty string if not found"
         },
         "to": {
             "name": "Customer name (who is receiving the bill)", 
             "address": "Complete customer address",
-            "gst_number": "Customer's GST number - SEARCH THOROUGHLY for GSTIN/GST No/Tax ID near customer details"
+            "gst_number": "Customer's GST number - SEARCH THOROUGHLY or empty string if not found"
         },
         "items": [
             {
@@ -666,7 +679,7 @@ def process_analysis_data(bill, json_data, organization):
     """Process AI extracted data and create analyzed bill"""
     try:
         # Log the raw JSON data for debugging
-        logger.info(f"Raw JSON data from OpenAI: {json.dumps(json_data, indent=2)}")
+        logger.warning(f"📄 Raw JSON data from OpenAI: {json.dumps(json_data, indent=2)}")
 
         # Validate bill ownership
         bill_belongs_to_org, ownership_description = validate_bill_ownership(json_data, organization)
@@ -725,10 +738,35 @@ def process_analysis_data(bill, json_data, organization):
         if isinstance(from_data, dict):
             company_name = str(from_data.get('name', '')).strip()
             vendor_gst = str(from_data.get('gst_number', '')).strip()
+            vendor_address = str(from_data.get('address', '')).strip()
+            
+            # If GST number is empty, try to extract from address
+            if not vendor_gst and vendor_address:
+                logger.warning(f"🔍 GST field empty, searching in address: {vendor_address}")
+                import re
+                # Enhanced GST number patterns for Indian format (2 digits + 10 alphanumeric + 1 digit + 2 characters)
+                gst_patterns = [
+                    r'\b\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z]\d\b',  # Standard GST format
+                    r'GST[:\s]*(\d{2}[A-Z0-9]{13})',  # GST: followed by number
+                    r'GSTIN[:\s]*(\d{2}[A-Z0-9]{13})',  # GSTIN: followed by number
+                    r'Tax[\s]*ID[:\s]*(\d{2}[A-Z0-9]{13})',  # Tax ID: followed by number
+                    r'\b(\d{2}[A-Z]{4}\d{5}[A-Z]\d[A-Z]\d)\b',  # Another common format
+                ]
+                
+                for pattern in gst_patterns:
+                    matches = re.findall(pattern, vendor_address.upper())
+                    if matches:
+                        vendor_gst = matches[0] if isinstance(matches[0], str) else matches[0]
+                        logger.warning(f"✅ Extracted GST from address: {vendor_gst}")
+                        break
         else:
             company_name = str(from_data).strip()
             vendor_gst = ''
+            vendor_address = ''
 
+        # Log extracted vendor information
+        logger.warning(f"📊 Extracted vendor info - Company: '{company_name}', GST: '{vendor_gst}', Address: '{vendor_address[:100]}{'...' if len(vendor_address) > 100 else ''}'")
+        
         # Parse date with multiple format support
         bill_date = parse_bill_date(date_issued)
         due_date = parse_bill_date(due_date_str) if due_date_str else None
@@ -738,10 +776,10 @@ def process_analysis_data(bill, json_data, organization):
         
         # Log vendor finding result
         if vendor:
-            logger.info(f"✅ Successfully found vendor: {vendor.name} (ID: {vendor.id}, GST: {getattr(vendor, 'gst_in', 'None')})")
+            logger.warning(f"✅ Successfully found and assigned vendor: {vendor.name} (ID: {vendor.id}, GST: {getattr(vendor, 'gst_in', 'None')})")
         else:
-            logger.warning(f"❌ No vendor found for Company: '{company_name}', GST: '{vendor_gst}'")
-            logger.info("This will create an analyzed bill without vendor assignment")
+            logger.error(f"❌ No vendor found for Company: '{company_name}', GST: '{vendor_gst}'")
+            logger.warning("⚠️  This will create an analyzed bill without vendor assignment")
 
         # Determine GST type with safe conversion
         igst_val = safe_float_convert(relevant_data.get('igst', 0))
@@ -951,19 +989,19 @@ def parse_bill_date(date_string):
 def find_vendor_ledger(company_name, organization, vendor_gst=None):
     """Find matching vendor ledger using GST number first, then name matching with TallyConfig"""
     try:
-        logger.info(f"Finding vendor - Name: '{company_name}', GST: '{vendor_gst}', Organization: {organization.id}")
+        logger.warning(f"🔍 Finding vendor - Name: '{company_name}', GST: '{vendor_gst}', Organization: {organization.id}")
         
         # Get TallyConfig for the organization
         tally_config = TallyConfig.objects.filter(organization=organization).first()
 
         if not tally_config:
-            logger.warning(f"No TallyConfig found for organization {organization.id}. Cannot fetch vendor ledgers.")
+            logger.error(f"❌ No TallyConfig found for organization {organization.id}. Cannot fetch vendor ledgers.")
             return None
 
         # Use configured vendor parent ledgers
         vendor_parent_ledgers = tally_config.vendor_parents.all()
         if not vendor_parent_ledgers.exists():
-            logger.warning(f"No vendor parent ledgers configured in TallyConfig for organization {organization.id}")
+            logger.error(f"❌ No vendor parent ledgers configured in TallyConfig for organization {organization.id}")
             return None
 
         vendor_list = Ledger.objects.filter(
@@ -971,56 +1009,75 @@ def find_vendor_ledger(company_name, organization, vendor_gst=None):
             organization=organization
         )
         
-        logger.info(f"Found {vendor_list.count()} total vendor ledgers in configured parent ledgers")
+        logger.warning(f"📊 Found {vendor_list.count()} total vendor ledgers in configured parent ledgers")
 
         # Priority 1: Match by GST number if available (most reliable)
         if vendor_gst and vendor_gst.strip():
-            vendor_gst_clean = vendor_gst.strip().upper()  # Normalize to uppercase
-            logger.info(f"Searching for vendor by GST: '{vendor_gst_clean}'")
+            vendor_gst_clean = vendor_gst.strip().upper().replace(' ', '').replace('-', '')
+            logger.warning(f"🆔 Searching for vendor by GST: '{vendor_gst_clean}'")
             
             # Try exact match first
-            vendor = vendor_list.filter(gst_in__iexact=vendor_gst_clean).first()
-            if vendor:
-                logger.info(f"✅ Found vendor by exact GST match: {vendor.name} (GST: {vendor.gst_in})")
-                return vendor
+            for vendor in vendor_list:
+                if vendor.gst_in:
+                    db_gst = vendor.gst_in.strip().upper().replace(' ', '').replace('-', '')
+                    if db_gst == vendor_gst_clean:
+                        logger.warning(f"✅ Found vendor by exact GST match: {vendor.name} (GST: {vendor.gst_in})")
+                        return vendor
             
             # Try partial GST match (in case of formatting differences)
-            vendor = vendor_list.filter(gst_in__icontains=vendor_gst_clean).first()
-            if vendor:
-                logger.info(f"✅ Found vendor by partial GST match: {vendor.name} (GST: {vendor.gst_in})")
-                return vendor
+            for vendor in vendor_list:
+                if vendor.gst_in and vendor_gst_clean in vendor.gst_in.upper().replace(' ', '').replace('-', ''):
+                    logger.warning(f"✅ Found vendor by partial GST match: {vendor.name} (GST: {vendor.gst_in})")
+                    return vendor
             
-            logger.info(f"❌ No vendor found with GST: {vendor_gst_clean}")
+            logger.warning(f"❌ No vendor found with GST: {vendor_gst_clean}")
 
         # Priority 2: Match by company name if GST matching failed
         if company_name and company_name.strip():
             company_name_clean = company_name.strip()
-            logger.info(f"Searching for vendor by name: '{company_name_clean}'")
+            logger.warning(f"🏢 Searching for vendor by name: '{company_name_clean}'")
             
-            # Try exact match first (case-insensitive)
-            vendor = vendor_list.filter(name__iexact=company_name_clean).first()
-            if vendor:
-                logger.info(f"✅ Found vendor by exact name match: {vendor.name} (GST: {getattr(vendor, 'gst_in', 'None')})")
-                return vendor
+            # Remove common business suffixes for better matching
+            name_variations = [company_name_clean]
+            business_suffixes = [' LIMITED', ' LTD', ' PRIVATE', ' PVT', ' LLP', ' COMPANY', ' CO', ' INC', ' CORPORATION', ' CORP']
+            
+            clean_name = company_name_clean.upper()
+            for suffix in business_suffixes:
+                if clean_name.endswith(suffix):
+                    name_variations.append(clean_name[:-len(suffix)].strip())
+                    break
+            
+            # Try exact match with variations
+            for name_var in name_variations:
+                vendor = vendor_list.filter(name__iexact=name_var).first()
+                if vendor:
+                    logger.warning(f"✅ Found vendor by exact name match: {vendor.name} (GST: {getattr(vendor, 'gst_in', 'None')})")
+                    return vendor
 
-            # Try partial match
-            vendor = vendor_list.filter(name__icontains=company_name_clean).first()
-            if vendor:
-                logger.info(f"✅ Found vendor by partial name match: {vendor.name} (GST: {getattr(vendor, 'gst_in', 'None')})")
-                return vendor
-                
-            logger.info(f"❌ No vendor found with name containing: {company_name_clean}")
+            # Try partial match with variations
+            for name_var in name_variations:
+                vendor = vendor_list.filter(name__icontains=name_var).first()
+                if vendor:
+                    logger.warning(f"✅ Found vendor by partial name match: {vendor.name} (GST: {getattr(vendor, 'gst_in', 'None')})")
+                    return vendor
+                    
+            logger.warning(f"❌ No vendor found with name containing: {company_name_clean}")
 
-        # Debug: Log all available vendors for troubleshooting
-        logger.info("Available vendors in configured parent ledgers:")
-        for vendor in vendor_list[:10]:  # Log first 10 vendors
-            logger.info(f"  - {vendor.name} (GST: {getattr(vendor, 'gst_in', 'None')})")
+        # Debug: Log available vendors for troubleshooting
+        logger.warning("📋 Available vendors in configured parent ledgers (first 10):")
+        for idx, vendor in enumerate(vendor_list[:10]):
+            logger.warning(f"  {idx+1}. '{vendor.name}' (GST: '{getattr(vendor, 'gst_in', 'None')}')")
+        
+        if vendor_list.count() > 10:
+            logger.warning(f"  ... and {vendor_list.count() - 10} more vendors")
 
-        logger.info(f"❌ No vendor found for company: {company_name}, GST: {vendor_gst}")
+        logger.error(f"❌ No vendor found for company: '{company_name}', GST: '{vendor_gst}'")
         return None
 
     except Exception as e:
-        logger.error(f"Error finding vendor ledger: {str(e)}")
+        logger.error(f"💥 Error finding vendor ledger: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 
 
