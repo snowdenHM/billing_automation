@@ -822,7 +822,7 @@ def process_analysis_data(bill, json_data, organization):
                 gst_type=gst_type
             )
 
-            # Create analyzed products with safe item extraction
+            # Create analyzed products with safe item extraction and tax ledger automation
             product_instances = []
             items = relevant_data.get('items', [])
             if isinstance(items, list):
@@ -837,15 +837,25 @@ def process_analysis_data(bill, json_data, organization):
                         price_rounded = Decimal(str(price_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                         amount_rounded = Decimal(str(amount_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
+                        # 🚀 AUTO-ASSIGN TAX LEDGERS BASED ON GST VALUES
+                        tax_ledger = find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val)
+                        
+                        # Determine GST rate from tax amounts
+                        gst_rate = calculate_gst_rate(amount_val, igst_val, cgst_val, sgst_val)
+
                         product = TallyVendorAnalyzedProduct(
                             vendor_bill_analyzed=analyzed_bill,
                             item_details=str(item.get('description', '')),
                             price=price_rounded,
                             quantity=quantity_val,
                             amount=amount_rounded,
+                            tax_ledger=tax_ledger,  # 🎯 Auto-assigned tax ledger
+                            product_gst=gst_rate,   # 🎯 Auto-assigned GST rate  
                             organization=organization
                         )
                         product_instances.append(product)
+                        
+                        logger.warning(f"📦 Created product with auto-tax: '{item.get('description', '')[:50]}...' | Tax Ledger: '{tax_ledger.name if tax_ledger else 'None'}' | GST Rate: {gst_rate}%")
 
             if product_instances:
                 TallyVendorAnalyzedProduct.objects.bulk_create(product_instances)
@@ -962,6 +972,142 @@ def safe_int_convert(value):
         return 0
 
 
+def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val):
+    """Find appropriate tax ledger based on GST values and organization configuration"""
+    try:
+        # Get tax ledger configurations
+        tax_configs = TallyConfig.objects.filter(
+            organization=organization,
+            config_type='tax_ledger'
+        )
+        
+        # Determine GST type based on values
+        if igst_val > 0:
+            # IGST case - look for IGST tax ledgers
+            igst_configs = tax_configs.filter(key_name__icontains='igst')
+            if igst_configs.exists():
+                ledger_name = igst_configs.first().value
+                tax_ledger = Ledger.objects.filter(
+                    organization=organization,
+                    name__iexact=ledger_name
+                ).first()
+                if tax_ledger:
+                    logger.warning(f"🎯 Auto-assigned IGST tax ledger: {tax_ledger.name}")
+                    return tax_ledger
+        
+        elif cgst_val > 0 or sgst_val > 0:
+            # CGST/SGST case - look for CGST tax ledgers (assuming SGST will be handled similarly)
+            cgst_configs = tax_configs.filter(key_name__icontains='cgst')
+            if cgst_configs.exists():
+                ledger_name = cgst_configs.first().value
+                tax_ledger = Ledger.objects.filter(
+                    organization=organization,
+                    name__iexact=ledger_name
+                ).first()
+                if tax_ledger:
+                    logger.warning(f"🎯 Auto-assigned CGST tax ledger: {tax_ledger.name}")
+                    return tax_ledger
+        
+        # Fallback: try to find any tax ledger with 'tax' in parent ledger
+        tax_parent_ledgers = TallyConfig.objects.filter(
+            organization=organization,
+            config_type='parent_ledger',
+            key_name__icontains='tax'
+        ).values_list('value', flat=True)
+        
+        if tax_parent_ledgers:
+            tax_ledger = Ledger.objects.filter(
+                organization=organization,
+                parent_ledger__name__in=tax_parent_ledgers
+            ).first()
+            
+            if tax_ledger:
+                logger.warning(f"🎯 Auto-assigned fallback tax ledger: {tax_ledger.name}")
+                return tax_ledger
+        
+        logger.warning(f"⚠️  No tax ledger found for IGST:{igst_val}, CGST:{cgst_val}, SGST:{sgst_val}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"❌ Error finding tax ledger: {str(e)}")
+        return None
+
+
+def calculate_gst_rate(amount, igst_val, cgst_val, sgst_val):
+    """Calculate GST rate percentage based on tax amounts and item amount"""
+    try:
+        if amount <= 0:
+            return "0"
+        
+        total_tax = igst_val + cgst_val + sgst_val
+        if total_tax <= 0:
+            return "0"
+        
+        # Calculate rate: (total_tax / taxable_amount) * 100
+        # For GST, taxable amount = total_amount - total_tax (reverse calculation)
+        taxable_amount = amount - total_tax
+        if taxable_amount <= 0:
+            taxable_amount = amount  # Fallback if calculation seems wrong
+        
+        gst_rate = (total_tax / taxable_amount) * 100
+        
+        # Round to nearest standard GST rates
+        standard_rates = [0, 5, 12, 18, 28]
+        closest_rate = min(standard_rates, key=lambda x: abs(x - gst_rate))
+        
+        logger.warning(f"📊 GST calculation: Amount:{amount}, Tax:{total_tax}, Calculated:{gst_rate:.2f}%, Rounded:{closest_rate}%")
+        return str(closest_rate)
+        
+    except Exception as e:
+        logger.error(f"❌ Error calculating GST rate: {str(e)}")
+        return "18"  # Default fallback to 18%
+
+
+def normalize_company_name(name):
+    """Normalize company name for better matching"""
+    if not name:
+        return ""
+    
+    # Remove common suffixes and year indicators
+    normalized = name.strip()
+    
+    # Remove year patterns like (2025-26), (FY25), etc.
+    import re
+    normalized = re.sub(r'\s*\([0-9]{4}[-/][0-9]{2,4}\)', '', normalized)
+    normalized = re.sub(r'\s*\(FY[0-9]{2}\)', '', normalized)
+    
+    # Normalize punctuation and spacing
+    normalized = re.sub(r'[&]+', '&', normalized)  # Multiple & to single
+    normalized = re.sub(r'\s*&\s*', ' & ', normalized)  # Normalize & spacing
+    normalized = re.sub(r'\.+', '.', normalized)  # Multiple dots to single
+    normalized = re.sub(r'\s*\.\s*', '. ', normalized)  # Normalize dot spacing
+    
+    # Handle common business suffixes
+    business_suffixes = [
+        'Mfg.Co.', 'Mfg Co', 'Manufacturing Co', 'Mfg. Co.', 'Mfg.Co',
+        'Pvt Ltd', 'Pvt. Ltd.', 'Private Limited', 'Ltd', 'Ltd.',
+        'LLC', 'LLP', 'Co.', 'Co', 'Company', 'Corp', 'Corporation',
+        'Inc', 'Inc.', 'Industries', 'Enterprises', 'Trading', 'Traders'
+    ]
+    
+    # Normalize business suffixes  
+    for suffix in business_suffixes:
+        pattern = r'\b' + re.escape(suffix) + r'\b'
+        if re.search(pattern, normalized, re.IGNORECASE):
+            # Replace with standardized version
+            if 'Mfg' in suffix:
+                normalized = re.sub(pattern, 'Mfg. Co.', normalized, flags=re.IGNORECASE)
+            elif 'Pvt' in suffix and 'Ltd' in suffix:
+                normalized = re.sub(pattern, 'Pvt. Ltd.', normalized, flags=re.IGNORECASE)
+            elif suffix in ['Ltd', 'Ltd.']:
+                normalized = re.sub(pattern, 'Ltd.', normalized, flags=re.IGNORECASE)
+    
+    # Clean up multiple spaces
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    
+    return normalized
+
+
 def parse_bill_date(date_string):
     """Parse bill date with multiple format support"""
     if not date_string:
@@ -987,97 +1133,115 @@ def parse_bill_date(date_string):
 
 
 def find_vendor_ledger(company_name, organization, vendor_gst=None):
-    """Find matching vendor ledger using GST number first, then name matching with TallyConfig"""
+    """Find matching vendor ledger using GST number first, then enhanced name matching with TallyConfig"""
     try:
         logger.warning(f"🔍 Finding vendor - Name: '{company_name}', GST: '{vendor_gst}', Organization: {organization.id}")
         
-        # Get TallyConfig for the organization
-        tally_config = TallyConfig.objects.filter(organization=organization).first()
-
-        if not tally_config:
-            logger.error(f"❌ No TallyConfig found for organization {organization.id}. Cannot fetch vendor ledgers.")
-            return None
-
-        # Use configured vendor parent ledgers
-        vendor_parent_ledgers = tally_config.vendor_parents.all()
-        if not vendor_parent_ledgers.exists():
-            logger.error(f"❌ No vendor parent ledgers configured in TallyConfig for organization {organization.id}")
-            return None
-
-        vendor_list = Ledger.objects.filter(
-            parent__in=vendor_parent_ledgers,
-            organization=organization
+        # Step 1: Get configured parent ledgers for Sundry Creditors
+        parent_ledgers = TallyConfig.objects.filter(
+            organization=organization,
+            config_type='parent_ledger',
+            key_name='sundry_creditors'
+        ).values_list('value', flat=True)
+        
+        if not parent_ledgers:
+            logger.warning(f"❌ No configured parent ledgers found for Sundry Creditors in organization {organization.id}")
+            # Fallback to TallyConfig vendor_parents if available
+            tally_config = TallyConfig.objects.filter(organization=organization).first()
+            if tally_config and hasattr(tally_config, 'vendor_parents'):
+                vendor_parent_ledgers = tally_config.vendor_parents.all()
+                if vendor_parent_ledgers.exists():
+                    parent_ledgers = [vpl.name for vpl in vendor_parent_ledgers]
+                    logger.warning(f"🔄 Using fallback vendor_parents: {list(parent_ledgers)}")
+                else:
+                    logger.error(f"❌ No vendor parent ledgers configured")
+                    return None
+            else:
+                return None
+            
+        # Get all vendor ledgers under configured parent ledgers
+        vendor_ledgers = Ledger.objects.filter(
+            organization=organization, 
+            parent_ledger__name__in=parent_ledgers
         )
         
-        logger.warning(f"📊 Found {vendor_list.count()} total vendor ledgers in configured parent ledgers")
-
-        # Priority 1: Match by GST number if available (most reliable)
-        if vendor_gst and vendor_gst.strip():
-            vendor_gst_clean = vendor_gst.strip().upper().replace(' ', '').replace('-', '')
-            logger.warning(f"🆔 Searching for vendor by GST: '{vendor_gst_clean}'")
-            
-            # Try exact match first
-            for vendor in vendor_list:
-                if vendor.gst_in:
-                    db_gst = vendor.gst_in.strip().upper().replace(' ', '').replace('-', '')
-                    if db_gst == vendor_gst_clean:
-                        logger.warning(f"✅ Found vendor by exact GST match: {vendor.name} (GST: {vendor.gst_in})")
-                        return vendor
-            
-            # Try partial GST match (in case of formatting differences)
-            for vendor in vendor_list:
-                if vendor.gst_in and vendor_gst_clean in vendor.gst_in.upper().replace(' ', '').replace('-', ''):
-                    logger.warning(f"✅ Found vendor by partial GST match: {vendor.name} (GST: {vendor.gst_in})")
-                    return vendor
-            
-            logger.warning(f"❌ No vendor found with GST: {vendor_gst_clean}")
-
-        # Priority 2: Match by company name if GST matching failed
-        if company_name and company_name.strip():
-            company_name_clean = company_name.strip()
-            logger.warning(f"🏢 Searching for vendor by name: '{company_name_clean}'")
-            
-            # Remove common business suffixes for better matching
-            name_variations = [company_name_clean]
-            business_suffixes = [' LIMITED', ' LTD', ' PRIVATE', ' PVT', ' LLP', ' COMPANY', ' CO', ' INC', ' CORPORATION', ' CORP']
-            
-            clean_name = company_name_clean.upper()
-            for suffix in business_suffixes:
-                if clean_name.endswith(suffix):
-                    name_variations.append(clean_name[:-len(suffix)].strip())
-                    break
-            
-            # Try exact match with variations
-            for name_var in name_variations:
-                vendor = vendor_list.filter(name__iexact=name_var).first()
-                if vendor:
-                    logger.warning(f"✅ Found vendor by exact name match: {vendor.name} (GST: {getattr(vendor, 'gst_in', 'None')})")
-                    return vendor
-
-            # Try partial match with variations
-            for name_var in name_variations:
-                vendor = vendor_list.filter(name__icontains=name_var).first()
-                if vendor:
-                    logger.warning(f"✅ Found vendor by partial name match: {vendor.name} (GST: {getattr(vendor, 'gst_in', 'None')})")
-                    return vendor
-                    
-            logger.warning(f"❌ No vendor found with name containing: {company_name_clean}")
-
-        # Debug: Log available vendors for troubleshooting
-        logger.warning("📋 Available vendors in configured parent ledgers (first 10):")
-        for idx, vendor in enumerate(vendor_list[:10]):
-            logger.warning(f"  {idx+1}. '{vendor.name}' (GST: '{getattr(vendor, 'gst_in', 'None')}')")
+        logger.warning(f"📊 Found {vendor_ledgers.count()} total vendor ledgers in configured parent ledgers")
         
-        if vendor_list.count() > 10:
-            logger.warning(f"  ... and {vendor_list.count() - 10} more vendors")
-
+        # Step 2: If GST number is provided, try exact GST match first
+        if vendor_gst and vendor_gst.strip():
+            gst_matches = vendor_ledgers.filter(gst_in__iexact=vendor_gst.strip())
+            if gst_matches.exists():
+                vendor = gst_matches.first()
+                logger.warning(f"✅ Found vendor by GST match: {vendor.name} (ID: {vendor.id}, GST: {vendor.gst_in})")
+                return vendor
+            else:
+                logger.warning(f"🔍 No exact GST match found for: {vendor_gst}")
+        
+        # Step 3: Enhanced name-based matching with normalization
+        if company_name and company_name.strip():
+            logger.warning(f"🏢 Searching for vendor by name: '{company_name}'")
+            
+            # Normalize company name for flexible matching
+            normalized_extracted = normalize_company_name(company_name)
+            logger.warning(f"🔧 Normalized extracted name: '{normalized_extracted}'")
+            
+            # Try exact name match first
+            exact_matches = vendor_ledgers.filter(name__iexact=company_name.strip())
+            if exact_matches.exists():
+                vendor = exact_matches.first()
+                logger.warning(f"✅ Found vendor by exact name match: {vendor.name} (ID: {vendor.id})")
+                return vendor
+            
+            # Try normalized name matching  
+            best_match = None
+            best_similarity = 0.0
+            
+            for vendor in vendor_ledgers:
+                normalized_vendor = normalize_company_name(vendor.name)
+                
+                # Check for normalized exact match first
+                if normalized_extracted.lower() == normalized_vendor.lower():
+                    logger.warning(f"✅ Found vendor by normalized exact match: {vendor.name} (ID: {vendor.id}) | '{normalized_extracted}' == '{normalized_vendor}'")
+                    return vendor
+                
+                # Calculate similarity for partial matches
+                similarity = _calculate_tally_string_similarity(normalized_extracted, normalized_vendor)
+                
+                # Enhanced matching criteria - also check if one contains the other
+                contains_match = False
+                if len(normalized_extracted) > 10 and len(normalized_vendor) > 10:
+                    if normalized_extracted.lower() in normalized_vendor.lower() or normalized_vendor.lower() in normalized_extracted.lower():
+                        contains_match = True
+                        similarity = max(similarity, 0.8)  # Boost similarity for contains match
+                
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_match = vendor
+                    
+                # Log detailed matching info for debugging
+                if similarity > 0.5:  # Only log promising matches
+                    match_type = "(contains)" if contains_match else ""
+                    logger.warning(f"    '{normalized_extracted}' vs '{normalized_vendor}' -> {similarity:.2f} {match_type}")
+            
+            # Accept match if similarity is high enough
+            if best_match and best_similarity >= 0.70:  # Lowered threshold for better matching
+                logger.warning(f"✅ Found vendor by similarity match ({best_similarity:.2f}): {best_match.name} (ID: {best_match.id})")
+                return best_match
+            else:
+                logger.warning(f"❌ No vendor found with adequate similarity for: {company_name} (best: {best_similarity:.2f})")
+        
+        # Step 4: Log available vendors for debugging
+        logger.warning(f"📋 Available vendors in configured parent ledgers (first 10):")
+        for i, vendor in enumerate(vendor_ledgers[:10], 1):
+            normalized_name = normalize_company_name(vendor.name)
+            gst_info = f"(GST: '{vendor.gst_in}')" if vendor.gst_in else "(GST: '')"
+            logger.warning(f"  {i}. '{vendor.name}' -> '{normalized_name}' {gst_info}")
+        
         logger.error(f"❌ No vendor found for company: '{company_name}', GST: '{vendor_gst}'")
         return None
-
+        
     except Exception as e:
-        logger.error(f"💥 Error finding vendor ledger: {str(e)}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.error(f"❌ Error in find_vendor_ledger: {str(e)}")
         return None
 
 
