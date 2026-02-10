@@ -840,15 +840,15 @@ def process_analysis_data(bill, json_data, organization):
         sgst_tax_ledger = None
         
         if igst_val > 0:
-            igst_tax_ledger = find_appropriate_tax_ledger(organization, igst_val, 0, 0)
+            igst_tax_ledger = find_appropriate_tax_ledger(organization, igst_val, 0, 0, ledger_type='bill')
             logger.warning(f"🎯 [NEW BILL] IGST Tax Ledger: {igst_tax_ledger.name if igst_tax_ledger else 'None'}")
         
         if cgst_val > 0:
-            cgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, cgst_val, 0)
+            cgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, cgst_val, 0, ledger_type='bill')
             logger.warning(f"🎯 [NEW BILL] CGST Tax Ledger: {cgst_tax_ledger.name if cgst_tax_ledger else 'None'}")
         
         if sgst_val > 0:
-            sgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, 0, sgst_val)
+            sgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, 0, sgst_val, ledger_type='bill')
             logger.warning(f"🎯 [NEW BILL] SGST Tax Ledger: {sgst_tax_ledger.name if sgst_tax_ledger else 'None'}")
 
         # Create analyzed bill
@@ -938,9 +938,9 @@ def process_analysis_data(bill, json_data, organization):
                         
                         logger.warning(f"🧮 Item {idx} proportional GST - IGST: {item_igst_rounded}, CGST: {item_cgst_rounded}, SGST: {item_sgst_rounded}")
 
-                        # 🚀 AUTO-ASSIGN TAX LEDGERS BASED ON ITEM-SPECIFIC GST VALUES
-                        logger.warning(f"🏛️  Starting tax ledger search for item {idx} with item GST values - IGST: {item_igst_rounded}, CGST: {item_cgst_rounded}, SGST: {item_sgst_rounded}")
-                        tax_ledger = find_appropriate_tax_ledger(organization, float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded))
+                        # � AUTO-ASSIGN LINE ITEM LEDGER FROM CHART OF ACCOUNTS (Purchase Accounts)
+                        logger.warning(f"🏛️  Finding line item ledger for product '{item.get('description', 'No desc')[:30]}...'")
+                        item_ledger = find_appropriate_tax_ledger(organization, float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded), ledger_type='product')
                         
                         # Determine GST rate from tax amounts for this specific item
                         gst_rate = calculate_gst_rate(amount_val, float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded))
@@ -954,7 +954,7 @@ def process_analysis_data(bill, json_data, organization):
                             price=price_rounded,
                             quantity=quantity_val,
                             amount=amount_rounded,
-                            taxes=tax_ledger,  # 🎯 Auto-assigned tax ledger (correct field name)
+                            taxes=item_ledger,  # 🎯 Line item ledger from chart_of_accounts_parents (Purchase Accounts)
                             product_gst=formatted_gst_rate,   # 🎯 Auto-assigned GST rate with % format
                             igst=item_igst_rounded,  # 🎯 Individual item IGST
                             cgst=item_cgst_rounded,  # 🎯 Individual item CGST
@@ -963,7 +963,7 @@ def process_analysis_data(bill, json_data, organization):
                         )
                         product_instances.append(product)
                         
-                        logger.warning(f"📦 Created product {idx} with auto-tax: '{item.get('description', '')[:50]}...' | Tax Ledger: '{tax_ledger.name if tax_ledger else 'None'}' | GST Rate: {formatted_gst_rate} | Item IGST: {item_igst_rounded} | Item CGST: {item_cgst_rounded} | Item SGST: {item_sgst_rounded}")
+                        logger.warning(f"📦 Created product {idx}: '{item.get('description', '')[:50]}...' | Line Item Ledger: '{item_ledger.name if item_ledger else 'None'}' (Parent: {item_ledger.parent.parent if item_ledger else 'N/A'}) | GST: {formatted_gst_rate}")
                     else:
                         logger.warning(f"❌ Item {idx} is not a dict: {item}")
             else:
@@ -1093,10 +1093,20 @@ def safe_int_convert(value):
         return 0
 
 
-def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val):
-    """Find appropriate tax ledger based on GST values and organization configuration"""
+def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_type='bill'):
+    """
+    Find appropriate tax ledger based on GST values and organization configuration
+    
+    Args:
+        organization: Organization instance
+        igst_val: IGST amount
+        cgst_val: CGST amount
+        sgst_val: SGST amount
+        ledger_type: 'bill' for bill-level GST ledgers (Duties & Taxes), 
+                     'product' for product-level ledgers (Purchase Accounts)
+    """
     try:
-        logger.warning(f"🏛️  Searching for tax ledger - IGST:{igst_val}, CGST:{cgst_val}, SGST:{sgst_val}")
+        logger.warning(f"🏛️  Searching for tax ledger (type: {ledger_type}) - IGST:{igst_val}, CGST:{cgst_val}, SGST:{sgst_val}")
         
         # Get TallyConfig for the organization
         tally_config = TallyConfig.objects.filter(organization=organization).first()
@@ -1105,14 +1115,56 @@ def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val):
             logger.warning(f"❌ No TallyConfig found for organization {organization.id}. Cannot assign tax ledgers.")
             return None
         
+        # For product-level ledgers, use chart_of_accounts_parents (Purchase Accounts)
+        # These ledgers connect line items to the appropriate expense/purchase category
+        if ledger_type == 'product':
+            purchase_parent_ledgers = tally_config.chart_of_accounts_parents.all()
+            logger.warning(f"🛒 Line Item Ledger Search: Found {purchase_parent_ledgers.count()} Chart of Accounts parent ledgers")
+            
+            if not purchase_parent_ledgers.exists():
+                logger.warning(f"⚠️  No Chart of Accounts parents configured in TallyConfig for line items")
+                return None
+            
+            # Get all ledgers under chart_of_accounts_parents
+            # These are the actual purchase/expense category ledgers
+            purchase_ledgers = Ledger.objects.filter(
+                organization=organization,
+                parent__in=purchase_parent_ledgers
+            )
+            
+            logger.warning(f"📦 Found {purchase_ledgers.count()} line item ledgers under Chart of Accounts parents")
+            for ledger in purchase_ledgers[:5]:
+                logger.warning(f"  - '{ledger.name}' (Parent: {ledger.parent.parent})")
+            
+            # Priority 1: Look for "Purchase" in name first (most common)
+            purchase_ledger = purchase_ledgers.filter(name__icontains='purchase').first()
+            if purchase_ledger:
+                logger.warning(f"🎯 Auto-assigned line item ledger: {purchase_ledger.name} (Parent: {purchase_ledger.parent.parent})")
+                return purchase_ledger
+            
+            # Priority 2: Look for "Expense" in name
+            expense_ledger = purchase_ledgers.filter(name__icontains='expense').first()
+            if expense_ledger:
+                logger.warning(f"🎯 Auto-assigned line item ledger: {expense_ledger.name} (Parent: {expense_ledger.parent.parent})")
+                return expense_ledger
+            
+            # Fallback: Use first available ledger under chart_of_accounts_parents
+            fallback_ledger = purchase_ledgers.first()
+            if fallback_ledger:
+                logger.warning(f"🎯 Auto-assigned fallback line item ledger: {fallback_ledger.name} (Parent: {fallback_ledger.parent.parent})")
+                return fallback_ledger
+            
+            logger.warning(f"❌ No line item ledgers found under Chart of Accounts parents")
+            return None
+        
+        # For bill-level GST ledgers (Duties & Taxes)
         # Determine GST type based on values and find appropriate parent ledgers
-        if igst_val > 0:
-            # IGST case - get IGST parent ledgers
+        if igst_val > 0 and cgst_val == 0 and sgst_val == 0:
+            # Pure IGST case
             igst_parent_ledgers = tally_config.igst_parents.all()
             logger.warning(f"🔍 IGST case: Found {igst_parent_ledgers.count()} IGST parent ledgers configured")
             
             if igst_parent_ledgers.exists():
-                # Look for IGST tax ledger under these parents
                 tax_ledgers = Ledger.objects.filter(
                     organization=organization,
                     parent__in=igst_parent_ledgers
@@ -1122,25 +1174,22 @@ def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val):
                 for ledger in tax_ledgers[:5]:
                     logger.warning(f"  - '{ledger.name}' (Parent: {ledger.parent.parent})")
                 
-                # Try to find IGST-specific ledger first
                 igst_ledger = tax_ledgers.filter(name__icontains='igst').first()
                 if igst_ledger:
                     logger.warning(f"🎯 Auto-assigned IGST tax ledger: {igst_ledger.name}")
                     return igst_ledger
                 
-                # Fallback to first available tax ledger under IGST parents
                 tax_ledger = tax_ledgers.first()
                 if tax_ledger:
                     logger.warning(f"🎯 Auto-assigned IGST fallback tax ledger: {tax_ledger.name}")
                     return tax_ledger
         
-        elif cgst_val > 0 or sgst_val > 0:
-            # CGST/SGST case - get CGST parent ledgers first
+        elif cgst_val > 0 and igst_val == 0 and sgst_val == 0:
+            # Pure CGST case
             cgst_parent_ledgers = tally_config.cgst_parents.all()
-            logger.warning(f"🔍 CGST/SGST case: Found {cgst_parent_ledgers.count()} CGST parent ledgers configured")
+            logger.warning(f"🔍 CGST case: Found {cgst_parent_ledgers.count()} CGST parent ledgers configured")
             
             if cgst_parent_ledgers.exists():
-                # Look for CGST tax ledger under these parents
                 tax_ledgers = Ledger.objects.filter(
                     organization=organization,
                     parent__in=cgst_parent_ledgers
@@ -1150,21 +1199,20 @@ def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val):
                 for ledger in tax_ledgers[:5]:
                     logger.warning(f"  - '{ledger.name}' (Parent: {ledger.parent.parent})")
                 
-                # Try to find CGST-specific ledger first
                 cgst_ledger = tax_ledgers.filter(name__icontains='cgst').first()
                 if cgst_ledger:
                     logger.warning(f"🎯 Auto-assigned CGST tax ledger: {cgst_ledger.name}")
                     return cgst_ledger
                 
-                # Fallback to first available tax ledger under CGST parents
                 tax_ledger = tax_ledgers.first()
                 if tax_ledger:
                     logger.warning(f"🎯 Auto-assigned CGST fallback tax ledger: {tax_ledger.name}")
                     return tax_ledger
-            
-            # If no CGST ledger found, try SGST parent ledgers
+        
+        elif sgst_val > 0 and igst_val == 0 and cgst_val == 0:
+            # Pure SGST case
             sgst_parent_ledgers = tally_config.sgst_parents.all()
-            logger.warning(f"🔍 Checking SGST parents: Found {sgst_parent_ledgers.count()} SGST parent ledgers configured")
+            logger.warning(f"🔍 SGST case: Found {sgst_parent_ledgers.count()} SGST parent ledgers configured")
             
             if sgst_parent_ledgers.exists():
                 tax_ledgers = Ledger.objects.filter(
@@ -1172,13 +1220,15 @@ def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val):
                     parent__in=sgst_parent_ledgers
                 )
                 
-                # Try to find SGST-specific ledger first
+                logger.warning(f"📊 Found {tax_ledgers.count()} tax ledgers under SGST parents")
+                for ledger in tax_ledgers[:5]:
+                    logger.warning(f"  - '{ledger.name}' (Parent: {ledger.parent.parent})")
+                
                 sgst_ledger = tax_ledgers.filter(name__icontains='sgst').first()
                 if sgst_ledger:
                     logger.warning(f"🎯 Auto-assigned SGST tax ledger: {sgst_ledger.name}")
                     return sgst_ledger
                 
-                # Fallback to first available tax ledger under SGST parents
                 tax_ledger = tax_ledgers.first()
                 if tax_ledger:
                     logger.warning(f"🎯 Auto-assigned SGST fallback tax ledger: {tax_ledger.name}")
@@ -2044,15 +2094,15 @@ def process_existing_analysis_data(bill, existing_data, organization):
         sgst_tax_ledger = None
         
         if igst_val > 0:
-            igst_tax_ledger = find_appropriate_tax_ledger(organization, igst_val, 0, 0)
+            igst_tax_ledger = find_appropriate_tax_ledger(organization, igst_val, 0, 0, ledger_type='bill')
             logger.warning(f"🎯 [EXISTING BILL] IGST Tax Ledger: {igst_tax_ledger.name if igst_tax_ledger else 'None'}")
         
         if cgst_val > 0:
-            cgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, cgst_val, 0)
+            cgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, cgst_val, 0, ledger_type='bill')
             logger.warning(f"🎯 [EXISTING BILL] CGST Tax Ledger: {cgst_tax_ledger.name if cgst_tax_ledger else 'None'}")
         
         if sgst_val > 0:
-            sgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, 0, sgst_val)
+            sgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, 0, sgst_val, ledger_type='bill')
             logger.warning(f"🎯 [EXISTING BILL] SGST Tax Ledger: {sgst_tax_ledger.name if sgst_tax_ledger else 'None'}")
 
         # Create analyzed bill without Django validation to avoid GST mismatch errors
@@ -2135,9 +2185,9 @@ def process_existing_analysis_data(bill, existing_data, organization):
                     product_cgst = 0
                     product_sgst = 0
 
-                # 🚀 AUTO-ASSIGN TAX LEDGERS BASED ON ITEM-SPECIFIC GST VALUES (EXISTING DATA)
-                logger.warning(f"🏛️  [EXISTING] Tax ledger search for product '{item.get('description', 'No desc')[:30]}...' - IGST: {product_igst}, CGST: {product_cgst}, SGST: {product_sgst}")
-                tax_ledger = find_appropriate_tax_ledger(organization, product_igst, product_cgst, product_sgst)
+                # � AUTO-ASSIGN LINE ITEM LEDGER FROM CHART OF ACCOUNTS (EXISTING DATA)
+                logger.warning(f"🏛️  [EXISTING] Finding line item ledger for product '{item.get('description', 'No desc')[:30]}...'")
+                item_ledger = find_appropriate_tax_ledger(organization, product_igst, product_cgst, product_sgst, ledger_type='product')
                 
                 # Create product instance without validation
                 product = TallyVendorAnalyzedProduct(
@@ -2146,7 +2196,7 @@ def process_existing_analysis_data(bill, existing_data, organization):
                     price=price,
                     quantity=quantity,
                     amount=amount,
-                    taxes=tax_ledger,  # 🎯 Auto-assigned tax ledger for existing data
+                    taxes=item_ledger,  # 🎯 Line item ledger from chart_of_accounts_parents
                     product_gst=normalize_product_gst(gst_rate),  # 🎯 Properly formatted GST rate
                     igst=product_igst,
                     cgst=product_cgst,
@@ -2154,7 +2204,7 @@ def process_existing_analysis_data(bill, existing_data, organization):
                     organization=organization
                 )
                 
-                logger.warning(f"📦 [EXISTING] Created product with auto-tax: '{item.get('description', 'No desc')[:30]}...' | Tax Ledger: '{tax_ledger.name if tax_ledger else 'None'}' | GST Rate: {gst_rate}%")
+                logger.warning(f"📦 [EXISTING] Created product: '{item.get('description', 'No desc')[:30]}...' | Line Item Ledger: '{item_ledger.name if item_ledger else 'None'}' (Parent: {item_ledger.parent.parent if item_ledger else 'N/A'}) | GST: {gst_rate}%")
                 created_products.append(product)
 
             # Bulk create products without validation
