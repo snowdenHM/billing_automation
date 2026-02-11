@@ -417,9 +417,12 @@ def analyze_bill_with_ai(bill, organization):
     enhanced_prompt = """
     Analyze this Indian invoice/bill image very carefully and extract ALL visible information in JSON format.
     
-    CRITICAL: ALWAYS include gst_number field in both 'from' and 'to' sections, even if empty.
+    🚨 CRITICAL MANDATORY REQUIREMENT 🚨
+    YOU MUST ALWAYS INCLUDE "gst_number" field in BOTH "from" and "to" sections.
+    DO NOT OMIT THIS FIELD UNDER ANY CIRCUMSTANCES.
+    If no GST number is found, use empty string "" but the field MUST be present.
     
-    CRITICAL FOCUS ON GST NUMBERS:
+    🔍 AGGRESSIVE GST NUMBER SEARCH:
     GST numbers in Indian invoices appear in various formats and locations:
     - GSTIN: 22AAAAA0000A1Z5 (15-character alphanumeric code)
     - GST No: 06AADCK7940H1ZG
@@ -431,11 +434,12 @@ def analyze_bill_with_ai(bill, organization):
     - Can be in vendor section (from) and customer section (to)
     - Look for patterns like "06AADCK7940H1ZG", "22AAAAA0000A1Z5"
     - Check every line of text for 15-character alphanumeric codes
+    - May be prefixed with "GST:", "GSTIN:", "Tax ID:", "REG NO:"
     
-    SEARCH EVERYWHERE FOR GST NUMBERS:
+    🔎 SEARCH LOCATIONS (CHECK ALL):
     1. Company headers and letterheads
     2. Address blocks (often at the end of addresses)
-    3. Tax information sections
+    3. Tax information sections and tables
     4. Registration details sections
     5. Footer information
     6. Any line containing "GST", "GSTIN", "Tax ID", "UIN", "Registration", "REG"
@@ -443,8 +447,10 @@ def analyze_bill_with_ai(bill, organization):
     8. Company information boxes
     9. Billing address sections
     10. Shipping address sections
+    11. Invoice metadata sections
+    12. Tax calculation tables
     
-    EXTRACTION REQUIREMENTS:
+    📋 EXTRACTION REQUIREMENTS:
     1. Invoice/Bill Number (Invoice No, Bill No, Receipt No, etc.)
     2. Dates (Invoice Date, Bill Date, Due Date - convert to YYYY-MM-DD format)
     3. Vendor/Company details (from - who is billing)
@@ -452,21 +458,22 @@ def analyze_bill_with_ai(bill, organization):
     5. Line items with descriptions, quantities, and prices
     6. Tax amounts (IGST, CGST, SGST - look for percentages and amounts)
     7. Total amount (Total, Grand Total, Amount Payable)
-    8. GST NUMBERS - MANDATORY FIELD, use empty string if not found
+    8. GST NUMBERS - ABSOLUTELY MANDATORY FIELD
     
-    IMPORTANT RULES:
-    - ALWAYS include "gst_number": "" field in both from and to sections
+    ⚠️ CRITICAL RULES:
+    - THE "gst_number" FIELD IS MANDATORY IN BOTH "from" AND "to" OBJECTS
+    - If you cannot find a GST number, use empty string "" but DO NOT omit the field
     - Extract EXACT text as it appears on the document
     - For numbers, remove currency symbols (₹, Rs.) and commas
-    - If GST number is not visible or unclear, use empty string ""
     - If any other field is not visible, use empty string "" or 0 for numbers
     - Look carefully at the entire document, including headers, footers, and margins
     - Pay special attention to tax sections which may be in tables or separate areas
-    - GST numbers are 15-character codes - extract the full code even if split across lines
+    - GST numbers are typically 15-character codes - extract the full code
     - Check every text line for potential GST numbers
     - Look for format: 2 digits + 10 alphanumeric characters + 1 digit + 2 characters
     
-    Return data in this EXACT JSON structure (all fields mandatory):
+    🎯 MANDATORY JSON STRUCTURE:
+    Your response MUST follow this EXACT structure with ALL fields present:
     {
         "invoiceNumber": "Invoice/Bill number as shown on document",
         "dateIssued": "Invoice/Bill date in YYYY-MM-DD format",
@@ -474,12 +481,12 @@ def analyze_bill_with_ai(bill, organization):
         "from": {
             "name": "Vendor/Company name (who is sending the bill)",
             "address": "Complete vendor address",
-            "gst_number": "Vendor's GST number - SEARCH THOROUGHLY or empty string if not found"
+            "gst_number": "Vendor's GST number or empty string if not found - FIELD IS MANDATORY"
         },
         "to": {
             "name": "Customer name (who is receiving the bill)", 
             "address": "Complete customer address",
-            "gst_number": "Customer's GST number - SEARCH THOROUGHLY or empty string if not found"
+            "gst_number": "Customer's GST number or empty string if not found - FIELD IS MANDATORY"
         },
         "items": [
             {
@@ -493,6 +500,8 @@ def analyze_bill_with_ai(bill, organization):
         "cgst": 0,
         "sgst": 0
     }
+    
+    ⚠️ FINAL REMINDER: The "gst_number" field MUST be present in both "from" and "to" sections, even if empty.
     """
 
     # AI processing request with enhanced settings
@@ -570,12 +579,44 @@ def analyze_bill_with_ai(bill, organization):
                         "invoiceNumber": "PARSE_ERROR",
                         "dateIssued": "",
                         "dueDate": "",
-                        "from": {"name": "VENDOR_PARSE_ERROR"},
-                        "to": {"name": ""},
+                        "from": {"name": "VENDOR_PARSE_ERROR", "address": "", "gst_number": ""},
+                        "to": {"name": "", "address": "", "gst_number": ""},
                         "totalAmount": 0,
                         "lineItems": []
                     }
                 }
+
+        # 🚨 POST-PROCESSING: Ensure gst_number fields exist in the JSON response
+        if json_data and isinstance(json_data, dict):
+            logger.warning("🔍 Validating and fixing GST number fields...")
+            
+            # Handle the case where json_data contains a fallback_data structure
+            if 'fallback_data' in json_data:
+                data_to_fix = json_data['fallback_data']
+            else:
+                data_to_fix = json_data
+            
+            # Ensure 'from' section has gst_number
+            if 'from' in data_to_fix and isinstance(data_to_fix['from'], dict):
+                if 'gst_number' not in data_to_fix['from']:
+                    logger.warning("⚠️ Adding missing gst_number field to 'from' section")
+                    data_to_fix['from']['gst_number'] = ""
+            else:
+                logger.warning("⚠️ Missing or invalid 'from' section, adding default with gst_number")
+                data_to_fix['from'] = {'name': '', 'address': '', 'gst_number': ''}
+            
+            # Ensure 'to' section has gst_number
+            if 'to' in data_to_fix and isinstance(data_to_fix['to'], dict):
+                if 'gst_number' not in data_to_fix['to']:
+                    logger.warning("⚠️ Adding missing gst_number field to 'to' section")
+                    data_to_fix['to']['gst_number'] = ""
+            else:
+                logger.warning("⚠️ Missing or invalid 'to' section, adding default with gst_number")
+                data_to_fix['to'] = {'name': '', 'address': '', 'gst_number': ''}
+            
+            logger.info(f"✅ GST number validation complete - From GST: '{data_to_fix['from'].get('gst_number', 'MISSING')}', To GST: '{data_to_fix['to'].get('gst_number', 'MISSING')}'")
+        else:
+            logger.error("❌ Invalid or missing JSON data structure")
 
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse JSON from OpenAI response: {str(e)}")

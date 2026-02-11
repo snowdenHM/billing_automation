@@ -610,6 +610,28 @@ def process_expense_analysis_data(bill, json_data, organization):
         else:
             gst_type = TallyExpenseAnalyzedBill.GSTType.UNKNOWN
 
+        # 🏛️ FIND APPROPRIATE TAX LEDGERS FOR BILL-LEVEL GST VALUES
+        logger.info(f"[NEW EXPENSE] Finding bill-level tax ledgers - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
+        
+        igst_tax_ledger = None
+        cgst_tax_ledger = None
+        sgst_tax_ledger = None
+        
+        if igst_val > 0:
+            igst_tax_ledger = find_appropriate_expense_tax_ledger(organization, float(igst_val), 0, 0, ledger_type='bill')
+        
+        if cgst_val > 0:
+            cgst_tax_ledger = find_appropriate_expense_tax_ledger(organization, 0, float(cgst_val), 0, ledger_type='bill')
+        
+        if sgst_val > 0:
+            sgst_tax_ledger = find_appropriate_expense_tax_ledger(organization, 0, 0, float(sgst_val), ledger_type='bill')
+
+        logger.info(f"[NEW EXPENSE] Tax ledgers found - IGST: {igst_tax_ledger}, CGST: {cgst_tax_ledger}, SGST: {sgst_tax_ledger}")
+
+        # 🏛️ FIND EXPENSE COA LEDGER FOR LINE ITEMS
+        expense_coa_ledger = find_appropriate_expense_tax_ledger(organization, 0, 0, 0, ledger_type='expense_coa')
+        logger.info(f"[NEW EXPENSE] Expense COA ledger: {expense_coa_ledger}")
+
         # Create analyzed bill
         with transaction.atomic():
             analyzed_bill = TallyExpenseAnalyzedBill.objects.create(
@@ -623,12 +645,15 @@ def process_expense_analysis_data(bill, json_data, organization):
                 sgst=sgst_val,
                 tds=tds_val,
                 total=total_val,
+                igst_taxes=igst_tax_ledger,
+                cgst_taxes=cgst_tax_ledger,
+                sgst_taxes=sgst_tax_ledger,
                 note="AI Analyzed Expense Bill",
                 organization=organization,
                 gst_type=gst_type
             )
 
-            # Create analyzed products (expense items)
+            # Create analyzed products (expense items) with auto-assigned COA ledger
             product_instances = []
             expenses = relevant_data.get('expenses', [])
             if isinstance(expenses, list):
@@ -637,9 +662,9 @@ def process_expense_analysis_data(bill, json_data, organization):
                         product = TallyExpenseAnalyzedProduct(
                             expense_bill=analyzed_bill,
                             item_details=str(expense.get('description', '')),
+                            chart_of_accounts=expense_coa_ledger,
                             amount=_to_decimal(expense.get('amount', 0)),
                             debit_or_credit=TallyExpenseAnalyzedProduct.DebitCredit.DEBIT,
-                            # Expenses are typically debits
                             organization=organization
                         )
                         product_instances.append(product)
@@ -649,41 +674,32 @@ def process_expense_analysis_data(bill, json_data, organization):
                 logger.info(f"Successfully created {len(product_instances)} products for expense bill {analyzed_bill.id}")
 
                 # ✅ CREATE CONSOLIDATED PRODUCTS FOR LAYOUT SWITCHING SUPPORT
-                # Both individual and consolidated products should be available during analysis
-                # This enables users to switch between individual and consolidated layouts
                 if len(product_instances) > 1:
                     try:
-                        # Calculate consolidated data
                         total_amount = sum(p.amount for p in product_instances)
                         items_count = len(product_instances)
 
-                        # Create detailed breakdown
                         item_details = []
                         for product in product_instances:
                             item_details.append(f'• {product.item_details} (Amount: ₹{product.amount})')
 
                         consolidated_details = f'Consolidated {items_count} expense entries:\n' + '\n'.join(item_details)
 
-                        # Create consolidated product
                         consolidated_product = TallyExpenseConsolidatedProduct.objects.create(
                             expense_bill=analyzed_bill,
                             organization=organization,
                             item_details=consolidated_details,
+                            chart_of_accounts=expense_coa_ledger,
                             amount=total_amount,
-                            debit_or_credit=TallyExpenseConsolidatedProduct.DebitCredit.DEBIT,  # Default for expenses
+                            debit_or_credit=TallyExpenseConsolidatedProduct.DebitCredit.DEBIT,
                             original_entries_count=items_count,
-                            consolidation_notes=f'Auto-created during analysis for layout switching support - {items_count} expense entries'
+                            consolidation_notes=f'Auto-created during analysis for {items_count} expense entries'
                         )
 
-                        logger.info(f"✅ Created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount}) - LAYOUT SWITCHING SUPPORT")
-                        logger.info(f"✅ Both individual and consolidated layouts now available")
-
-                        # Keep consolidate flag as false by default (users start with individual view)
-                        # But consolidated products are available for switching
+                        logger.info(f"✅ Created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
 
                     except Exception as e:
                         logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")
-                        # Don't raise - consolidated product creation failure shouldn't break the main flow
                 else:
                     logger.info(f"ℹ️ Skipping consolidated expense product creation - bill has only {len(product_instances)} item(s)")
 
@@ -775,6 +791,137 @@ def parse_expense_bill_date(date_string):
 
     logger.warning(f"Could not parse date: {date_string}")
     return None
+
+
+def find_appropriate_expense_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_type='bill'):
+    """
+    Find appropriate tax ledger for expense bills based on GST values and organization configuration.
+    
+    Args:
+        organization: Organization instance
+        igst_val: IGST amount
+        cgst_val: CGST amount
+        sgst_val: SGST amount
+        ledger_type: 'bill' for bill-level GST ledgers (Duties & Taxes), 
+                     'expense_coa' for expense line-item COA ledgers (Indirect Expenses etc.)
+    """
+    try:
+        logger.info(f"[Expense] Searching for tax ledger (type: {ledger_type}) - IGST:{igst_val}, CGST:{cgst_val}, SGST:{sgst_val}")
+        
+        tally_config = TallyConfig.objects.filter(organization=organization).first()
+        
+        if not tally_config:
+            logger.warning(f"[Expense] No TallyConfig found for organization {organization.id}")
+            return None
+        
+        # For expense line-item COA ledgers, use chart_of_accounts_expense_parents
+        if ledger_type == 'expense_coa':
+            expense_coa_parents = tally_config.chart_of_accounts_expense_parents.all()
+            logger.info(f"[Expense] COA Search: Found {expense_coa_parents.count()} Expense COA parent ledgers")
+            
+            if not expense_coa_parents.exists():
+                logger.warning(f"[Expense] No Expense COA parents configured in TallyConfig")
+                return None
+            
+            expense_coa_ledgers = Ledger.objects.filter(
+                organization=organization,
+                parent__in=expense_coa_parents
+            )
+            
+            logger.info(f"[Expense] Found {expense_coa_ledgers.count()} COA ledgers under Expense COA parents")
+            
+            # Priority 1: Look for "Expense" in name
+            expense_ledger = expense_coa_ledgers.filter(name__icontains='expense').first()
+            if expense_ledger:
+                logger.info(f"[Expense] Auto-assigned COA ledger: {expense_ledger.name}")
+                return expense_ledger
+            
+            # Priority 2: Look for "Indirect" in name
+            indirect_ledger = expense_coa_ledgers.filter(name__icontains='indirect').first()
+            if indirect_ledger:
+                logger.info(f"[Expense] Auto-assigned COA ledger: {indirect_ledger.name}")
+                return indirect_ledger
+            
+            # Fallback: Use first available ledger
+            fallback_ledger = expense_coa_ledgers.first()
+            if fallback_ledger:
+                logger.info(f"[Expense] Auto-assigned fallback COA ledger: {fallback_ledger.name}")
+                return fallback_ledger
+            
+            logger.warning(f"[Expense] No COA ledgers found under Expense COA parents")
+            return None
+        
+        # For bill-level GST ledgers (same parents as vendor - Duties & Taxes)
+        if igst_val > 0 and cgst_val == 0 and sgst_val == 0:
+            # Pure IGST case
+            igst_parent_ledgers = tally_config.igst_parents.all()
+            if igst_parent_ledgers.exists():
+                tax_ledgers = Ledger.objects.filter(
+                    organization=organization,
+                    parent__in=igst_parent_ledgers
+                )
+                igst_ledger = tax_ledgers.filter(name__icontains='igst').first()
+                if igst_ledger:
+                    logger.info(f"[Expense] Auto-assigned IGST tax ledger: {igst_ledger.name}")
+                    return igst_ledger
+                tax_ledger = tax_ledgers.first()
+                if tax_ledger:
+                    logger.info(f"[Expense] Auto-assigned IGST fallback: {tax_ledger.name}")
+                    return tax_ledger
+        
+        elif cgst_val > 0 and igst_val == 0 and sgst_val == 0:
+            # Pure CGST case
+            cgst_parent_ledgers = tally_config.cgst_parents.all()
+            if cgst_parent_ledgers.exists():
+                tax_ledgers = Ledger.objects.filter(
+                    organization=organization,
+                    parent__in=cgst_parent_ledgers
+                )
+                cgst_ledger = tax_ledgers.filter(name__icontains='cgst').first()
+                if cgst_ledger:
+                    logger.info(f"[Expense] Auto-assigned CGST tax ledger: {cgst_ledger.name}")
+                    return cgst_ledger
+                tax_ledger = tax_ledgers.first()
+                if tax_ledger:
+                    logger.info(f"[Expense] Auto-assigned CGST fallback: {tax_ledger.name}")
+                    return tax_ledger
+        
+        elif sgst_val > 0 and igst_val == 0 and cgst_val == 0:
+            # Pure SGST case
+            sgst_parent_ledgers = tally_config.sgst_parents.all()
+            if sgst_parent_ledgers.exists():
+                tax_ledgers = Ledger.objects.filter(
+                    organization=organization,
+                    parent__in=sgst_parent_ledgers
+                )
+                sgst_ledger = tax_ledgers.filter(name__icontains='sgst').first()
+                if sgst_ledger:
+                    logger.info(f"[Expense] Auto-assigned SGST tax ledger: {sgst_ledger.name}")
+                    return sgst_ledger
+                tax_ledger = tax_ledgers.first()
+                if tax_ledger:
+                    logger.info(f"[Expense] Auto-assigned SGST fallback: {tax_ledger.name}")
+                    return tax_ledger
+        
+        # Final fallback
+        all_tax_parents = list(tally_config.igst_parents.all()) + list(tally_config.cgst_parents.all()) + list(tally_config.sgst_parents.all())
+        if all_tax_parents:
+            seen = set()
+            unique_tax_parents = [p for p in all_tax_parents if p.id not in seen and not seen.add(p.id)]
+            tax_ledger = Ledger.objects.filter(
+                organization=organization,
+                parent__in=unique_tax_parents
+            ).first()
+            if tax_ledger:
+                logger.info(f"[Expense] Auto-assigned ultimate fallback: {tax_ledger.name}")
+                return tax_ledger
+        
+        logger.warning(f"[Expense] No tax ledger found for IGST:{igst_val}, CGST:{cgst_val}, SGST:{sgst_val}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"[Expense] Error finding tax ledger: {str(e)}")
+        return None
 
 
 def find_expense_vendor_ledger(company_name, organization):
@@ -1348,6 +1495,28 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
         else:
             gst_type = TallyExpenseAnalyzedBill.GSTType.UNKNOWN
 
+        # 🏛️ FIND APPROPRIATE TAX LEDGERS FOR BILL-LEVEL GST VALUES
+        logger.info(f"[EXISTING EXPENSE] Finding bill-level tax ledgers - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
+        
+        igst_tax_ledger = None
+        cgst_tax_ledger = None
+        sgst_tax_ledger = None
+        
+        if igst_val > 0:
+            igst_tax_ledger = find_appropriate_expense_tax_ledger(organization, float(igst_val), 0, 0, ledger_type='bill')
+        
+        if cgst_val > 0:
+            cgst_tax_ledger = find_appropriate_expense_tax_ledger(organization, 0, float(cgst_val), 0, ledger_type='bill')
+        
+        if sgst_val > 0:
+            sgst_tax_ledger = find_appropriate_expense_tax_ledger(organization, 0, 0, float(sgst_val), ledger_type='bill')
+
+        logger.info(f"[EXISTING EXPENSE] Tax ledgers found - IGST: {igst_tax_ledger}, CGST: {cgst_tax_ledger}, SGST: {sgst_tax_ledger}")
+
+        # 🏛️ FIND EXPENSE COA LEDGER FOR LINE ITEMS
+        expense_coa_ledger = find_appropriate_expense_tax_ledger(organization, 0, 0, 0, ledger_type='expense_coa')
+        logger.info(f"[EXISTING EXPENSE] Expense COA ledger: {expense_coa_ledger}")
+
         # Create analyzed bill without Django validation
         with transaction.atomic():
             analyzed_bill = TallyExpenseAnalyzedBill(
@@ -1360,6 +1529,9 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
                 sgst=sgst_val,
                 tds=tds_val,
                 total=total_val,
+                igst_taxes=igst_tax_ledger,
+                cgst_taxes=cgst_tax_ledger,
+                sgst_taxes=sgst_tax_ledger,
                 note="AI Analyzed Expense Bill (Existing Data)",
                 organization=organization,
                 gst_type=gst_type
@@ -1368,7 +1540,7 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
             # Save without calling clean() to skip validation
             analyzed_bill.save(skip_validation=True)
 
-            # Create analyzed products (expense items)
+            # Create analyzed products (expense items) with auto-assigned COA ledger
             created_products = []
             expenses = existing_data.get('expenses', [])
 
@@ -1380,6 +1552,7 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
                         product = TallyExpenseAnalyzedProduct(
                             expense_bill=analyzed_bill,
                             item_details=str(expense.get('description', '')),
+                            chart_of_accounts=expense_coa_ledger,
                             amount=amount,
                             debit_or_credit=TallyExpenseAnalyzedProduct.DebitCredit.DEBIT,
                             organization=organization
@@ -1392,36 +1565,32 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
                 logger.info(f"Successfully created {len(created_products)} expense products for bill {analyzed_bill.id}")
 
                 # ✅ CREATE CONSOLIDATED PRODUCTS FOR LAYOUT SWITCHING SUPPORT
-                # Both individual and consolidated products should be available during analysis
                 if len(created_products) > 1:
                     try:
-                        # Calculate consolidated data
                         total_amount = sum(p.amount for p in created_products)
                         items_count = len(created_products)
 
-                        # Create detailed breakdown
                         item_details = []
                         for product in created_products:
                             item_details.append(f'• {product.item_details} (Amount: ₹{product.amount})')
 
                         consolidated_details = f'Consolidated {items_count} expense entries:\n' + '\n'.join(item_details)
 
-                        # Create consolidated product
                         consolidated_product = TallyExpenseConsolidatedProduct.objects.create(
                             expense_bill=analyzed_bill,
                             organization=organization,
                             item_details=consolidated_details,
+                            chart_of_accounts=expense_coa_ledger,
                             amount=total_amount,
-                            debit_or_credit=TallyExpenseConsolidatedProduct.DebitCredit.DEBIT,  # Default for expenses
+                            debit_or_credit=TallyExpenseConsolidatedProduct.DebitCredit.DEBIT,
                             original_entries_count=items_count,
-                            consolidation_notes=f'Auto-created during existing data processing for layout switching support - {items_count} expense entries'
+                            consolidation_notes=f'Auto-created during existing data processing for {items_count} expense entries'
                         )
 
-                        logger.info(f"✅ Created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount}) - LAYOUT SWITCHING SUPPORT")
+                        logger.info(f"✅ Created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
 
                     except Exception as e:
                         logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")
-                        # Don't raise - consolidated product creation failure shouldn't break the main flow
                 else:
                     logger.info(f"ℹ️ Bill has only {len(created_products)} item - no consolidation needed")
 
