@@ -878,8 +878,13 @@ def process_expense_analysis_data(bill, json_data, organization):
             # Update bill status and save ownership validation results
             bill.status = TallyExpenseBill.BillStatus.ANALYSED
             bill.process = True
-            # Note: ownership_validation_status and ownership_validation_message are set above
-            bill.save(update_fields=['status', 'process', 'ownership_validation_status', 'ownership_validation_message'])
+            # Update fields list based on what exists in the model
+            fields_to_update = ['status', 'process']
+            if hasattr(bill, 'ownership_validation_status'):
+                fields_to_update.append('ownership_validation_status')
+            if hasattr(bill, 'ownership_validation_message'):
+                fields_to_update.append('ownership_validation_message')
+            bill.save(update_fields=fields_to_update)
 
             # Check for duplicates
             duplicate_result = check_duplicate_tally_expense_bill(bill, organization)
@@ -899,11 +904,11 @@ def process_expense_analysis_data(bill, json_data, organization):
         fields_to_update = ['status']
         
         # Only update ownership validation fields if they exist in the model
-        if hasattr(bill.__class__, 'ownership_validation_status'):
+        if hasattr(bill, 'ownership_validation_status'):
             bill.ownership_validation_status = 'error'
             fields_to_update.append('ownership_validation_status')
         
-        if hasattr(bill.__class__, 'ownership_validation_message'):
+        if hasattr(bill, 'ownership_validation_message'):
             bill.ownership_validation_message = f"Processing failed: {str(e)}"
             fields_to_update.append('ownership_validation_message')
         
