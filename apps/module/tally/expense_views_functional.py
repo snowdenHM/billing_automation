@@ -569,58 +569,116 @@ def analyze_expense_bill_with_ai(bill, organization):
 def validate_expense_bill_ownership(json_data, organization):
     """Validate if the expense bill belongs to the organization by matching organization details with 'to' field (customer)"""
     try:
-        logger.info(f"Validating expense bill ownership for organization {organization.id}")
-        
-        # Extract customer (to) information from the bill
-        customer_info = safe_get_nested(json_data, ['to'], {})
-        customer_name = safe_get_nested(customer_info, ['name'], '').strip()
-        customer_address = safe_get_nested(customer_info, ['address'], '').strip()
-        
-        if not customer_name and not customer_address:
-            logger.info("No customer information found in bill - skipping ownership validation")
-            return True  # Allow bills without clear customer info for expenses
-        
-        # Get organization name for comparison
-        org_name = organization.name if hasattr(organization, 'name') else ''
-        
-        # Basic name matching
-        if customer_name and org_name:
-            # Normalize names for comparison
-            normalized_customer = normalize_company_name(customer_name)
-            normalized_org = normalize_company_name(org_name)
+        # Extract customer info ("to" field - who received the bill)
+        to_data = json_data.get('to', {})
+        if isinstance(to_data, dict):
+            customer_name = to_data.get('name', '').strip()
+            customer_gst = to_data.get('gst_number', '').strip()
+            customer_address = to_data.get('address', '').strip()
+        else:
+            customer_name = ''
+            customer_gst = ''
+            customer_address = ''
+
+        # If GST number is missing from extraction, try to find it in the address
+        if not customer_gst and customer_address:
+            import re
+            # Common GST number patterns in Indian invoices
+            gst_patterns = [
+                r'GST\s*NO\.?\s*:?\s*([A-Z0-9]{15})',
+                r'GSTIN/UIN\s*:?\s*([A-Z0-9]{15})',
+                r'GSTIN\s*:?\s*([A-Z0-9]{15})',
+                r'Tax\s*ID\s*:?\s*([A-Z0-9]{15})',
+                r'UIN\s*:?\s*([A-Z0-9]{15})',
+                r'Registration\s*No\.?\s*:?\s*([A-Z0-9]{15})',
+                r'\b([A-Z0-9]{15})\b'  # Generic 15-character alphanumeric pattern
+            ]
             
-            # Calculate similarity
-            similarity = _calculate_tally_expense_string_similarity(normalized_customer, normalized_org)
-            
-            logger.info(f"Customer-Organization name similarity: {similarity:.3f} ('{normalized_customer}' vs '{normalized_org}')")
-            
-            # If similarity is high, this bill belongs to the organization
-            if similarity >= 0.7:
-                logger.info(f"High similarity match - bill belongs to organization")
-                return True
-            elif similarity >= 0.3:
-                logger.warning(f"Medium similarity - potential ownership match")
-                return True  # Be lenient for expense bills
-            else:
-                logger.info(f"Low similarity - bill may not belong to organization")
-                return True  # Still allow for expense bills as they can be more varied
+            for pattern in gst_patterns:
+                match = re.search(pattern, customer_address.upper(), re.IGNORECASE)
+                if match:
+                    customer_gst = match.group(1).strip()
+                    logger.info(f"Found GST number in customer address: {customer_gst}")
+                    break
+
+        logger.info(f"Validating expense bill ownership - Customer: {customer_name}, Customer GST: {customer_gst}")
+        logger.info(f"Organization: {getattr(organization, 'name', 'Unknown')}, Org GST: {getattr(organization, 'gst_number', 'None')}")
+
+        # MAIN LOGIC: Check if organization IS the customer (to field)
+        # This means the bill was issued TO the organization BY someone else (vendor)
         
-        logger.info("Ownership validation completed - allowing bill")
-        return True
+        # Priority 1: GST number match (most reliable)
+        if customer_gst and hasattr(organization, 'gst_number') and organization.gst_number:
+            org_gst_clean = organization.gst_number.replace(' ', '').replace('-', '').upper()
+            customer_gst_clean = customer_gst.replace(' ', '').replace('-', '').upper()
+            
+            if org_gst_clean == customer_gst_clean:
+                return True, f"✅ Organization GST match: {customer_gst} - This expense bill was issued TO your organization"
+            
+            # Also check partial match (in case of truncated GST numbers)
+            if len(customer_gst_clean) >= 10 and len(org_gst_clean) >= 10:
+                if org_gst_clean[:10] == customer_gst_clean[:10]:
+                    return True, f"✅ Partial organization GST match: {customer_gst} - This expense bill was issued TO your organization"
+
+        # Priority 2: Organization name match with customer name
+        if customer_name and hasattr(organization, 'name') and organization.name:
+            org_name_clean = organization.name.lower().strip()
+            customer_name_clean = customer_name.lower().strip()
+            
+            # Exact match
+            if org_name_clean == customer_name_clean:
+                return True, f"✅ Exact organization name match: {customer_name} - This expense bill was issued TO your organization"
+            
+            # Partial match (if organization name is contained in customer name or vice versa)
+            if org_name_clean in customer_name_clean or customer_name_clean in org_name_clean:
+                return True, f"✅ Partial organization name match: {customer_name} - This expense bill was issued TO your organization"
+            
+            # Check for common abbreviations and variations
+            org_words = set(org_name_clean.replace(',', '').replace('.', '').split())
+            customer_words = set(customer_name_clean.replace(',', '').replace('.', '').split())
+            
+            # Remove common words that don't add meaning
+            common_stopwords = {'ltd', 'limited', 'pvt', 'private', 'llp', 'co', 'company', 'inc', 'incorporated'}
+            org_words = org_words - common_stopwords
+            customer_words = customer_words - common_stopwords
+            
+            if len(org_words) > 0 and len(customer_words) > 0:
+                # Calculate word overlap
+                overlap = len(org_words.intersection(customer_words))
+                total_words = len(org_words.union(customer_words))
+                similarity = overlap / total_words if total_words > 0 else 0
+                
+                if similarity >= 0.6:  # 60% word overlap for organization match
+                    return True, f"✅ Similar organization name match ({int(similarity*100)}% similarity): {customer_name} - This expense bill was issued TO your organization"
+        
+        # If no customer info found at all, be lenient for expense bills (could be receipts without clear customer info)
+        if not customer_name and not customer_gst:
+            logger.info("No customer information found in expense bill - allowing as it might be a general receipt")
+            return True, "✅ No customer information found - assuming this is a valid expense receipt for your organization"
+        
+        # If no match found, this bill was NOT issued to the organization
+        debug_info = f"❌ Expense bill NOT issued to your organization. Customer: '{customer_name}' (GST: '{customer_gst}') ≠ Your Org: '{getattr(organization, 'name', 'Unknown')}' (GST: '{getattr(organization, 'gst_number', 'None')}')"
+        return False, debug_info
         
     except Exception as e:
-        logger.error(f"Error in expense bill ownership validation: {str(e)}")
-        return True  # Default to allowing the bill if validation fails
+        logger.error(f"Error validating expense bill ownership: {str(e)}")
+        return False, f"Validation error: {str(e)}"
 
 
 def process_expense_analysis_data(bill, json_data, organization):
     """Process AI extracted data and create analyzed expense bill with automatic vendor and tax selection"""
     try:
         # 🛡️ STEP 1: Validate bill ownership
-        ownership_valid = validate_expense_bill_ownership(json_data, organization)
+        ownership_valid, ownership_message = validate_expense_bill_ownership(json_data, organization)
         if not ownership_valid:
-            logger.warning(f"Expense bill {bill.id} may not belong to organization {organization.id}")
-            # Continue processing but log the warning
+            logger.warning(f"⚠️ Expense bill {bill.id} ownership validation failed: {ownership_message}")
+            # Continue processing but flag the bill for review
+            bill.ownership_validation_status = 'failed'
+            bill.ownership_validation_message = ownership_message
+        else:
+            logger.info(f"✅ Expense bill {bill.id} ownership validation passed: {ownership_message}")
+            bill.ownership_validation_status = 'passed'
+            bill.ownership_validation_message = ownership_message
             
         logger.info(f"Processing expense analysis data for bill {bill.id} with automation")
             
@@ -812,10 +870,11 @@ def process_expense_analysis_data(bill, json_data, organization):
                 else:
                     logger.info(f"ℹ️ Skipping consolidated expense product creation - bill has only {len(product_instances)} item(s)")
 
-            # Update bill status
+            # Update bill status and save ownership validation results
             bill.status = TallyExpenseBill.BillStatus.ANALYSED
             bill.process = True
-            bill.save(update_fields=['status', 'process'])
+            # Note: ownership_validation_status and ownership_validation_message are set above
+            bill.save(update_fields=['status', 'process', 'ownership_validation_status', 'ownership_validation_message'])
 
             # Check for duplicates
             duplicate_result = check_duplicate_tally_expense_bill(bill, organization)
@@ -830,9 +889,12 @@ def process_expense_analysis_data(bill, json_data, organization):
 
     except Exception as e:
         logger.error(f"❌ Error processing expense analysis data: {str(e)} - Data: {json_data}")
-        # Update bill status to failed if there's an error
+        # Update bill status to failed and save ownership validation if there's an error
         bill.status = TallyExpenseBill.BillStatus.FAILED
-        bill.save(update_fields=['status'])
+        if not hasattr(bill, 'ownership_validation_status'):
+            bill.ownership_validation_status = 'error'
+            bill.ownership_validation_message = f"Processing failed: {str(e)}"
+        bill.save(update_fields=['status', 'ownership_validation_status', 'ownership_validation_message'])
         raise Exception(f"Error processing expense analysis data: {str(e)}")
 
 
