@@ -325,7 +325,7 @@ def get_organization_from_request(request, org_id=None):
 
 
 def analyze_expense_bill_with_ai(bill, organization):
-    """Analyze expense bill using OpenAI API with enhanced PDF handling and error recovery"""
+    """Analyze expense bill using OpenAI API with enhanced PDF handling and error recovery - with GST number extraction"""
     if not client:
         raise Exception("OpenAI client not configured")
 
@@ -440,20 +440,43 @@ def analyze_expense_bill_with_ai(bill, organization):
         logger.error(f"Error reading/processing expense bill file: {str(e)}")
         raise Exception(f"Error reading expense bill file: {str(e)}")
 
-    # Enhanced prompt for Indian expense bills/receipts
+    # Enhanced prompt for Indian expense bills/receipts with GST number extraction
     enhanced_prompt = """
     Analyze this expense bill/receipt image carefully and extract ALL visible information in JSON format.
     This appears to be an Indian business expense bill/receipt. Look for:
     
+    🚨 CRITICAL MANDATORY REQUIREMENT 🚨
+    YOU MUST ALWAYS INCLUDE "gst_number" field in BOTH "from" and "to" sections.
+    DO NOT OMIT THIS FIELD UNDER ANY CIRCUMSTANCES.
+    If no GST number is found, use empty string "" but the field MUST be present.
+    
+    🔍 AGGRESSIVE GST NUMBER SEARCH:
+    GST numbers in Indian invoices appear in various formats and locations:
+    - GSTIN: 22AAAAA0000A1Z5 (15-character alphanumeric code)
+    - GST No: 06AADCK7940H1ZG
+    - Tax ID: 27AABCU9603R1ZX
+    - Registration No: followed by GST number
+    - Often embedded in addresses like "GST NO. 123456... State Name: Delhi, Code: 07"
+    - May appear as "GSTIN/UIN :" followed by the number
+    - Sometimes shown in headers, footers, or separate tax information sections
+    - Can be in vendor section (from) and customer section (to)
+    - Look for patterns like "06AADCK7940H1ZG", "22AAAAA0000A1Z5"
+    - Check every line of text for 15-character alphanumeric codes
+    - May be prefixed with "GST:", "GSTIN:", "Tax ID:", "REG NO:"
+    
+    📋 EXTRACTION REQUIREMENTS:
     1. Bill/Receipt Number (may be labeled as Bill No, Receipt No, Invoice No, etc.)
     2. Dates (Bill Date, Receipt Date, Transaction Date - convert to YYYY-MM-DD format)
-    3. Vendor/Company details in "from" section (name and address)
-    4. Customer details in "to" section (name and address) 
+    3. Vendor/Company details in "from" section (name, address, and GST number)
+    4. Customer details in "to" section (name, address, and GST number) 
     5. Expense items with descriptions, categories, and amounts
     6. Tax amounts (IGST, CGST, SGST, TDS - look for percentages and amounts)
     7. Total amount (may include terms like "Total", "Grand Total", "Amount Payable", "Net Amount")
+    8. GST NUMBERS - ABSOLUTELY MANDATORY FIELD
     
-    IMPORTANT RULES:
+    ⚠️ CRITICAL RULES:
+    - THE "gst_number" FIELD IS MANDATORY IN BOTH "from" AND "to" OBJECTS
+    - If you cannot find a GST number, use empty string "" but DO NOT omit the field
     - Extract EXACT text as it appears on the document
     - For numbers, remove currency symbols (₹, Rs.) and commas
     - If any field is not visible or unclear, use empty string "" or 0 for numbers
@@ -461,18 +484,23 @@ def analyze_expense_bill_with_ai(bill, organization):
     - Pay special attention to tax sections which may be in tables or separate areas
     - For expense categories, try to identify the type of expense (travel, food, supplies, etc.)
     - Look for TDS (Tax Deducted at Source) amounts which may be shown as deductions
+    - GST numbers are typically 15-character codes - extract the full code
+    - Check every text line for potential GST numbers
     
-    Return data in this JSON structure:
+    🎯 MANDATORY JSON STRUCTURE:
+    Your response MUST follow this EXACT structure with ALL fields present:
     {
         "billNumber": "Bill/Receipt number as shown on document",
         "dateIssued": "Bill/Receipt date in YYYY-MM-DD format",
         "from": {
             "name": "Vendor/Company name",
-            "address": "Vendor address"
+            "address": "Vendor address",
+            "gst_number": "Vendor's GST number or empty string if not found - FIELD IS MANDATORY"
         },
         "to": {
             "name": "Customer name", 
-            "address": "Customer address"
+            "address": "Customer address",
+            "gst_number": "Customer's GST number or empty string if not found - FIELD IS MANDATORY"
         },
         "expenses": [
             {
@@ -487,6 +515,8 @@ def analyze_expense_bill_with_ai(bill, organization):
         "sgst": 0,
         "tds": 0
     }
+    
+    ⚠️ FINAL REMINDER: The "gst_number" field MUST be present in both "from" and "to" sections, even if empty.
     """
 
     # AI processing request with enhanced settings
@@ -536,9 +566,64 @@ def analyze_expense_bill_with_ai(bill, organization):
     return process_expense_analysis_data(bill, json_data, organization)
 
 
-def process_expense_analysis_data(bill, json_data, organization):
-    """Process AI extracted data and create analyzed expense bill"""
+def validate_expense_bill_ownership(json_data, organization):
+    """Validate if the expense bill belongs to the organization by matching organization details with 'to' field (customer)"""
     try:
+        logger.info(f"Validating expense bill ownership for organization {organization.id}")
+        
+        # Extract customer (to) information from the bill
+        customer_info = safe_get_nested(json_data, ['to'], {})
+        customer_name = safe_get_nested(customer_info, ['name'], '').strip()
+        customer_address = safe_get_nested(customer_info, ['address'], '').strip()
+        
+        if not customer_name and not customer_address:
+            logger.info("No customer information found in bill - skipping ownership validation")
+            return True  # Allow bills without clear customer info for expenses
+        
+        # Get organization name for comparison
+        org_name = organization.name if hasattr(organization, 'name') else ''
+        
+        # Basic name matching
+        if customer_name and org_name:
+            # Normalize names for comparison
+            normalized_customer = normalize_company_name(customer_name)
+            normalized_org = normalize_company_name(org_name)
+            
+            # Calculate similarity
+            similarity = _calculate_tally_expense_string_similarity(normalized_customer, normalized_org)
+            
+            logger.info(f"Customer-Organization name similarity: {similarity:.3f} ('{normalized_customer}' vs '{normalized_org}')")
+            
+            # If similarity is high, this bill belongs to the organization
+            if similarity >= 0.7:
+                logger.info(f"High similarity match - bill belongs to organization")
+                return True
+            elif similarity >= 0.3:
+                logger.warning(f"Medium similarity - potential ownership match")
+                return True  # Be lenient for expense bills
+            else:
+                logger.info(f"Low similarity - bill may not belong to organization")
+                return True  # Still allow for expense bills as they can be more varied
+        
+        logger.info("Ownership validation completed - allowing bill")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error in expense bill ownership validation: {str(e)}")
+        return True  # Default to allowing the bill if validation fails
+
+
+def process_expense_analysis_data(bill, json_data, organization):
+    """Process AI extracted data and create analyzed expense bill with automatic vendor and tax selection"""
+    try:
+        # 🛡️ STEP 1: Validate bill ownership
+        ownership_valid = validate_expense_bill_ownership(json_data, organization)
+        if not ownership_valid:
+            logger.warning(f"Expense bill {bill.id} may not belong to organization {organization.id}")
+            # Continue processing but log the warning
+            
+        logger.info(f"Processing expense analysis data for bill {bill.id} with automation")
+            
         # Log the raw JSON data for debugging
         logger.info(f"Raw JSON data from OpenAI: {json.dumps(json_data, indent=2)}")
 
@@ -560,6 +645,7 @@ def process_expense_analysis_data(bill, json_data, organization):
                         "igst": safe_get_nested(json_data, ["properties", "igst", "const"], 0),
                         "cgst": safe_get_nested(json_data, ["properties", "cgst", "const"], 0),
                         "sgst": safe_get_nested(json_data, ["properties", "sgst", "const"], 0),
+                        "tds": safe_get_nested(json_data, ["properties", "tds", "const"], 0),
                     }
                 except Exception as e:
                     logger.warning(f"Failed to extract from properties format, trying direct access: {e}")
@@ -579,12 +665,14 @@ def process_expense_analysis_data(bill, json_data, organization):
         bill_number = str(relevant_data.get('billNumber', '')).strip()
         date_issued = str(relevant_data.get('dateIssued', ''))
 
-        # Handle 'from' field safely
+        # Handle 'from' field safely with GST number extraction
         from_data = relevant_data.get('from', {})
         if isinstance(from_data, dict):
-            company_name = str(from_data.get('name', '')).strip().lower()
+            company_name = str(from_data.get('name', '')).strip()
+            vendor_gst_number = str(from_data.get('gst_number', '')).strip()
         else:
-            company_name = str(from_data).strip().lower()
+            company_name = str(from_data).strip()
+            vendor_gst_number = ''
 
         # Parse date with multiple format support
         bill_date = parse_expense_bill_date(date_issued)
@@ -593,16 +681,27 @@ def process_expense_analysis_data(bill, json_data, organization):
         due_date_issued = str(relevant_data.get('dueDate', ''))
         due_date = parse_expense_bill_date(due_date_issued) if due_date_issued else None
 
-        # Find vendor ledger
-        vendor = find_expense_vendor_ledger(company_name, organization)
-
-        # Determine GST type with safe conversion and proper decimal rounding
+        # Extract financial information with GST details
         igst_val = _to_decimal(relevant_data.get('igst', 0))
         cgst_val = _to_decimal(relevant_data.get('cgst', 0))  
         sgst_val = _to_decimal(relevant_data.get('sgst', 0))
         tds_val = _to_decimal(relevant_data.get('tds', 0))
         total_val = _to_decimal(relevant_data.get('total', 0))
 
+        logger.info(f"Extracted expense data - Bill: {bill_number}, Vendor: {company_name}, GST: {vendor_gst_number}, Total: ₹{total_val}, IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
+        
+        # 🎯 STEP 2: Automatic vendor ledger finding with GST matching  
+        vendor_ledger = find_expense_vendor_ledger(
+            company_name=company_name, 
+            organization=organization, 
+            vendor_gst=vendor_gst_number
+        )
+        if vendor_ledger:
+            logger.info(f"✅ Automatically selected vendor ledger: {vendor_ledger.name} (ID: {vendor_ledger.id})")
+        else:
+            logger.warning(f"⚠️ No vendor ledger found for: {company_name} (GST: {vendor_gst_number})")
+
+        # Determine GST type with safe conversion and proper decimal rounding
         if igst_val > 0:
             gst_type = TallyExpenseAnalyzedBill.GSTType.IGST
         elif cgst_val > 0 or sgst_val > 0:
@@ -610,33 +709,30 @@ def process_expense_analysis_data(bill, json_data, organization):
         else:
             gst_type = TallyExpenseAnalyzedBill.GSTType.UNKNOWN
 
-        # 🏛️ FIND APPROPRIATE TAX LEDGERS FOR BILL-LEVEL GST VALUES
+        # 🎯 STEP 3: Automatic tax ledger finding for bill-level GST values
         logger.info(f"[NEW EXPENSE] Finding bill-level tax ledgers - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
         
-        igst_tax_ledger = None
-        cgst_tax_ledger = None
-        sgst_tax_ledger = None
-        
-        if igst_val > 0:
-            igst_tax_ledger = find_appropriate_expense_tax_ledger(organization, float(igst_val), 0, 0, ledger_type='bill')
-        
-        if cgst_val > 0:
-            cgst_tax_ledger = find_appropriate_expense_tax_ledger(organization, 0, float(cgst_val), 0, ledger_type='bill')
-        
-        if sgst_val > 0:
-            sgst_tax_ledger = find_appropriate_expense_tax_ledger(organization, 0, 0, float(sgst_val), ledger_type='bill')
+        igst_tax_ledger = find_appropriate_expense_tax_ledger(organization, float(igst_val), 0, 0, ledger_type='bill') if igst_val > 0 else None
+        cgst_tax_ledger = find_appropriate_expense_tax_ledger(organization, 0, float(cgst_val), 0, ledger_type='bill') if cgst_val > 0 else None
+        sgst_tax_ledger = find_appropriate_expense_tax_ledger(organization, 0, 0, float(sgst_val), ledger_type='bill') if sgst_val > 0 else None
 
-        logger.info(f"[NEW EXPENSE] Tax ledgers found - IGST: {igst_tax_ledger}, CGST: {cgst_tax_ledger}, SGST: {sgst_tax_ledger}")
+        if igst_tax_ledger:
+            logger.info(f"✅ Automatically selected IGST ledger: {igst_tax_ledger.name} (Amount: ₹{igst_val})")
+        if cgst_tax_ledger:
+            logger.info(f"✅ Automatically selected CGST ledger: {cgst_tax_ledger.name} (Amount: ₹{cgst_val})")
+        if sgst_tax_ledger:
+            logger.info(f"✅ Automatically selected SGST ledger: {sgst_tax_ledger.name} (Amount: ₹{sgst_val})")
 
-        # 🏛️ FIND EXPENSE COA LEDGER FOR LINE ITEMS
+        # 🎯 STEP 4: Find expense COA ledger for line items
         expense_coa_ledger = find_appropriate_expense_tax_ledger(organization, 0, 0, 0, ledger_type='expense_coa')
-        logger.info(f"[NEW EXPENSE] Expense COA ledger: {expense_coa_ledger}")
+        if expense_coa_ledger:
+            logger.info(f"✅ Automatically selected Expense COA ledger: {expense_coa_ledger.name}")
 
-        # Create analyzed bill
+        # Create analyzed bill with automatic selections
         with transaction.atomic():
             analyzed_bill = TallyExpenseAnalyzedBill.objects.create(
                 selected_bill=bill,
-                vendor=vendor,
+                vendor=vendor_ledger,  # Automatically selected
                 bill_no=bill_number,
                 bill_date=bill_date,
                 due_date=due_date,
@@ -645,13 +741,19 @@ def process_expense_analysis_data(bill, json_data, organization):
                 sgst=sgst_val,
                 tds=tds_val,
                 total=total_val,
-                igst_taxes=igst_tax_ledger,
-                cgst_taxes=cgst_tax_ledger,
-                sgst_taxes=sgst_tax_ledger,
-                note="AI Analyzed Expense Bill",
+                igst_taxes=igst_tax_ledger,  # Automatically selected
+                cgst_taxes=cgst_tax_ledger,  # Automatically selected
+                sgst_taxes=sgst_tax_ledger,  # Automatically selected
+                note="AI Analyzed Expense Bill with Automation",
                 organization=organization,
-                gst_type=gst_type
+                gst_type=gst_type,
+                igst_debit_or_credit='debit',
+                cgst_debit_or_credit='debit', 
+                sgst_debit_or_credit='debit',
+                tds_debit_or_credit='credit'
             )
+
+            logger.info(f"✅ Created TallyExpenseAnalyzedBill with ID: {analyzed_bill.id} (with automatic vendor/tax selections)")
 
             # Create analyzed products (expense items) with auto-assigned COA ledger
             product_instances = []
@@ -659,19 +761,26 @@ def process_expense_analysis_data(bill, json_data, organization):
             if isinstance(expenses, list):
                 for expense in expenses:
                     if isinstance(expense, dict):
+                        # Find specific COA ledger for this expense category
+                        expense_category = str(expense.get('category', 'General Expenses'))
+                        item_coa_ledger = find_or_create_expense_chart_of_accounts_ledger(expense_category, organization)
+                        
                         product = TallyExpenseAnalyzedProduct(
                             expense_bill=analyzed_bill,
                             item_details=str(expense.get('description', '')),
-                            chart_of_accounts=expense_coa_ledger,
+                            chart_of_accounts=item_coa_ledger or expense_coa_ledger,  # Use specific or fallback COA ledger
                             amount=_to_decimal(expense.get('amount', 0)),
                             debit_or_credit=TallyExpenseAnalyzedProduct.DebitCredit.DEBIT,
                             organization=organization
                         )
                         product_instances.append(product)
+                        
+                        if item_coa_ledger:
+                            logger.info(f"✅ Automatically selected COA ledger for '{expense_category}': {item_coa_ledger.name}")
 
             if product_instances:
                 TallyExpenseAnalyzedProduct.objects.bulk_create(product_instances)
-                logger.info(f"Successfully created {len(product_instances)} products for expense bill {analyzed_bill.id}")
+                logger.info(f"Successfully created {len(product_instances)} expense products with automatic COA assignments")
 
                 # ✅ CREATE CONSOLIDATED PRODUCTS FOR LAYOUT SWITCHING SUPPORT
                 if len(product_instances) > 1:
@@ -689,11 +798,11 @@ def process_expense_analysis_data(bill, json_data, organization):
                             expense_bill=analyzed_bill,
                             organization=organization,
                             item_details=consolidated_details,
-                            chart_of_accounts=expense_coa_ledger,
+                            chart_of_accounts=expense_coa_ledger,  # Use fallback COA ledger for consolidated
                             amount=total_amount,
                             debit_or_credit=TallyExpenseConsolidatedProduct.DebitCredit.DEBIT,
                             original_entries_count=items_count,
-                            consolidation_notes=f'Auto-created during analysis for {items_count} expense entries'
+                            consolidation_notes=f'Auto-created with automation for {items_count} expense entries'
                         )
 
                         logger.info(f"✅ Created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
@@ -708,10 +817,22 @@ def process_expense_analysis_data(bill, json_data, organization):
             bill.process = True
             bill.save(update_fields=['status', 'process'])
 
+            # Check for duplicates
+            duplicate_result = check_duplicate_tally_expense_bill(bill, organization)
+            if duplicate_result:
+                is_duplicate, duplicate_bills, similarity_score = duplicate_result
+                if is_duplicate:
+                    logger.warning(f"⚠️ Potential duplicate expense bill detected with similarity {similarity_score}")
+                    
+            logger.info(f"✅ Successfully processed expense analysis for bill {bill.id} with full automation")
+
             return analyzed_bill
 
     except Exception as e:
-        logger.error(f"Error processing expense analysis data: {str(e)} - Data: {json_data}")
+        logger.error(f"❌ Error processing expense analysis data: {str(e)} - Data: {json_data}")
+        # Update bill status to failed if there's an error
+        bill.status = TallyExpenseBill.BillStatus.FAILED
+        bill.save(update_fields=['status'])
         raise Exception(f"Error processing expense analysis data: {str(e)}")
 
 
@@ -767,6 +888,83 @@ def safe_int_convert(value):
         return int(float(value))  # Convert through float to handle decimal strings
     except (ValueError, TypeError):
         return 0
+
+
+def calculate_gst_rate(amount, igst_val, cgst_val, sgst_val):
+    """Calculate GST rate percentage based on tax amounts and item amount"""
+    try:
+        if amount <= 0:
+            return 0.0
+        
+        total_gst = igst_val + cgst_val + sgst_val
+        if total_gst <= 0:
+            return 0.0
+        
+        # Calculate rate as percentage
+        rate = (total_gst / amount) * 100
+        
+        # Round to nearest standard GST rate
+        if rate <= 2.5:
+            return 0.0
+        elif rate <= 7.5:
+            return 5.0
+        elif rate <= 15.0:
+            return 12.0
+        elif rate <= 22.0:
+            return 18.0
+        elif rate <= 32.0:
+            return 28.0
+        else:
+            return round(rate, 2)  # Return calculated rate if it's non-standard
+        
+    except Exception as e:
+        logger.error(f"Error calculating GST rate: {str(e)}")
+        return 0.0
+
+
+def normalize_company_name(name):
+    """Normalize company name for better matching"""
+    if not name:
+        return ""
+    
+    # Remove common suffixes and year indicators
+    normalized = name.strip()
+    
+    # Remove year patterns like (2025-26), (FY25), etc.
+    import re
+    normalized = re.sub(r'\s*\([0-9]{4}[-/][0-9]{2,4}\)', '', normalized)
+    normalized = re.sub(r'\s*\(FY[0-9]{2}\)', '', normalized)
+    
+    # Normalize punctuation and spacing
+    normalized = re.sub(r'[&]+', '&', normalized)  # Multiple & to single
+    normalized = re.sub(r'\s*&\s*', ' & ', normalized)  # Normalize & spacing
+    normalized = re.sub(r'\.+', '.', normalized)  # Multiple dots to single
+    normalized = re.sub(r'\s*\.\s*', '. ', normalized)  # Normalize dot spacing
+    
+    # Handle common business suffixes
+    business_suffixes = [
+        'Mfg.Co.', 'Mfg Co', 'Manufacturing Co', 'Mfg. Co.', 'Mfg.Co',
+        'Pvt Ltd', 'Pvt. Ltd.', 'Private Limited', 'Ltd', 'Ltd.',
+        'LLC', 'LLP', 'Co.', 'Co', 'Company', 'Corp', 'Corporation',
+        'Inc', 'Inc.', 'Industries', 'Enterprises', 'Trading', 'Traders'
+    ]
+    
+    # Normalize business suffixes  
+    for suffix in business_suffixes:
+        pattern = r'\b' + re.escape(suffix) + r'\b'
+        if re.search(pattern, normalized, re.IGNORECASE):
+            # Replace with standardized version
+            if 'Mfg' in suffix:
+                normalized = re.sub(pattern, 'Mfg. Co.', normalized, flags=re.IGNORECASE)
+            elif 'Pvt' in suffix and 'Ltd' in suffix:
+                normalized = re.sub(pattern, 'Pvt. Ltd.', normalized, flags=re.IGNORECASE)
+            elif suffix in ['Ltd', 'Ltd.']:
+                normalized = re.sub(pattern, 'Ltd.', normalized, flags=re.IGNORECASE)
+    
+    # Clean up multiple spaces
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    
+    return normalized
 
 
 def parse_expense_bill_date(date_string):
@@ -924,10 +1122,32 @@ def find_appropriate_expense_tax_ledger(organization, igst_val, cgst_val, sgst_v
         return None
 
 
-def find_expense_vendor_ledger(company_name, organization):
-    """Find matching vendor ledger using TallyConfig"""
+def find_expense_vendor_ledger(company_name, organization, vendor_gst=None):
+    """Find matching vendor ledger using GST number first, then enhanced name matching with TallyConfig"""
     try:
-        # Get TallyConfig for the organization
+        logger.info(f"Finding vendor ledger for: {company_name} in organization: {organization.id} with GST: {vendor_gst}")
+        
+        # Skip if no company name provided
+        if not company_name:
+            logger.warning("No company name provided for vendor ledger matching")
+            return None
+
+        # 🎯 PRIORITY 1: Try GST number match first (most reliable)
+        if vendor_gst and vendor_gst.strip():
+            gst_ledgers = Ledger.objects.filter(
+                organization=organization,
+                gst_in__iexact=vendor_gst.strip(),
+                parent_ledger__name="Sundry Creditors"
+            )
+            
+            if gst_ledgers.exists():
+                ledger = gst_ledgers.first()
+                logger.info(f"Found GST-based vendor ledger match: {ledger.name} (GST: {ledger.gst_in}) - ID: {ledger.id}")
+                return ledger
+            else:
+                logger.info(f"No GST-based match found for GST: {vendor_gst}")
+        
+        # 🎯 PRIORITY 2: Get TallyConfig for organization
         tally_config = TallyConfig.objects.filter(organization=organization).first()
 
         if not tally_config:
@@ -955,15 +1175,55 @@ def find_expense_vendor_ledger(company_name, organization):
                 organization=organization
             )
 
-        # Find matching vendor (case-insensitive exact match first)
-        vendor = vendor_list.filter(name__iexact=company_name).first()
-        if not vendor:
+        # Clean up company name for better matching
+        normalized_name = normalize_company_name(company_name)
+        
+        # 🎯 PRIORITY 3: Exact name match
+        vendor = vendor_list.filter(name__iexact=normalized_name).first()
+        if vendor:
+            logger.info(f"Found exact vendor ledger match: {vendor.name} (ID: {vendor.id})")
+            return vendor
+            
+        # 🎯 PRIORITY 4: Enhanced similarity matching using TallyConfig
+        try:
+            enhancement_factor = float(tally_config.tally_vendor_match_enhancement or 1.0) if tally_config else 1.0
+            threshold = float(tally_config.tally_vendor_match_threshold or 0.8) if tally_config else 0.8
+            threshold *= enhancement_factor
+        except (ValueError, AttributeError):
+            enhancement_factor = 1.0
+            threshold = 0.8
+            
+        logger.info(f"Using vendor matching threshold: {threshold} (enhancement factor: {enhancement_factor})")
+        
+        best_match = None
+        best_similarity = 0.0
+        
+        for ledger in vendor_list:
+            # Calculate similarity between normalized names
+            ledger_normalized = normalize_company_name(ledger.name)
+            similarity = _calculate_tally_expense_string_similarity(normalized_name, ledger_normalized)
+            
+            logger.debug(f"Similarity between '{normalized_name}' and '{ledger_normalized}': {similarity:.3f}")
+            
+            if similarity > best_similarity and similarity >= threshold:
+                best_match = ledger
+                best_similarity = similarity
+        
+        if best_match:
+            logger.info(f"Found similarity-based vendor ledger match: {best_match.name} (similarity: {best_similarity:.3f}) - ID: {best_match.id}")
+            return best_match
+        else:
+            # 🎯 PRIORITY 5: Fallback to contains match if similarity fails
             vendor = vendor_list.filter(name__icontains=company_name).first()
-
-        return vendor
-
+            if vendor:
+                logger.info(f"Found contains-based vendor ledger match: {vendor.name} (ID: {vendor.id})")
+                return vendor
+            
+            logger.info(f"No vendor ledger match found for '{company_name}' (best similarity: {best_similarity:.3f}, threshold: {threshold:.3f})")
+            return None
+        
     except Exception as e:
-        logger.error(f"Error finding expense vendor ledger: {str(e)}")
+        logger.error(f"Error in find_expense_vendor_ledger: {str(e)}")
         return None
 
 
