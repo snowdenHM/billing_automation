@@ -672,13 +672,18 @@ def process_expense_analysis_data(bill, json_data, organization):
         ownership_valid, ownership_message = validate_expense_bill_ownership(json_data, organization)
         if not ownership_valid:
             logger.warning(f"⚠️ Expense bill {bill.id} ownership validation failed: {ownership_message}")
-            # Continue processing but flag the bill for review
-            bill.ownership_validation_status = 'failed'
-            bill.ownership_validation_message = ownership_message
+            # Store ownership validation results only if fields exist
+            if hasattr(bill.__class__, 'ownership_validation_status'):
+                bill.ownership_validation_status = 'failed'
+            if hasattr(bill.__class__, 'ownership_validation_message'):
+                bill.ownership_validation_message = ownership_message
         else:
             logger.info(f"✅ Expense bill {bill.id} ownership validation passed: {ownership_message}")
-            bill.ownership_validation_status = 'passed'
-            bill.ownership_validation_message = ownership_message
+            # Store ownership validation results only if fields exist
+            if hasattr(bill.__class__, 'ownership_validation_status'):
+                bill.ownership_validation_status = 'passed'
+            if hasattr(bill.__class__, 'ownership_validation_message'):
+                bill.ownership_validation_message = ownership_message
             
         logger.info(f"Processing expense analysis data for bill {bill.id} with automation")
             
@@ -889,12 +894,20 @@ def process_expense_analysis_data(bill, json_data, organization):
 
     except Exception as e:
         logger.error(f"❌ Error processing expense analysis data: {str(e)} - Data: {json_data}")
-        # Update bill status to failed and save ownership validation if there's an error
+        # Update bill status to failed
         bill.status = TallyExpenseBill.BillStatus.FAILED
-        if not hasattr(bill, 'ownership_validation_status'):
+        fields_to_update = ['status']
+        
+        # Only update ownership validation fields if they exist in the model
+        if hasattr(bill.__class__, 'ownership_validation_status'):
             bill.ownership_validation_status = 'error'
+            fields_to_update.append('ownership_validation_status')
+        
+        if hasattr(bill.__class__, 'ownership_validation_message'):
             bill.ownership_validation_message = f"Processing failed: {str(e)}"
-        bill.save(update_fields=['status', 'ownership_validation_status', 'ownership_validation_message'])
+            fields_to_update.append('ownership_validation_message')
+        
+        bill.save(update_fields=fields_to_update)
         raise Exception(f"Error processing expense analysis data: {str(e)}")
 
 
@@ -1198,8 +1211,7 @@ def find_expense_vendor_ledger(company_name, organization, vendor_gst=None):
         if vendor_gst and vendor_gst.strip():
             gst_ledgers = Ledger.objects.filter(
                 organization=organization,
-                gst_in__iexact=vendor_gst.strip(),
-                parent_ledger__name="Sundry Creditors"
+                gst_in__iexact=vendor_gst.strip()
             )
             
             if gst_ledgers.exists():
@@ -1213,23 +1225,18 @@ def find_expense_vendor_ledger(company_name, organization, vendor_gst=None):
         tally_config = TallyConfig.objects.filter(organization=organization).first()
 
         if not tally_config:
-            # Fallback to default "Sundry Creditors" if no config exists
-            parent_ledger = ParentLedger.objects.filter(
-                parent="Sundry Creditors",
+            logger.warning(f"No TallyConfig found for organization: {organization.id}")
+            # Use all ledgers as fallback when no TallyConfig exists  
+            vendor_list = Ledger.objects.filter(
                 organization=organization
-            ).first()
-
-            if parent_ledger:
-                vendor_list = Ledger.objects.filter(
-                    parent=parent_ledger,
-                    organization=organization
-                )
-            else:
-                return None
+            ).exclude(
+                parent__isnull=True
+            )
         else:
-            # Use configured vendor parent ledgers
+            # Use configured vendor parent ledgers from TallyConfig
             vendor_parent_ledgers = tally_config.vendor_parents.all()
             if not vendor_parent_ledgers.exists():
+                logger.warning(f"No vendor parent ledgers configured in TallyConfig for organization: {organization.id}")
                 return None
 
             vendor_list = Ledger.objects.filter(
@@ -2328,34 +2335,16 @@ def find_or_create_expense_vendor_ledger(vendor_name, vendor_data, organization)
         tally_config = TallyConfig.objects.filter(organization=organization).first()
 
         if not tally_config:
-            # Fallback: try to find or create default parent ledger
-            try:
-                parent_ledger = ParentLedger.objects.get(
-                    parent="Sundry Creditors",
-                    organization=organization
-                )
-            except ParentLedger.DoesNotExist:
-                parent_ledger = ParentLedger.objects.create(
-                    parent="Sundry Creditors",
-                    organization=organization
-                )
+            logger.error(f"No TallyConfig found for organization: {organization.id}. Cannot create vendor ledger without proper configuration.")
+            return None
         else:
-            # Use first configured vendor parent ledger or create default
+            # Use configured vendor parent ledgers from TallyConfig
             vendor_parent_ledgers = tally_config.vendor_parents.all()
             if vendor_parent_ledgers.exists():
                 parent_ledger = vendor_parent_ledgers.first()
             else:
-                # Create default if no vendor parents configured
-                try:
-                    parent_ledger = ParentLedger.objects.get(
-                        parent="Sundry Creditors",
-                        organization=organization
-                    )
-                except ParentLedger.DoesNotExist:
-                    parent_ledger = ParentLedger.objects.create(
-                        parent="Sundry Creditors",
-                        organization=organization
-                    )
+                logger.error(f"No vendor parent ledgers configured in TallyConfig for organization: {organization.id}")
+                return None
 
         # Create new vendor ledger
         vendor = Ledger.objects.create(
