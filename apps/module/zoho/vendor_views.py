@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
@@ -29,6 +30,8 @@ from apps.organizations.models import Organization
 from .models import (
     ZohoCredentials,
     ZohoVendor,
+    ZohoChartOfAccount,
+    ZohoTaxes,
     VendorBill,
     VendorZohoBill,
     VendorZohoProduct,
@@ -165,60 +168,6 @@ def create_consolidated_vendor_product(zoho_bill, organization):
     return consolidated_product
 
 
-def get_line_items_for_sync(zoho_bill):
-    """
-    Get line items for sync based on consolidate flag
-    Returns either individual products or consolidated product data
-    """
-    if zoho_bill.consolidate:
-        # Use consolidated product if exists
-        try:
-            consolidated = zoho_bill.consolidated_products.first()  # Get first consolidated product
-            return [{
-                "name": consolidated.consolidated_item_name,
-                "description": consolidated.consolidated_item_details[:500],  # Zoho API limit
-                "rate": str(consolidated.consolidated_rate),
-                "quantity": str(consolidated.total_quantity),
-                "unit": "unit",
-                "item_total": str(consolidated.consolidated_amount),
-                "tax_id": consolidated.taxes.taxId if consolidated.taxes else None,
-                "account_id": consolidated.chart_of_accounts.accountId if consolidated.chart_of_accounts else None,
-                "is_consolidated": True,
-                "original_items_count": consolidated.original_items_count
-            }]
-        except VendorZohoConsolidatedProduct.DoesNotExist:
-            # Fallback to creating consolidated data on the fly
-            products = zoho_bill.products.all()
-            if products.exists():
-                total_amount = sum(float(p.amount or 0) for p in products)  # Fixed: use 'amount' not 'total'
-                return [{
-                    "name": f"Multiple items consolidated ({products.count()} products)",
-                    "description": f"Consolidated from {products.count()} individual items",
-                    "rate": str(total_amount),
-                    "quantity": "1",
-                    "unit": "unit",
-                    "item_total": str(total_amount),
-                    "is_consolidated": True,
-                    "original_items_count": products.count()
-                }]
-    else:
-        # Return individual products as usual
-        line_items = []
-        for product in zoho_bill.products.all():
-            line_items.append({
-                "name": product.item_name,  # Fixed: use 'item_name' not 'name'
-                "description": product.item_name,  # Fixed: use 'item_name' not 'name'
-                "rate": str(product.rate),
-                "quantity": str(product.quantity),
-                "unit": "unit",
-                "item_total": str(product.amount),  # Fixed: use 'amount' not 'total'
-                "tax_id": product.taxes.taxId if product.taxes else None,
-                "account_id": product.chart_of_accounts.accountId if product.chart_of_accounts else None,
-                "is_consolidated": False
-            })
-        return line_items
-
-
 # ============================================================================
 # Helper Functions
 # ============================================================================
@@ -317,6 +266,58 @@ def check_duplicate_bill(bill, organization):
     return is_duplicate, duplicate_bills, max_similarity
 
 
+def update_vendor_bill_duplicate_metadata(bill, duplicate_bills, max_similarity):
+    """Persist duplicate detection metadata on the bill for downstream consumers."""
+    try:
+        duplicate_bills = duplicate_bills or []
+        max_similarity = max_similarity or 0.0
+
+        formatted_matches = []
+        for duplicate in duplicate_bills[:5]:  # Limit stored matches to prevent bloating JSON
+            duplicate_bill = duplicate.get('bill')
+            file_url = None
+            try:
+                if duplicate_bill and duplicate_bill.file:
+                    file_url = duplicate_bill.file.url
+            except Exception:
+                file_url = None
+
+            formatted_matches.append({
+                'bill_id': str(getattr(duplicate_bill, 'id', '')),
+                'bill_name': getattr(duplicate_bill, 'billmunshiName', ''),
+                'status': getattr(duplicate_bill, 'status', ''),
+                'invoice_number': duplicate.get('invoice_number'),
+                'vendor_name': duplicate.get('vendor_name'),
+                'total': duplicate.get('total'),
+                'date': duplicate.get('date'),
+                'similarity_score': round(float(duplicate.get('similarity_score', 0.0)), 2),
+                'match_reasons': duplicate.get('match_reasons', []),
+                'file_url': file_url,
+            })
+
+        bill.is_duplicate = bool(formatted_matches)
+        bill.duplicate_score = round(float(max_similarity), 2)
+        bill.duplicate_matched_bills = formatted_matches
+        bill.duplicate_description = (
+            f"Found {len(formatted_matches)} potential duplicate(s) with {bill.duplicate_score:.1f}% similarity"
+            if formatted_matches
+            else "No duplicates found during latest analysis"
+        )
+
+        bill.save(update_fields=[
+            'is_duplicate',
+            'duplicate_score',
+            'duplicate_description',
+            'duplicate_matched_bills',
+        ])
+    except Exception as metadata_error:
+        logger.exception(
+            "Failed to update duplicate metadata for VendorBill %s: %s",
+            getattr(bill, 'id', 'unknown'),
+            metadata_error,
+        )
+
+
 def _calculate_string_similarity(str1, str2):
     """Calculate similarity between two strings using enhanced logic for Indian business names."""
     if not str1 or not str2:
@@ -407,6 +408,356 @@ def get_organization_from_request(request, **kwargs):
         if membership:
             return membership.organization
     return None
+
+
+def validate_zoho_bill_ownership(json_data, organization):
+    """Validate if the vendor bill belongs to the organization by matching organization details with 'to' field (customer)"""
+    try:        
+        logger.info(f"Starting ownership validation for organization {organization.id}")
+        
+        # Extract customer (to) details from analyzed data
+        to_data = json_data.get('to', {})
+        customer_name = to_data.get('name', '').strip()
+        customer_gst = to_data.get('gst_number', '').strip()
+        customer_address = to_data.get('address', '').strip()
+        
+        # Extract vendor (from) details for context
+        from_data = json_data.get('from', {})
+        vendor_name = from_data.get('name', '').strip()
+        vendor_gst = from_data.get('gst_number', '').strip()
+        
+        logger.info(f"Customer details - Name: {customer_name}, GST: {customer_gst}")
+        logger.info(f"Vendor details - Name: {vendor_name}, GST: {vendor_gst}")
+        
+        # Check if we have minimal customer information
+        if not customer_name and not customer_gst:
+            logger.warning("No customer information found in bill")
+            return {
+                'is_valid': False,
+                'confidence': 0,
+                'reason': 'No customer information found in bill',
+                'validation_details': {
+                    'customer_name_match': False,
+                    'customer_gst_match': False,
+                    'organization_name': organization.name if hasattr(organization, 'name') else 'N/A',
+                    'extracted_customer_name': customer_name,
+                    'extracted_customer_gst': customer_gst
+                }
+            }
+        
+        # Initialize validation results
+        name_match_score = 0
+        gst_match_score = 0
+        total_confidence = 0
+        validation_reasons = []
+        
+        # Check organization GST match by looking at existing vendors in organization
+        if customer_gst and len(customer_gst.strip()) >= 10:
+            # Check if this GST belongs to any vendor in our organization (which would be wrong)
+            existing_vendor_with_gst = ZohoVendor.objects.filter(
+                organization=organization,
+                gstNo=customer_gst.strip()
+            ).first()
+            
+            if existing_vendor_with_gst:
+                gst_match_score = 20  # Low score - this looks like vendor GST, not customer
+                validation_reasons.append(f"GST belongs to existing vendor: {existing_vendor_with_gst.companyName}")
+            else:
+                gst_match_score = 75  # Good score - valid format and not a vendor GST
+                validation_reasons.append(f"Valid customer GST format: {customer_gst}")
+        
+        # Check organization name match - customer should match organization name
+        if customer_name and hasattr(organization, 'name') and organization.name:
+            customer_normalized = normalize_company_name_enhanced(customer_name)
+            org_normalized = normalize_company_name_enhanced(organization.name)
+            
+            name_similarity = _calculate_string_similarity(customer_normalized, org_normalized)
+            
+            if name_similarity >= 0.9:
+                name_match_score = 85
+                validation_reasons.append(f"Strong name match: {customer_name} ≈ {organization.name}")
+            elif name_similarity >= 0.7:
+                name_match_score = 65
+                validation_reasons.append(f"Good name match: {customer_name} ≈ {organization.name}")
+            elif name_similarity >= 0.5:
+                name_match_score = 40
+                validation_reasons.append(f"Partial name match: {customer_name} ≈ {organization.name}")
+        
+        # Calculate total confidence (weighted combination)
+        if gst_match_score > 0 and name_match_score > 0:
+            # Both GST and name match - high confidence
+            total_confidence = int((gst_match_score * 0.7) + (name_match_score * 0.3))
+        elif name_match_score >= 80:
+            # Strong name match - good indicator
+            total_confidence = name_match_score
+        else:
+            # Take the stronger signal
+            total_confidence = max(gst_match_score, name_match_score)
+        
+        # Validation threshold (60% minimum for automatic approval)
+        is_valid = total_confidence >= 60
+        
+        validation_result = {
+            'is_valid': is_valid,
+            'confidence': total_confidence,
+            'reason': '; '.join(validation_reasons) if validation_reasons else 'No matching criteria found',
+            'validation_details': {
+                'customer_name_match': name_match_score > 0,
+                'customer_gst_match': gst_match_score > 0,
+                'name_match_score': name_match_score,
+                'gst_match_score': gst_match_score,
+                'organization_name': organization.name if hasattr(organization, 'name') else 'N/A',
+                'extracted_customer_name': customer_name,
+                'extracted_customer_gst': customer_gst,
+                'extracted_vendor_name': vendor_name,
+                'extracted_vendor_gst': vendor_gst
+            }
+        }
+        
+        logger.info(f"Ownership validation completed: {validation_result}")
+        return validation_result
+        
+    except Exception as e:
+        logger.error(f"Error during ownership validation: {str(e)}")
+        return {
+            'is_valid': False,
+            'confidence': 0,
+            'reason': f'Validation error: {str(e)}',
+            'validation_details': {
+                'error': str(e)
+            }
+        }
+
+
+def find_appropriate_zoho_coa_ledger(organization, item_description, ledger_type='vendor'):
+    """
+    Find appropriate chart of accounts ledger based on item description and organization.
+    Uses organization-filtered ZohoChartOfAccount directly.
+    """
+    try:
+        # Search for COA by name patterns based on item description
+        keywords = item_description.lower().split() if item_description else []
+        
+        # Common account patterns for automatic matching
+        account_patterns = {
+            'purchase': ['purchase', 'buying', 'procurement'],
+            'expense': ['expense', 'cost', 'expenditure'],
+            'office': ['office', 'administrative', 'admin'],
+            'travel': ['travel', 'transport', 'conveyance'],
+            'fuel': ['fuel', 'petrol', 'diesel', 'gas'],
+            'telephone': ['telephone', 'mobile', 'phone', 'communication'],
+            'electricity': ['electricity', 'power', 'energy'],
+            'rent': ['rent', 'rental'],
+            'maintenance': ['maintenance', 'repair', 'service']
+        }
+        
+        # Try to match account based on item description
+        for category, patterns in account_patterns.items():
+            if any(pattern in item_description.lower() for pattern in patterns):
+                coa_ledger = ZohoChartOfAccount.objects.filter(
+                    organization=organization,
+                    accountName__icontains=category
+                ).first()
+                
+                if coa_ledger:
+                    logger.info(f"Found COA by pattern matching - {category}: {coa_ledger.accountName}")
+                    return coa_ledger
+        
+        # Fallback to most commonly used COA for this organization
+        from django.db import models
+        common_coa = VendorZohoProduct.objects.filter(
+            zohoBill__organization=organization,
+            chart_of_accounts__isnull=False
+        ).values('chart_of_accounts').annotate(
+            usage_count=models.Count('chart_of_accounts')
+        ).order_by('-usage_count').first()
+        
+        if common_coa:
+            coa_ledger = ZohoChartOfAccount.objects.get(
+                id=common_coa['chart_of_accounts'],
+                organization=organization
+            )
+            logger.info(f"Using most common COA ledger: {coa_ledger.accountName}")
+            return coa_ledger
+        
+        # Final fallback - first available COA for organization
+        first_coa = ZohoChartOfAccount.objects.filter(
+            organization=organization
+        ).first()
+        
+        if first_coa:
+            logger.info(f"Using first available COA ledger: {first_coa.accountName}")
+            return first_coa
+        
+        logger.warning(f"No appropriate COA ledger found for item: {item_description}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error finding COA ledger: {str(e)}")
+        return None
+
+
+def find_appropriate_zoho_tax_ledger(organization, tax_type, tax_amount):
+    """
+    Find appropriate tax ledger based on tax type using organization-filtered ZohoTaxes.
+    """
+    try:
+        # Search by tax name patterns
+        tax_patterns = {
+            'igst': ['igst', 'integrated gst', 'integrated goods', 'inter state'],
+            'cgst': ['cgst', 'central gst', 'central goods'],
+            'sgst': ['sgst', 'state gst', 'state goods'],
+            'gst': ['gst', 'goods and service'],
+            'vat': ['vat', 'value added']
+        }
+        
+        patterns = tax_patterns.get(tax_type.lower(), [tax_type.lower()])
+        
+        # Try exact match first
+        for pattern in patterns:
+            tax_ledger = ZohoTaxes.objects.filter(
+                organization=organization,
+                taxName__iexact=pattern
+            ).first()
+            
+            if tax_ledger:
+                logger.info(f"Found exact match {tax_type} tax ledger: {tax_ledger.taxName}")
+                return tax_ledger
+        
+        # Try contains match
+        for pattern in patterns:
+            tax_ledger = ZohoTaxes.objects.filter(
+                organization=organization,
+                taxName__icontains=pattern
+            ).first()
+            
+            if tax_ledger:
+                logger.info(f"Found {tax_type} tax ledger by pattern: {tax_ledger.taxName}")
+                return tax_ledger
+        
+        # Fallback to most commonly used tax for this organization
+        from django.db import models
+        common_tax = VendorZohoProduct.objects.filter(
+            zohoBill__organization=organization,
+            taxes__isnull=False
+        ).values('taxes').annotate(
+            usage_count=models.Count('taxes')
+        ).order_by('-usage_count').first()
+        
+        if common_tax:
+            tax_ledger = ZohoTaxes.objects.get(
+                id=common_tax['taxes'],
+                organization=organization
+            )
+            logger.info(f"Using most common tax ledger: {tax_ledger.taxName}")
+            return tax_ledger
+        
+        logger.warning(f"No appropriate {tax_type} tax ledger found")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error finding {tax_type} tax ledger: {str(e)}")
+        return None
+
+
+def find_zoho_vendor_ledger_enhanced(company_name, organization, vendor_gst=None):
+    """
+    Find matching vendor ledger using GST number first, then enhanced name matching directly with ZohoVendor.
+    """
+    try:
+        # Try exact GST match first (most reliable)
+        if vendor_gst and len(vendor_gst.strip()) >= 10:
+            vendor = ZohoVendor.objects.filter(
+                organization=organization,
+                gstNo=vendor_gst.strip()
+            ).first()
+            
+            if vendor:
+                logger.info(f"Found vendor by exact GST match: {vendor.companyName}")
+                return vendor
+        
+        # Enhanced name matching with normalization
+        if company_name:
+            normalized_name = normalize_company_name_enhanced(company_name)
+            
+            # Try exact normalized match
+            vendor = ZohoVendor.objects.filter(
+                organization=organization
+            ).annotate(
+                lower_name=Lower('companyName')
+            ).filter(
+                lower_name=normalized_name.lower()
+            ).first()
+            
+            if vendor:
+                logger.info(f"Found vendor by exact name match: {vendor.companyName}")
+                return vendor
+            
+            # Try contains match for partial names
+            vendor = ZohoVendor.objects.filter(
+                organization=organization,
+                companyName__icontains=normalized_name
+            ).first()
+            
+            if vendor:
+                logger.info(f"Found vendor by partial name match: {vendor.companyName}")
+                return vendor
+            
+            # Try fuzzy matching
+            vendors = ZohoVendor.objects.filter(organization=organization)
+            best_match = None
+            best_score = 0
+            
+            for vendor in vendors:
+                vendor_normalized = normalize_company_name_enhanced(vendor.companyName)
+                similarity = _calculate_string_similarity(normalized_name.lower(), vendor_normalized.lower())
+                
+                if similarity > best_score and similarity > 0.8:  # 80% similarity threshold
+                    best_match = vendor
+                    best_score = similarity
+            
+            if best_match:
+                logger.info(f"Found vendor by fuzzy match ({best_score:.2f}): {best_match.companyName}")
+                return best_match
+        
+        logger.warning(f"No vendor found for: {company_name} (GST: {vendor_gst})")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error finding vendor ledger: {str(e)}")
+        return None
+
+
+def normalize_company_name_enhanced(name):
+    """Enhanced company name normalization for Indian businesses"""
+    if not name:
+        return ""
+    
+    # Remove common patterns
+    normalized = name.strip()
+    
+    # Remove year patterns
+    normalized = re.sub(r'\s*\([0-9]{4}[-/][0-9]{2,4}\)', '', normalized)
+    normalized = re.sub(r'\s*\(FY[0-9]{2}\)', '', normalized)
+    
+    # Normalize business suffixes
+    business_suffixes = [
+        'Private Limited', 'Pvt Ltd', 'Pvt. Ltd.', 'Ltd', 'Ltd.',
+        'Limited Liability Partnership', 'LLP', 'LLC',
+        'Company', 'Co.', 'Co', 'Corporation', 'Corp', 'Inc', 'Inc.',
+        'Enterprises', 'Industries', 'Trading', 'Traders', 'Services',
+        'Technologies', 'Tech', 'Systems', 'Solutions'
+    ]
+    
+    for suffix in business_suffixes:
+        pattern = r'\s*\b' + re.escape(suffix) + r'\b\s*$'
+        normalized = re.sub(pattern, '', normalized, flags=re.IGNORECASE)
+    
+    # Clean up spaces and punctuation
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    normalized = re.sub(r'[^\w\s]', '', normalized)  # Remove special chars
+    
+    return normalized
 
 
 def analyze_vendor_bill_with_openai(file_content, file_extension):
@@ -511,38 +862,65 @@ def analyze_vendor_bill_with_openai(file_content, file_extension):
         else:
             raise ValueError(f"Unsupported file format: {file_extension}")
 
-        # Enhanced prompt for Indian invoices (from successful test script)
+        # Enhanced prompt for Indian invoices with aggressive GST number extraction
         enhanced_prompt = """
-        Analyze this invoice/bill image carefully and extract ALL visible information in JSON format.
-        This appears to be an Indian business invoice/bill. Look for:
+        Analyze this Indian invoice/bill image very carefully and extract ALL visible information in JSON format.
         
+        🚨 CRITICAL MANDATORY REQUIREMENT 🚨
+        YOU MUST ALWAYS INCLUDE "gst_number" field in BOTH "from" and "to" sections.
+        DO NOT OMIT THIS FIELD UNDER ANY CIRCUMSTANCES.
+        If no GST number is found, use empty string "" but the field MUST be present.
+        
+        🔍 AGGRESSIVE GST NUMBER SEARCH:
+        GST numbers in Indian invoices appear in various formats and locations:
+        - GSTIN: 22AAAAA0000A1Z5 (15-character alphanumeric code)
+        - GST No: 06AADCK7940H1ZG
+        - Tax ID: 27AABCU9603R1ZX
+        - Registration No: followed by GST number
+        - Often embedded in addresses like "GST NO. 123456... State Name: Delhi, Code: 07"
+        - May appear as "GSTIN/UIN :" followed by the number
+        - Sometimes shown in headers, footers, or separate tax information sections
+        - Can be in vendor section (from) and customer section (to)
+        - Look for patterns like "06AADCK7940H1ZG", "22AAAAA0000A1Z5"
+        - Check every line of text for 15-character alphanumeric codes
+        - May be prefixed with "GST:", "GSTIN:", "Tax ID:", "REG NO:"
+        
+        📋 EXTRACTION REQUIREMENTS:
         1. Invoice/Bill Number (may be labeled as Invoice No, Bill No, Receipt No, etc.)
         2. Dates (Invoice Date, Bill Date, Due Date - convert to YYYY-MM-DD format)
-        3. Vendor/Company details in "from" section (name and address)
-        4. Customer details in "to" section (name and address) 
+        3. Vendor/Company details in "from" section (name, address, and GST number)
+        4. Customer details in "to" section (name, address, and GST number) 
         5. Line items with descriptions, quantities, and prices
         6. Tax amounts (IGST, CGST, SGST - look for percentages and amounts)
         7. Total amount (may include terms like "Total", "Grand Total", "Amount Payable")
+        8. GST NUMBERS - ABSOLUTELY MANDATORY FIELD
         
-        IMPORTANT RULES:
+        ⚠️ CRITICAL RULES:
+        - THE "gst_number" FIELD IS MANDATORY IN BOTH "from" AND "to" OBJECTS
+        - If you cannot find a GST number, use empty string "" but DO NOT omit the field
         - Extract EXACT text as it appears on the document
         - For numbers, remove currency symbols (₹, Rs.) and commas
         - If any field is not visible or unclear, use empty string "" or 0 for numbers
         - Look carefully at the entire document, including headers, footers, and margins
         - Pay special attention to tax sections which may be in tables or separate areas
+        - GST numbers are typically 15-character codes - extract the full code
+        - Check every text line for potential GST numbers
         
-        Return data in this JSON structure:
+        🎯 MANDATORY JSON STRUCTURE:
+        Your response MUST follow this EXACT structure with ALL fields present:
         {
             "invoiceNumber": "Invoice/Bill number as shown on document",
             "dateIssued": "Invoice/Bill date in YYYY-MM-DD format",
-            "dueDate": "Due date in YYYY-MM-DD format if mentioned",
+            "dueDate": "Due date in YYYY-MM-DD format if mentioned, empty string if not",
             "from": {
-                "name": "Vendor/Company name",
-                "address": "Vendor address"
+                "name": "Vendor/Company name (who is sending the bill)",
+                "address": "Complete vendor address",
+                "gst_number": "Vendor's GST number or empty string if not found - FIELD IS MANDATORY"
             },
             "to": {
-                "name": "Customer name", 
-                "address": "Customer address"
+                "name": "Customer name (who is receiving the bill)", 
+                "address": "Complete customer address",
+                "gst_number": "Customer's GST number or empty string if not found - FIELD IS MANDATORY"
             },
             "items": [
                 {
@@ -556,6 +934,8 @@ def analyze_vendor_bill_with_openai(file_content, file_extension):
             "cgst": 0,
             "sgst": 0
         }
+        
+        ⚠️ FINAL REMINDER: The "gst_number" field MUST be present in both "from" and "to" sections, even if empty.
         """
 
         # Enhanced OpenAI API call with better settings
@@ -591,6 +971,20 @@ def analyze_vendor_bill_with_openai(file_content, file_extension):
 
         json_data = json.loads(response.choices[0].message.content)
         logger.info(f"Successfully parsed analyzed data: {json_data}")
+        
+        # Validate that mandatory GST number fields are present
+        if 'from' not in json_data or 'gst_number' not in json_data['from']:
+            logger.warning("Missing GST number field in 'from' section, adding empty field")
+            if 'from' not in json_data:
+                json_data['from'] = {}
+            json_data['from']['gst_number'] = ""
+        
+        if 'to' not in json_data or 'gst_number' not in json_data['to']:
+            logger.warning("Missing GST number field in 'to' section, adding empty field")
+            if 'to' not in json_data:
+                json_data['to'] = {}
+            json_data['to']['gst_number'] = ""
+        
         return json_data
 
     except Exception as e:
@@ -599,8 +993,8 @@ def analyze_vendor_bill_with_openai(file_content, file_extension):
             "invoiceNumber": "",
             "dateIssued": "",
             "dueDate": "",
-            "from": {"name": "", "address": ""},
-            "to": {"name": "", "address": ""},
+            "from": {"name": "", "address": "", "gst_number": ""},
+            "to": {"name": "", "address": "", "gst_number": ""},
             "items": [],
             "total": 0,
             "igst": 0,
@@ -612,11 +1006,47 @@ def analyze_vendor_bill_with_openai(file_content, file_extension):
 
 def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
     """
-    Create VendorZohoBill and VendorZohoProduct objects from analyzed data.
+    Create VendorZohoBill and VendorZohoProduct objects from analyzed data with ownership validation.
     """
     logger.info(f"Creating Vendor Zoho objects for bill {bill.id} with analyzed data: {analyzed_data}")
 
-    # Process analyzed data based on schema format
+    # Step 1: Validate bill ownership
+    try:
+        ownership_result = validate_zoho_bill_ownership(analyzed_data, organization)
+        logger.info(f"Ownership validation result: {ownership_result}")
+        
+        # Store ownership validation result in bill for later reference
+        if hasattr(bill, 'ownership_validation_status'):
+            bill.ownership_validation_status = 'valid' if ownership_result['is_valid'] else 'invalid'
+        if hasattr(bill, 'ownership_validation_message'):
+            bill.ownership_validation_message = ownership_result['reason']
+        if hasattr(bill, 'ownership_validation_confidence'):
+            bill.ownership_validation_confidence = ownership_result['confidence']
+
+        # Save ownership validation fields if they exist
+        ownership_fields = ['ownership_validation_status', 'ownership_validation_message', 'ownership_validation_confidence']
+        existing_fields = []
+        for field in ownership_fields:
+            if hasattr(bill, field):
+                existing_fields.append(field)
+
+        if hasattr(bill, 'bill_belong_your_org'):
+            bill.bill_belong_your_org = ownership_result.get('is_valid', False)
+            existing_fields.append('bill_belong_your_org')
+
+        if hasattr(bill, 'description'):
+            bill.description = ownership_result.get('reason') or bill.description or ''
+            existing_fields.append('description')
+
+        if existing_fields:
+            # dict.fromkeys preserves order while removing duplicates
+            bill.save(update_fields=list(dict.fromkeys(existing_fields)))
+            
+    except Exception as e:
+        logger.error(f"Ownership validation failed: {str(e)}")
+        # Continue with processing even if ownership validation fails
+    
+    # Step 2: Process analyzed data based on schema format
     if "properties" in analyzed_data:
         relevant_data = {
             "invoiceNumber": analyzed_data["properties"]["invoiceNumber"]["const"],
@@ -1091,6 +1521,10 @@ def vendor_bill_upload_view(request, org_id):
             # Auto-analyze the bill if it's in Draft status
             if bill.status == 'Draft':
                 try:
+                    bill.is_processing = True
+                    bill.processing_error = ""
+                    bill.save(update_fields=['is_processing', 'processing_error'])
+
                     print(f"[VENDOR DEBUG] Auto-analyzing bill: {bill.billmunshiName}")
 
                     # Read and analyze file content
@@ -1112,6 +1546,7 @@ def vendor_bill_upload_view(request, org_id):
 
                     # Check for duplicates after analysis
                     is_duplicate, duplicate_bills, max_similarity = check_duplicate_bill(bill, organization)
+                    update_vendor_bill_duplicate_metadata(bill, duplicate_bills, max_similarity)
 
                     analysis_result = {
                         'bill_id': str(bill.id),
@@ -1150,6 +1585,8 @@ def vendor_bill_upload_view(request, org_id):
 
                 except Exception as analysis_error:
                     logger.error(f"Auto-analysis failed for bill {bill.billmunshiName}: {str(analysis_error)}")
+                    bill.processing_error = str(analysis_error)
+                    bill.save(update_fields=['processing_error'])
                     analysis_results.append({
                         'bill_id': str(bill.id),
                         'bill_name': bill.billmunshiName,
@@ -1157,6 +1594,9 @@ def vendor_bill_upload_view(request, org_id):
                         'error': str(analysis_error),
                         'duplicate_detected': False
                     })
+                finally:
+                    bill.is_processing = False
+                    bill.save(update_fields=['is_processing'])
 
         response_serializer = ZohoVendorBillSerializer(created_bills, many=True, context={'request': request})
 
@@ -1268,6 +1708,106 @@ def vendor_bill_detail_view(request, org_id, bill_id):
 
 # ✅
 @extend_schema(
+    summary="Check Bill Processing Status",
+    description="Check the status of background processing for a vendor bill",
+    responses={200: "Bill processing status information"},
+    tags=['Zoho Vendor Bills']
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def vendor_bill_processing_status(request, org_id, bill_id):
+    """Check processing status of a vendor bill including background job status"""
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({'error': 'Organization not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        bill = VendorBill.objects.get(id=bill_id, organization=organization)
+        
+        # Check if bill is currently being processed
+        is_processing = getattr(bill, 'is_processing', False)
+        processing_error = getattr(bill, 'processing_error', '')
+        
+        # Get duplicate information
+        is_duplicate = getattr(bill, 'is_duplicate', False)
+        duplicate_score = getattr(bill, 'duplicate_score', 0.0)
+        duplicate_description = getattr(bill, 'duplicate_description', '')
+        duplicate_matched_bills = getattr(bill, 'duplicate_matched_bills', [])
+        
+        # Get ownership validation results
+        ownership_status = getattr(bill, 'ownership_validation_status', 'unknown')
+        ownership_message = getattr(bill, 'ownership_validation_message', '')
+        ownership_confidence = getattr(bill, 'ownership_validation_confidence', 0)
+        
+        # Determine overall status
+        if is_processing:
+            overall_status = 'processing'
+        elif processing_error:
+            overall_status = 'error'
+        elif bill.status == 'Draft':
+            if bill.analysed_data:
+                overall_status = 'analyzed_pending_verification'
+            else:
+                overall_status = 'pending_analysis'
+        elif bill.status == 'Analysed':
+            overall_status = 'analyzed_ready_for_verification'
+        elif bill.status == 'Verified':
+            overall_status = 'verified_ready_for_sync'
+        elif bill.status == 'Synced':
+            overall_status = 'synced'
+        else:
+            overall_status = 'unknown'
+        
+        # Get next available action
+        next_action = None
+        if overall_status == 'pending_analysis':
+            next_action = 'analyze'
+        elif overall_status in ['analyzed_pending_verification', 'analyzed_ready_for_verification']:
+            next_action = 'verify'
+        elif overall_status == 'verified_ready_for_sync':
+            next_action = 'sync'
+        
+        response_data = {
+            'bill_id': str(bill.id),
+            'status': bill.status,
+            'overall_status': overall_status,
+            'next_action': next_action,
+            'is_processing': is_processing,
+            'processing_error': processing_error,
+            'has_analysis_data': bool(bill.analysed_data),
+            'duplicate_check': {
+                'is_duplicate': is_duplicate,
+                'similarity_score': duplicate_score,
+                'description': duplicate_description,
+                'matched_bills_count': len(duplicate_matched_bills) if duplicate_matched_bills else 0,
+                'matched_bills': duplicate_matched_bills[:3] if duplicate_matched_bills else []  # Limit to top 3
+            },
+            'ownership_validation': {
+                'status': ownership_status,
+                'message': ownership_message,
+                'confidence': ownership_confidence
+            },
+            'timestamps': {
+                'created_at': bill.created_at.isoformat() if bill.created_at else None,
+                'updated_at': bill.update_at.isoformat() if bill.update_at else None
+            },
+            'file_info': {
+                'file_name': bill.file.name if bill.file else None,
+                'file_type': bill.fileType
+            }
+        }
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+        
+    except VendorBill.DoesNotExist:
+        return Response({'error': 'Vendor bill not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error checking bill processing status: {str(e)}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ✅
+@extend_schema(
     responses=AnalysisResponseSerializer,
     tags=["Zoho Vendor Bills"],
     methods=["POST"]
@@ -1304,55 +1844,69 @@ def vendor_bill_analyze_view(request, org_id, bill_id):
                 'message': str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # Analyze with OpenAI
-        analyzed_data = analyze_vendor_bill_with_openai(file_content, file_extension)
+        bill.is_processing = True
+        bill.processing_error = ""
+        bill.save(update_fields=['is_processing', 'processing_error'])
 
-        # Update bill with analyzed data
-        bill.analysed_data = analyzed_data
-        bill.status = 'Analysed'
-        bill.process = True
-        bill.save()
+        try:
+            # Analyze with OpenAI
+            analyzed_data = analyze_vendor_bill_with_openai(file_content, file_extension)
 
-        # Create Zoho bill and product objects from analysis
-        create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization)
+            # Update bill with analyzed data
+            bill.analysed_data = analyzed_data
+            bill.status = 'Analysed'
+            bill.process = True
+            bill.save()
 
-        # Check for duplicate bills after analysis
-        is_duplicate, duplicate_bills, max_similarity = check_duplicate_bill(bill, organization)
+            # Create Zoho bill and product objects from analysis
+            create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization)
 
-        response_data = {
-            "detail": "Bill analyzed successfully",
-            "analyzed_data": analyzed_data
-        }
+            # Check for duplicate bills after analysis
+            is_duplicate, duplicate_bills, max_similarity = check_duplicate_bill(bill, organization)
+            update_vendor_bill_duplicate_metadata(bill, duplicate_bills, max_similarity)
 
-        # Add duplicate warnings if found
-        if is_duplicate:
-            duplicate_warnings = []
-            for dup in duplicate_bills:
-                duplicate_warnings.append({
-                    "duplicate_bill_id": str(dup['bill'].id),
-                    "duplicate_bill_name": dup['bill'].billmunshiName,
-                    "similarity_score": round(dup['similarity_score'], 2),
-                    "match_reasons": dup['match_reasons'],
-                    "invoice_number": dup['invoice_number'],
-                    "vendor_name": dup['vendor_name'],
-                    "total": dup['total'],
-                    "date": dup['date'],
-                    "status": dup['bill'].status
+            response_data = {
+                "detail": "Bill analyzed successfully",
+                "analyzed_data": analyzed_data
+            }
+
+            # Add duplicate warnings if found
+            if is_duplicate:
+                duplicate_warnings = []
+                for dup in duplicate_bills:
+                    duplicate_warnings.append({
+                        "duplicate_bill_id": str(dup['bill'].id),
+                        "duplicate_bill_name": dup['bill'].billmunshiName,
+                        "similarity_score": round(dup['similarity_score'], 2),
+                        "match_reasons": dup['match_reasons'],
+                        "invoice_number": dup['invoice_number'],
+                        "vendor_name": dup['vendor_name'],
+                        "total": dup['total'],
+                        "date": dup['date'],
+                        "status": dup['bill'].status
+                    })
+
+                response_data.update({
+                    "duplicate_warning": True,
+                    "duplicate_count": len(duplicate_bills),
+                    "max_similarity": round(max_similarity, 2),
+                    "duplicate_bills": duplicate_warnings,
+                    "warning_message": f"⚠️ DUPLICATE DETECTED: Found {len(duplicate_bills)} similar bill(s) in your organization. "
+                                      f"This bill appears to be {round(max_similarity, 1)}% similar to existing bills. "
+                                      "Please review carefully before proceeding to avoid duplicate entries."
                 })
 
-            response_data.update({
-                "duplicate_warning": True,
-                "duplicate_count": len(duplicate_bills),
-                "max_similarity": round(max_similarity, 2),
-                "duplicate_bills": duplicate_warnings,
-                "warning_message": f"⚠️ DUPLICATE DETECTED: Found {len(duplicate_bills)} similar bill(s) in your organization. "
-                                  f"This bill appears to be {round(max_similarity, 1)}% similar to existing bills. "
-                                  "Please review carefully before proceeding to avoid duplicate entries."
-            })
+                logger.warning(f"Duplicate bill detected for {bill.billmunshiName} - {len(duplicate_bills)} similar bills found")
 
-            logger.warning(f"Duplicate bill detected for {bill.billmunshiName} - {len(duplicate_bills)} similar bills found")
+            return Response(response_data)
 
-        return Response(response_data)
+        except Exception as analysis_error:
+            bill.processing_error = str(analysis_error)
+            bill.save(update_fields=['processing_error'])
+            raise
+        finally:
+            bill.is_processing = False
+            bill.save(update_fields=['is_processing'])
 
     except VendorBill.DoesNotExist:
         return Response({"detail": "Vendor bill not found"}, status=status.HTTP_404_NOT_FOUND)
