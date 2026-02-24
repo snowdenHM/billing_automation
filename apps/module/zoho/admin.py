@@ -211,23 +211,47 @@ class VendorZohoProductInline(admin.TabularInline):
 
 @admin.register(VendorBill)
 class VendorBillAdmin(BaseOrgScopedAdmin):
-    list_display = ["billmunshiName", "fileType", "status", "process", "uploaded_by", "organization", "created_at"]
-    list_filter = ["status", "fileType", "process", "uploaded_by", "organization", "created_at"]
+    list_display = [
+        "billmunshiName", "status", "fileType", "process", "is_duplicate", "bill_belong_your_org", 
+        "is_processing", "uploaded_by", "organization", "created_at"
+    ]
+    list_filter = [
+        "status", "fileType", "process", "is_duplicate", "bill_belong_your_org", "is_processing",
+        "uploaded_by", "organization", "created_at"
+    ]
     search_fields = ["billmunshiName", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
-    readonly_fields = ["analysed_data", "created_at", "update_at"]
-    fields = (
-        "organization",
-        "billmunshiName",
-        "file",
-        "fileType",
-        "analysed_data",
-        "status",
-        "process",
-        "uploaded_by",
-        "created_at",
-        "update_at",
+    readonly_fields = ["analysed_data", "created_at", "update_at", "duplicate_matched_bills", "processing_error"]
+    
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('organization', 'billmunshiName', 'file', 'fileType', 'analysed_data')
+        }),
+        ('Status & Processing', {
+            'fields': ('status', 'process', 'is_processing', 'processing_error', 'job_id')
+        }),
+        ('Duplicate Detection', {
+            'fields': ('is_duplicate', 'duplicate_description', 'duplicate_score', 'duplicate_matched_bills')
+        }),
+        ('External Bill Validation', {
+            'fields': ('bill_belong_your_org', 'description')
+        }),
+        ('Metadata', {
+            'fields': ('uploaded_by', 'created_at', 'update_at')
+        }),
     )
     autocomplete_fields = ("organization", "uploaded_by")
+    
+    @admin.display(description="Duplicate", boolean=True)
+    def duplicate_status(self, obj):
+        return obj.is_duplicate
+    
+    @admin.display(description="External", boolean=True)
+    def external_status(self, obj):
+        return not obj.bill_belong_your_org if obj.bill_belong_your_org is not None else None
+    
+    @admin.display(description="Processing", boolean=True)
+    def processing_status(self, obj):
+        return obj.is_processing
 
     @admin.display(description="File", ordering="file")
     def file_link(self, obj):
