@@ -1064,31 +1064,56 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
     else:
         relevant_data = analyzed_data
 
-    # Try to find vendor by company name (case-insensitive search)
+    # ✅ ENHANCED VENDOR LOOKUP WITH GST MATCHING
     vendor = None
-    company_name = relevant_data.get('from', {}).get('name', '').strip().lower()
+    company_name = relevant_data.get('from', {}).get('name', '').strip()
+    vendor_gst = relevant_data.get('from', {}).get('gst_number', '').strip()
+    
     if company_name:
-        vendor = ZohoVendor.objects.annotate(lower_name=Lower('companyName')).filter(
-            lower_name=company_name).first()
-        logger.info(f"Found vendor by name {company_name}: {vendor}")
+        # Use enhanced vendor lookup with GST matching
+        try:
+            vendor = find_zoho_vendor_ledger_enhanced(company_name, organization, vendor_gst)
+            logger.info(f"✅ Found vendor using enhanced lookup - {company_name}: {vendor}")
+        except Exception as e:
+            logger.warning(f"Enhanced vendor lookup failed for {company_name}: {str(e)}")
+            # Fallback to basic name search
+            vendor = ZohoVendor.objects.annotate(lower_name=Lower('companyName')).filter(
+                lower_name=company_name.lower()).first()
+            logger.info(f"Fallback vendor lookup - {company_name}: {vendor}")
 
-    # Parse bill date
+    # Parse bill date with multiple format support
     bill_date = None
     date_issued = relevant_data.get('dateIssued', '')
     if date_issued:
         try:
-            bill_date = datetime.strptime(date_issued, '%Y-%m-%d').date()
-        except (ValueError, TypeError):
-            logger.warning(f"Could not parse bill date: {date_issued}")
+            # Try different date formats
+            for date_format in ['%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%Y/%m/%d']:
+                try:
+                    bill_date = datetime.strptime(date_issued, date_format).date()
+                    break
+                except ValueError:
+                    continue
+            if not bill_date:
+                logger.warning(f"Could not parse bill date with any format: {date_issued}")
+        except Exception as e:
+            logger.warning(f"Error parsing bill date {date_issued}: {str(e)}")
     
-    # Parse due date
+    # Parse due date with multiple format support  
     due_date = None
     due_date_issued = relevant_data.get('dueDate', '')
     if due_date_issued:
         try:
-            due_date = datetime.strptime(due_date_issued, '%Y-%m-%d').date()
-        except (ValueError, TypeError):
-            logger.warning(f"Could not parse due date: {due_date_issued}")
+            # Try different date formats
+            for date_format in ['%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%Y/%m/%d']:
+                try:
+                    due_date = datetime.strptime(due_date_issued, date_format).date()
+                    break
+                except ValueError:
+                    continue
+            if not due_date:
+                logger.warning(f"Could not parse due date with any format: {due_date_issued}")
+        except Exception as e:
+            logger.warning(f"Error parsing due date {due_date_issued}: {str(e)}")
 
     # Validate numeric fields and convert to string
     def safe_numeric_string(value, default='0'):
@@ -1103,7 +1128,7 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
             logger.warning(f"Invalid numeric value: {value}, using default: {default}")
             return default
 
-    # Create or update VendorZohoBill
+    # Create or update VendorZohoBill with enhanced automation
     try:
         zoho_bill, created = VendorZohoBill.objects.get_or_create(
             selectBill=bill,
@@ -1111,6 +1136,7 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
             defaults={
                 'vendor': vendor,
                 'bill_no': relevant_data.get('invoiceNumber', ''),
+                'gst_number': vendor_gst or '',  # Set vendor GST number
                 'bill_date': bill_date,
                 'due_date': due_date,
                 'total': safe_numeric_string(relevant_data.get('total')),
@@ -1120,26 +1146,27 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
                 'discount_type': 'Percentage',
                 'discount_amount': Decimal('0'),
                 'adjustment_amount': Decimal('0'),
-                'note': f"Bill from analysis for {company_name or 'Unknown Vendor'} entered via Billmunshi"
+                'note': f"✅ Auto-filled from AI analysis for {company_name or 'Unknown Vendor'} | GST: {vendor_gst or 'N/A'} | Entered via BillMunshi"
             }
         )
 
         if created:
-            logger.info(f"Created new VendorZohoBill: {zoho_bill.id}")
+            logger.info(f"✅ Created new VendorZohoBill with automation: {zoho_bill.id}")
         else:
-            logger.info(f"Found existing VendorZohoBill: {zoho_bill.id}")
+            logger.info(f"🔄 Updating existing VendorZohoBill with enhanced data: {zoho_bill.id}")
             # Update the existing bill with new analyzed data
             zoho_bill.vendor = vendor
             zoho_bill.bill_no = relevant_data.get('invoiceNumber', zoho_bill.bill_no)
+            zoho_bill.gst_number = vendor_gst or zoho_bill.gst_number  # Update GST number
             zoho_bill.bill_date = bill_date or zoho_bill.bill_date
             zoho_bill.due_date = due_date or zoho_bill.due_date
             zoho_bill.total = safe_numeric_string(relevant_data.get('total'), zoho_bill.total)
             zoho_bill.igst = safe_numeric_string(relevant_data.get('igst'), zoho_bill.igst)
             zoho_bill.cgst = safe_numeric_string(relevant_data.get('cgst'), zoho_bill.cgst)
             zoho_bill.sgst = safe_numeric_string(relevant_data.get('sgst'), zoho_bill.sgst)
-            zoho_bill.note = f"Updated from analysis for {company_name or 'Unknown Vendor'}"
+            zoho_bill.note = f"🔄 Updated from AI analysis for {company_name or 'Unknown Vendor'} | GST: {vendor_gst or 'N/A'}"
             zoho_bill.save()
-            logger.info(f"Updated existing VendorZohoBill: {zoho_bill.id}")
+            logger.info(f"✅ Updated VendorZohoBill with automation: {zoho_bill.id}")
 
         # Delete existing products and recreate them
         existing_products_count = zoho_bill.products.count()
@@ -1147,36 +1174,62 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
             zoho_bill.products.all().delete()
             logger.info(f"Deleted {existing_products_count} existing products")
 
-        # Create VendorZohoProduct objects for each item
+        # ✅ Create VendorZohoProduct objects with FULL AUTOMATION
         items = relevant_data.get('items', [])
-        logger.info(f"Creating {len(items)} product line items")
+        logger.info(f"🔧 Creating {len(items)} product line items with full automation")
 
         created_products = []
+        igst_val = float(relevant_data.get('igst', 0) or 0)
+        cgst_val = float(relevant_data.get('cgst', 0) or 0) 
+        sgst_val = float(relevant_data.get('sgst', 0) or 0)
+
         for idx, item in enumerate(items):
             try:
                 rate = Decimal(item.get('price', 0) or 0)
                 quantity = int(item.get('quantity', 0) or 0)
                 amount = rate * quantity
+                item_description = item.get('description', f'Item {idx + 1}')
 
+                # ✅ AUTO-ASSIGN CHART OF ACCOUNTS based on item description
+                try:
+                    chart_of_accounts = find_appropriate_zoho_coa_ledger(organization, item_description, 'vendor')
+                    logger.info(f"✅ Auto-assigned Chart of Accounts for '{item_description}': {chart_of_accounts}")
+                except Exception as e:
+                    chart_of_accounts = None
+                    logger.warning(f"⚠️ Could not auto-assign Chart of Accounts for '{item_description}': {str(e)}")
+
+                # ✅ AUTO-ASSIGN TAX based on GST values
+                try:
+                    taxes = find_appropriate_zoho_tax_ledger(organization, 'igst' if igst_val > 0 else 'cgst', igst_val or cgst_val)
+                    logger.info(f"✅ Auto-assigned Tax for '{item_description}': {taxes}")
+                except Exception as e:
+                    taxes = None
+                    logger.warning(f"⚠️ Could not auto-assign Tax for '{item_description}': {str(e)}")
+
+                # Create product with automation
                 product = VendorZohoProduct.objects.create(
                     zohoBill=zoho_bill,
                     organization=organization,
-                    item_name=item.get('description', f'Item {idx + 1}')[:100],
-                    item_details=item.get('description', f'Item {idx + 1}')[:200],
+                    item_name=item_description[:100],
+                    item_details=item_description[:200],
                     rate=str(rate),
                     quantity=str(quantity),
-                    amount=str(amount)
+                    amount=str(amount),
+                    chart_of_accounts=chart_of_accounts,  # ✅ Auto-assigned
+                    taxes=taxes,  # ✅ Auto-assigned
+                    itc_eligibility='eligible',  # Default to eligible
+                    reverse_charge_tax_id=False  # Default to False
                 )
                 created_products.append(product)
-                logger.info(
-                    f"Created product {idx + 1}: {product.item_name} - Rate: {product.rate}, Qty: {product.quantity}, Amount: {product.amount}")
+                logger.info(f"✅ Created automated product {idx + 1}: {product.item_name} | CoA: {chart_of_accounts} | Tax: {taxes} | Amount: ₹{amount}")
+                
             except Exception as e:
-                logger.error(f"Error creating product {idx + 1}: {str(e)}")
+                logger.error(f"❌ Error creating automated product {idx + 1}: {str(e)}")
                 continue
 
-        logger.info(f"Successfully created {len(created_products)} products for bill {zoho_bill.id}")
+        logger.info(f"✅ Successfully created {len(created_products)} automated products for bill {zoho_bill.id}")
 
-        # ✅ AUTO-CREATE CONSOLIDATED PRODUCT FOR MULTI-ITEM BILLS
+        # ✅ AUTO-CREATE CONSOLIDATED PRODUCT WITH FULL AUTOMATION
         if len(created_products) > 1:
             try:
                 # Delete existing consolidated product if exists
@@ -1189,12 +1242,30 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
                 # Create detailed breakdown
                 item_details = []
                 for product in created_products:
-                    item_details.append(f'• {product.item_name} (Qty: {product.quantity}, Rate: ₹{product.rate})')
+                    coa_name = product.chart_of_accounts.accountName if product.chart_of_accounts else 'No Account'
+                    tax_name = product.taxes.taxName if product.taxes else 'No Tax'
+                    item_details.append(f'• {product.item_name} (Qty: {product.quantity}, Rate: ₹{product.rate}, CoA: {coa_name}, Tax: {tax_name})')
 
-                consolidated_details = f'Consolidated {items_count} items:\n' + '\n'.join(item_details)
+                consolidated_details = f'✅ Auto-consolidated {items_count} items:\n' + '\n'.join(item_details)
                 consolidated_name = f'Consolidated Items - {zoho_bill.bill_no or "Bill"} ({items_count} items)'
 
-                # Create consolidated product (but keep consolidate=False by default)
+                # ✅ AUTO-ASSIGN CHART OF ACCOUNTS for consolidated product
+                try:
+                    consolidated_chart_of_accounts = find_appropriate_zoho_coa_ledger(organization, "consolidated vendor bill items", 'vendor')
+                    logger.info(f"✅ Auto-assigned consolidated Chart of Accounts: {consolidated_chart_of_accounts}")
+                except Exception as e:
+                    consolidated_chart_of_accounts = None
+                    logger.warning(f"⚠️ Could not auto-assign consolidated Chart of Accounts: {str(e)}")
+
+                # ✅ AUTO-ASSIGN TAX for consolidated product
+                try:
+                    consolidated_taxes = find_appropriate_zoho_tax_ledger(organization, 'igst' if igst_val > 0 else 'cgst', igst_val or cgst_val)
+                    logger.info(f"✅ Auto-assigned consolidated Tax: {consolidated_taxes}")
+                except Exception as e:
+                    consolidated_taxes = None
+                    logger.warning(f"⚠️ Could not auto-assign consolidated Tax: {str(e)}")
+
+                # Create consolidated product with full automation
                 consolidated_product = VendorZohoConsolidatedProduct.objects.create(
                     zohoBill=zoho_bill,
                     organization=organization,
@@ -1203,20 +1274,49 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
                     total_quantity=Decimal('1'),  # Always 1 for consolidated
                     consolidated_rate=total_amount,  # Total amount as rate
                     consolidated_amount=total_amount,
+                    chart_of_accounts=consolidated_chart_of_accounts,  # ✅ Auto-assigned
+                    taxes=consolidated_taxes,  # ✅ Auto-assigned  
                     original_items_count=items_count,
-                    consolidation_notes=f'Auto-created during analysis for {items_count} items',
+                    consolidation_notes=f'✅ Auto-created with full automation during AI analysis for {items_count} items | Total: ₹{total_amount}',
                     itc_eligibility='eligible',  # Default
                     reverse_charge_tax_id=False
                 )
 
-                logger.info(f"✅ Auto-created consolidated product for bill {zoho_bill.id} with {items_count} items (₹{total_amount})")
+                logger.info(f"✅ Auto-created FULLY AUTOMATED consolidated product for bill {zoho_bill.id} | {items_count} items | ₹{total_amount} | CoA: {consolidated_chart_of_accounts} | Tax: {consolidated_taxes}")
 
             except Exception as e:
-                logger.error(f"❌ Error creating consolidated product for bill {zoho_bill.id}: {str(e)}")
+                logger.error(f"❌ Error creating automated consolidated product for bill {zoho_bill.id}: {str(e)}")
                 # Don't raise - consolidated product creation failure shouldn't break the main flow
         else:
-            logger.info(f"ℹ️ Skipping consolidated product creation - bill has only {len(created_products)} item(s)")
+            logger.info(f"ℹ️ Skipping consolidated product - bill has only {len(created_products)} item(s)")
 
+            # ✅ LOG AUTOMATION SUCCESS AND DUPLICATE DETECTION
+            automation_summary = []
+            automation_summary.append(f"✅ ZOHO VENDOR BILL AUTOMATION COMPLETE for Bill {zoho_bill.id}")
+            automation_summary.append(f"📋 Vendor: {vendor.companyName if vendor else '⚠️ Not Found - User needs to select manually'}")
+            automation_summary.append(f"📄 Invoice: {zoho_bill.bill_no}")  
+            automation_summary.append(f"🏪 GST Number: {vendor_gst or 'N/A'}")
+            automation_summary.append(f"📦 Products: {len(created_products)} with auto-assigned CoA & Tax")
+            automation_summary.append(f"💰 Total Amount: ₹{zoho_bill.total}")
+            if len(created_products) > 1:
+                automation_summary.append(f"📦 Consolidated: Available with auto-assigned CoA & Tax")
+            
+            # Check for duplicate bills after analysis
+            try:
+                is_duplicate, duplicate_bills, max_similarity = check_duplicate_bill(bill, organization)
+                if is_duplicate and duplicate_bills:
+                    update_vendor_bill_duplicate_metadata(bill, duplicate_bills, max_similarity)
+                    automation_summary.append(f"⚠️ DUPLICATE ALERT: {len(duplicate_bills)} similar bill(s) found ({max_similarity:.1f}% similarity)")
+                else:
+                    automation_summary.append(f"✅ No duplicates detected - Bill is unique")
+            except Exception as dup_error:
+                automation_summary.append(f"⚠️ Duplicate check failed: {str(dup_error)}")
+                logger.warning(f"Duplicate check failed for bill {bill.id}: {str(dup_error)}")
+                
+            logger.info("\n" + "\n".join(automation_summary))
+
+        # ✅ FINAL SUCCESS CONFIRMATION   
+        logger.info(f"🎉 AUTOMATION COMPLETE: Zoho vendor bill {zoho_bill.id} created with full field automation!")
         return zoho_bill
 
     except Exception as e:

@@ -262,7 +262,7 @@ class VendorZohoBillSerializer(serializers.ModelSerializer):
     class Meta:
         model = VendorZohoBill
         fields = [
-            "id", "selectBill", "vendor", "bill_no", "bill_date", "due_date", "total",
+            "id", "selectBill", "vendor", "bill_no", "gst_number", "bill_date", "due_date", "total",
             "discount_type", "discount", "discount_amount", "discount_account", "adjustment_amount", "adjustment_description",
             "igst", "cgst", "sgst", "tds_tcs_id", "is_tax", "note", "consolidate",
             "created_at", "products"
