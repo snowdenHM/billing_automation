@@ -1136,7 +1136,6 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
             defaults={
                 'vendor': vendor,
                 'bill_no': relevant_data.get('invoiceNumber', ''),
-                'gst_number': vendor_gst or '',  # Set vendor GST number
                 'bill_date': bill_date,
                 'due_date': due_date,
                 'total': safe_numeric_string(relevant_data.get('total')),
@@ -1157,7 +1156,6 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
             # Update the existing bill with new analyzed data
             zoho_bill.vendor = vendor
             zoho_bill.bill_no = relevant_data.get('invoiceNumber', zoho_bill.bill_no)
-            zoho_bill.gst_number = vendor_gst or zoho_bill.gst_number  # Update GST number
             zoho_bill.bill_date = bill_date or zoho_bill.bill_date
             zoho_bill.due_date = due_date or zoho_bill.due_date
             zoho_bill.total = safe_numeric_string(relevant_data.get('total'), zoho_bill.total)
@@ -1290,30 +1288,30 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
         else:
             logger.info(f"ℹ️ Skipping consolidated product - bill has only {len(created_products)} item(s)")
 
-            # ✅ LOG AUTOMATION SUCCESS AND DUPLICATE DETECTION
-            automation_summary = []
-            automation_summary.append(f"✅ ZOHO VENDOR BILL AUTOMATION COMPLETE for Bill {zoho_bill.id}")
-            automation_summary.append(f"📋 Vendor: {vendor.companyName if vendor else '⚠️ Not Found - User needs to select manually'}")
-            automation_summary.append(f"📄 Invoice: {zoho_bill.bill_no}")  
-            automation_summary.append(f"🏪 GST Number: {vendor_gst or 'N/A'}")
-            automation_summary.append(f"📦 Products: {len(created_products)} with auto-assigned CoA & Tax")
-            automation_summary.append(f"💰 Total Amount: ₹{zoho_bill.total}")
-            if len(created_products) > 1:
-                automation_summary.append(f"📦 Consolidated: Available with auto-assigned CoA & Tax")
+        # ✅ LOG AUTOMATION SUCCESS AND DUPLICATE DETECTION
+        automation_summary = []
+        automation_summary.append(f"✅ ZOHO VENDOR BILL AUTOMATION COMPLETE for Bill {zoho_bill.id}")
+        automation_summary.append(f"📋 Vendor: {vendor.companyName if vendor else '⚠️ Not Found - User needs to select manually'}")
+        automation_summary.append(f"📄 Invoice: {zoho_bill.bill_no}")  
+        automation_summary.append(f"🏪 GST Number: {vendor_gst or 'N/A'}")
+        automation_summary.append(f"📦 Products: {len(created_products)} with auto-assigned CoA & Tax")
+        automation_summary.append(f"💰 Total Amount: ₹{zoho_bill.total}")
+        if len(created_products) > 1:
+            automation_summary.append(f"📦 Consolidated: Available with auto-assigned CoA & Tax")
+        
+        # Check for duplicate bills after analysis
+        try:
+            is_duplicate, duplicate_bills, max_similarity = check_duplicate_bill(bill, organization)
+            if is_duplicate and duplicate_bills:
+                update_vendor_bill_duplicate_metadata(bill, duplicate_bills, max_similarity)
+                automation_summary.append(f"⚠️ DUPLICATE ALERT: {len(duplicate_bills)} similar bill(s) found ({max_similarity:.1f}% similarity)")
+            else:
+                automation_summary.append(f"✅ No duplicates detected - Bill is unique")
+        except Exception as dup_error:
+            automation_summary.append(f"⚠️ Duplicate check failed: {str(dup_error)}")
+            logger.warning(f"Duplicate check failed for bill {bill.id}: {str(dup_error)}")
             
-            # Check for duplicate bills after analysis
-            try:
-                is_duplicate, duplicate_bills, max_similarity = check_duplicate_bill(bill, organization)
-                if is_duplicate and duplicate_bills:
-                    update_vendor_bill_duplicate_metadata(bill, duplicate_bills, max_similarity)
-                    automation_summary.append(f"⚠️ DUPLICATE ALERT: {len(duplicate_bills)} similar bill(s) found ({max_similarity:.1f}% similarity)")
-                else:
-                    automation_summary.append(f"✅ No duplicates detected - Bill is unique")
-            except Exception as dup_error:
-                automation_summary.append(f"⚠️ Duplicate check failed: {str(dup_error)}")
-                logger.warning(f"Duplicate check failed for bill {bill.id}: {str(dup_error)}")
-                
-            logger.info("\n" + "\n".join(automation_summary))
+        logger.info("\n" + "\n".join(automation_summary))
 
         # ✅ FINAL SUCCESS CONFIRMATION   
         logger.info(f"🎉 AUTOMATION COMPLETE: Zoho vendor bill {zoho_bill.id} created with full field automation!")
