@@ -1145,7 +1145,7 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
                 'discount_type': 'Percentage',
                 'discount_amount': Decimal('0'),
                 'adjustment_amount': Decimal('0'),
-                'note': f"✅ Auto-filled from AI analysis for {company_name or 'Unknown Vendor'} | GST: {vendor_gst or 'N/A'} | Entered via BillMunshi"
+                'note': f"✅ Auto-filled from AI analysis for {company_name or 'Unknown Vendor'} | GST: {vendor_gst or 'N/A'}"[:95] + "..."
             }
         )
 
@@ -1162,7 +1162,7 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
             zoho_bill.igst = safe_numeric_string(relevant_data.get('igst'), zoho_bill.igst)
             zoho_bill.cgst = safe_numeric_string(relevant_data.get('cgst'), zoho_bill.cgst)
             zoho_bill.sgst = safe_numeric_string(relevant_data.get('sgst'), zoho_bill.sgst)
-            zoho_bill.note = f"🔄 Updated from AI analysis for {company_name or 'Unknown Vendor'} | GST: {vendor_gst or 'N/A'}"
+            zoho_bill.note = f"🔄 Updated from AI analysis for {company_name or 'Unknown Vendor'} | GST: {vendor_gst or 'N/A'}"[:95] + "..."
             zoho_bill.save()
             logger.info(f"✅ Updated VendorZohoBill with automation: {zoho_bill.id}")
 
