@@ -257,9 +257,19 @@ class ZohoJournalBillSerializer(serializers.ModelSerializer):
         model = JournalBill
         fields = [
             "id", "billmunshiName", "file", "fileType", "status",
-            "process", "uploaded_by", "uploaded_by_name", "created_at", "update_at"
+            "process", "uploaded_by", "uploaded_by_name", "created_at", "update_at",
+            # Duplicate detection fields
+            "is_duplicate", "duplicate_description", "duplicate_score", "duplicate_matched_bills",
+            # Background processing fields
+            "is_processing", "processing_error", "job_id",
+            # External bill fields
+            "bill_belong_your_org", "description"
         ]
-        read_only_fields = ["id", "billmunshiName", "file", "uploaded_by", "uploaded_by_name", "created_at", "update_at"]
+        read_only_fields = [
+            "id", "billmunshiName", "file", "uploaded_by", "uploaded_by_name", "created_at", "update_at",
+            "is_duplicate", "duplicate_description", "duplicate_score", "duplicate_matched_bills",
+            "is_processing", "processing_error", "job_id", "bill_belong_your_org", "description"
+        ]
         ref_name = "ZohoJournalBill"  # Unique component name
 
     def get_file(self, obj):

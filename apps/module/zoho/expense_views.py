@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from io import BytesIO
 
@@ -244,6 +245,193 @@ def get_zoho_credentials(organization):
         return credentials
     except ZohoCredentials.DoesNotExist:
         raise ValueError("Zoho credentials not found for organization")
+
+
+def normalize_company_name_enhanced(name):
+    """Enhanced company name normalization for Indian businesses"""
+    if not name:
+        return ""
+    
+    # Remove common patterns
+    normalized = name.strip()
+    
+    # Remove year patterns
+    normalized = re.sub(r'\s*\([0-9]{4}[-/][0-9]{2,4}\)', '', normalized)
+    normalized = re.sub(r'\s*\(FY[0-9]{2}\)', '', normalized)
+    
+    # Normalize business suffixes
+    business_suffixes = [
+        'Private Limited', 'Pvt Ltd', 'Pvt. Ltd.', 'Ltd', 'Ltd.',
+        'Limited Liability Partnership', 'LLP', 'LLC',
+        'Company', 'Co.', 'Co', 'Corporation', 'Corp', 'Inc', 'Inc.',
+        'Enterprises', 'Industries', 'Trading', 'Traders', 'Services',
+        'Technologies', 'Tech', 'Systems', 'Solutions'
+    ]
+    
+    for suffix in business_suffixes:
+        normalized = re.sub(r'\b' + re.escape(suffix) + r'\b', '', normalized, flags=re.IGNORECASE)
+    
+    # Clean up spaces and punctuation
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    normalized = re.sub(r'[^\w\s]', '', normalized)  # Remove special chars
+    
+    return normalized
+
+
+def find_zoho_vendor_ledger_enhanced(company_name, organization, vendor_gst=None):
+    """
+    Find matching vendor ledger using GST number first, then enhanced name matching directly with ZohoVendor.
+    """
+    try:
+        logger.info(f"🔍 Enhanced vendor search for: '{company_name}' | GST: {vendor_gst}")
+        
+        # STEP 1: Try exact GST match first (highest priority)
+        if vendor_gst and len(vendor_gst) >= 10:
+            gst_match = ZohoVendor.objects.filter(
+                organization=organization,
+                gst_number__iexact=vendor_gst
+            ).first()
+            if gst_match:
+                logger.info(f"✅ Found vendor by GST exact match: {gst_match.companyName}")
+                return gst_match
+        
+        # STEP 2: Try exact company name match (case-insensitive)
+        exact_match = ZohoVendor.objects.filter(
+            organization=organization,
+            companyName__iexact=company_name
+        ).first()
+        if exact_match:
+            logger.info(f"✅ Found vendor by exact name match: {exact_match.companyName}")
+            return exact_match
+        
+        # STEP 3: Try normalized name matching
+        normalized_search = normalize_company_name_enhanced(company_name).lower()
+        if normalized_search:
+            for vendor in ZohoVendor.objects.filter(organization=organization):
+                normalized_vendor = normalize_company_name_enhanced(vendor.companyName).lower()
+                if normalized_vendor == normalized_search:
+                    logger.info(f"✅ Found vendor by normalized match: {vendor.companyName}")
+                    return vendor
+        
+        logger.warning(f"⚠️ No vendor match found for: {company_name}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error in enhanced vendor search: {str(e)}")
+        return None
+
+
+def find_appropriate_zoho_coa_ledger(organization, item_description, ledger_type='expense'):
+    """
+    Find appropriate chart of accounts ledger based on item description and organization.
+    Uses organization-filtered ZohoChartOfAccount directly.
+    """
+    try:
+        from .models import ZohoChartOfAccount
+        
+        logger.info(f"🔍 Looking for appropriate CoA for: '{item_description}' | Type: {ledger_type}")
+        
+        # Get all CoA for organization
+        all_coa = ZohoChartOfAccount.objects.filter(organization=organization)
+        
+        if not all_coa.exists():
+            logger.warning(f"⚠️ No Chart of Accounts found for organization {organization.id}")
+            return None
+        
+        # Normalize item description for matching
+        item_lower = item_description.lower().strip()
+        
+        # Keyword-based CoA matching for expense entries
+        keyword_mappings = {
+            # Expense categories
+            'travel': ['travel expenses', 'travelling', 'conveyance'],
+            'food': ['food', 'meals', 'refreshment', 'pantry', 'restaurant'],
+            'office': ['office expenses', 'office supplies', 'stationery'],
+            'rent': ['rent', 'rental'],
+            'utilities': ['electricity', 'water', 'utilities', 'telephone', 'mobile'],
+            'salaries': ['salary', 'wages', 'payroll'],
+            'professional': ['professional fees', 'consultant', 'audit', 'legal'],
+            'marketing': ['marketing', 'advertising', 'promotion'],
+            'repairs': ['repairs', 'maintenance', 'ami'],
+            'depreciation': ['depreciation', 'amortization'],
+            'insurance': ['insurance', 'premium'],
+            'fuel': ['fuel', 'petrol', 'diesel', 'gas'],
+            'printing': ['printing', 'photocopy'],
+            'postage': ['postage', 'courier'],
+        }
+        
+        # Try to find matching CoA by keywords
+        for category, keywords in keyword_mappings.items():
+            for keyword in keywords:
+                if keyword in item_lower:
+                    # Search for CoA with matching keyword
+                    matching_coa = all_coa.filter(accountName__icontains=keyword).first()
+                    if matching_coa:
+                        logger.info(f"✅ Found CoA by keyword '{keyword}': {matching_coa.accountName}")
+                        return matching_coa
+        
+        # Fallback: Return first "General Expenses" or similar default
+        default_coa = all_coa.filter(accountName__icontains='expense').first()
+        if default_coa:
+            logger.info(f"✅ Using default CoA: {default_coa.accountName}")
+            return default_coa
+        
+        # Last resort: Return first available CoA
+        first_coa = all_coa.first()
+        logger.warning(f"⚠️ No specific match, using first available CoA: {first_coa.accountName if first_coa else 'None'}")
+        return first_coa
+        
+    except Exception as e:
+        logger.error(f"Error finding appropriate CoA ledger: {str(e)}")
+        return None
+
+
+def find_appropriate_zoho_tax_ledger(organization, tax_type, tax_amount):
+    """
+    Find appropriate tax ledger based on tax type using organization-filtered ZohoTaxes.
+    """
+    try:
+        from .models import ZohoTaxes
+        
+        logger.info(f"🔍 Looking for appropriate tax for: {tax_type} | Amount: {tax_amount}")
+        
+        # Get all taxes for organization
+        all_taxes = ZohoTaxes.objects.filter(organization=organization)
+        
+        if not all_taxes.exists():
+            logger.warning(f"⚠️ No Taxes found for organization {organization.id}")
+            return None
+        
+        # Normalize tax type for matching
+        tax_type_lower = tax_type.lower()
+        
+        # Try to match by tax type
+        if 'igst' in tax_type_lower:
+            tax_match = all_taxes.filter(taxName__icontains='igst').first()
+        elif 'cgst' in tax_type_lower:
+            tax_match = all_taxes.filter(taxName__icontains='cgst').first()
+        elif 'sgst' in tax_type_lower:
+            tax_match = all_taxes.filter(taxName__icontains='sgst').first()
+        elif 'gst' in tax_type_lower:
+            # Generic GST - try to find the right one based on rate
+            if tax_amount > 0:
+                # GST is usually 18%, 12%, 5%, etc.
+                tax_match = all_taxes.filter(taxName__icontains='gst').first()
+            else:
+                tax_match = None
+        else:
+            tax_match = None
+        
+        if tax_match:
+            logger.info(f"✅ Found tax: {tax_match.taxName}")
+            return tax_match
+        
+        logger.warning(f"⚠️ No tax match found for: {tax_type}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error finding appropriate tax ledger: {str(e)}")
+        return None
 
 
 def make_zoho_api_request(credentials, endpoint, method='GET', data=None):
@@ -496,13 +684,17 @@ def create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
     else:
         relevant_data = analyzed_data
 
-    # Try to find vendor by company name (case-insensitive search)
+    # ✅ ENHANCED VENDOR LOOKUP WITH GST MATCHING
     vendor = None
-    company_name = relevant_data.get('to', {}).get('name', '').strip().lower()
+    company_name = relevant_data.get('from', {}).get('name', '').strip()
+    vendor_gst = relevant_data.get('from', {}).get('gst_number', '').strip()
+    
     if company_name:
-        vendor = ZohoVendor.objects.annotate(lower_name=Lower('companyName')).filter(
-            lower_name=company_name).first()
-        logger.info(f"Found vendor by name {company_name}: {vendor}")
+        vendor = find_zoho_vendor_ledger_enhanced(company_name, organization, vendor_gst)
+        if vendor:
+            logger.info(f"✅ Matched vendor: {vendor.companyName}")
+        else:
+            logger.warning(f"⚠️ No vendor match found for: {company_name}")
 
     # Parse dates
     bill_date = None
@@ -549,7 +741,7 @@ def create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
                 'igst': safe_numeric_string(relevant_data.get('igst')),
                 'cgst': safe_numeric_string(relevant_data.get('cgst')),
                 'sgst': safe_numeric_string(relevant_data.get('sgst')),
-                'note': f"Bill from analysis for {company_name or 'Unknown Vendor'} entered via Billmunshi"
+                'note': f"✅ Auto-filled from analysis | Vendor: {company_name or 'Unknown'} | Analysed via Billmunshi"[:95] + "..."
             }
         )
 
@@ -566,7 +758,7 @@ def create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
             zoho_bill.igst = safe_numeric_string(relevant_data.get('igst'), zoho_bill.igst)
             zoho_bill.cgst = safe_numeric_string(relevant_data.get('cgst'), zoho_bill.cgst)
             zoho_bill.sgst = safe_numeric_string(relevant_data.get('sgst'), zoho_bill.sgst)
-            zoho_bill.note = f"Updated from analysis for {company_name or 'Unknown Vendor'}"
+            zoho_bill.note = f"✅ Updated from re-analysis | Vendor: {company_name or 'Unknown'}"[:95] + "..."
             zoho_bill.save()
             logger.info(f"Updated existing ExpenseZohoBill: {zoho_bill.id}")
 
@@ -584,14 +776,35 @@ def create_expense_zoho_objects_from_analysis(bill, analyzed_data, organization)
         for idx, item in enumerate(items):
             try:
                 amount = item.get('price', 0) * item.get('quantity', 1)
+                item_description = item.get('description', f'Item {idx + 1}')
+                
+                # ✅ AUTO-ASSIGN CHART OF ACCOUNTS
+                chart_of_accounts = find_appropriate_zoho_coa_ledger(
+                    organization, 
+                    item_description, 
+                    ledger_type='expense'
+                )
+                
+                # ✅ AUTO-ASSIGN TAXES (if IGST/CGST/SGST detected)
+                taxes = None
+                if relevant_data.get('igst', 0) > 0:
+                    taxes = find_appropriate_zoho_tax_ledger(organization, 'igst', relevant_data.get('igst', 0))
+                elif relevant_data.get('cgst', 0) > 0 or relevant_data.get('sgst', 0) > 0:
+                    taxes = find_appropriate_zoho_tax_ledger(organization, 'cgst', relevant_data.get('cgst', 0))
+                
                 product = ExpenseZohoProduct.objects.create(
                     zohoBill=zoho_bill,
                     organization=organization,
-                    item_details=item.get('description', f'Item {idx + 1}')[:200],
-                    amount=safe_numeric_string(amount)
+                    item_details=item_description[:2000],
+                    amount=safe_numeric_string(amount),
+                    chart_of_accounts=chart_of_accounts,
+                    taxes=taxes
                 )
                 created_products.append(product)
-                logger.info(f"Created product {idx + 1}: {product.item_details} - Amount: {product.amount}")
+                
+                coa_info = f" | CoA: {chart_of_accounts.accountName}" if chart_of_accounts else " | CoA: Not assigned"
+                tax_info = f" | Tax: {taxes.taxName}" if taxes else ""
+                logger.info(f"✅ Created product {idx + 1}: {product.item_details[:50]}{coa_info}{tax_info} - Amount: {product.amount}")
             except Exception as e:
                 logger.error(f"Error creating product {idx + 1}: {str(e)}")
                 continue

@@ -608,6 +608,22 @@ class JournalBill(BaseTeamModel):
         blank=True,
         related_name="uploaded_journal_bills"
     )
+
+    # Duplicate tracking fields
+    is_duplicate = models.BooleanField(default=False, help_text="Whether this bill is identified as a potential duplicate")
+    duplicate_description = models.TextField(blank=True, null=True, help_text="Description of duplicate matches found")
+    duplicate_score = models.FloatField(null=True, blank=True, help_text="Similarity score with duplicate bills (0-100)")
+    duplicate_matched_bills = models.JSONField(default=list, blank=True, help_text="List of matched duplicate bill details")
+
+    # Processing status fields
+    is_processing = models.BooleanField(default=False, help_text="Whether this bill is currently being processed in background")
+    processing_error = models.TextField(blank=True, null=True, help_text="Error message if processing failed")
+    job_id = models.CharField(max_length=100, blank=True, null=True, help_text="Background job ID for tracking")
+
+    # Bill ownership and description
+    bill_belong_your_org = models.BooleanField(default=False, help_text="Whether this bill belongs to your organization")
+    description = models.TextField(blank=True, null=True, help_text="Description of the bill")
+
     created_at = models.DateTimeField(auto_now_add=True)
     update_at = models.DateTimeField(auto_now=True)
 
@@ -864,6 +880,22 @@ class ExpenseBill(BaseTeamModel):
         blank=True,
         related_name="uploaded_expense_bills"
     )
+
+    # Duplicate tracking fields
+    is_duplicate = models.BooleanField(default=False, help_text="Whether this bill is identified as a potential duplicate")
+    duplicate_description = models.TextField(blank=True, null=True, help_text="Description of duplicate matches found")
+    duplicate_score = models.FloatField(null=True, blank=True, help_text="Similarity score with duplicate bills (0-100)")
+    duplicate_matched_bills = models.JSONField(default=list, blank=True, help_text="List of matched duplicate bill details")
+
+    # Processing status fields
+    is_processing = models.BooleanField(default=False, help_text="Whether this bill is currently being processed in background")
+    processing_error = models.TextField(blank=True, null=True, help_text="Error message if processing failed")
+    job_id = models.CharField(max_length=100, blank=True, null=True, help_text="Background job ID for tracking")
+
+    # Bill ownership and description
+    bill_belong_your_org = models.BooleanField(default=False, help_text="Whether this bill belongs to your organization")
+    description = models.TextField(blank=True, null=True, help_text="Description of the bill")
+
     created_at = models.DateTimeField(auto_now_add=True)
     update_at = models.DateTimeField(auto_now=True)
 
