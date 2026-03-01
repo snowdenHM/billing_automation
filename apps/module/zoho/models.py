@@ -82,13 +82,13 @@ class ZohoCredentials(BaseTeamModel):
     def refresh_token(self):
         """Refresh the access token using the refresh token"""
         if not self.refreshToken:
-            print("[ERROR] No refresh token available")
+            logger.error("[ERROR] No refresh token available")
             return False
         
         import logging
         logger = logging.getLogger(__name__)
         
-        print(f"[DEBUG] Starting token refresh for organization ID: {self.organisationId}")
+        logger.debug(f"[DEBUG] Starting token refresh for organization ID: {self.organisationId}")
         logger.info(f"Starting token refresh for organization ID: {self.organisationId}")
 
         # Build refresh token URL
@@ -100,19 +100,19 @@ class ZohoCredentials(BaseTeamModel):
             f"&grant_type=refresh_token"
         )
         
-        print(f"[DEBUG] Refresh token URL: {url[:80]}...[MASKED]")
+        logger.debug(f"[DEBUG] Refresh token URL: {url[:80]}...[MASKED]")
         logger.info(f"Refresh token request initiated")
 
         try:
             import requests
             response = requests.post(url, timeout=30)
             
-            print(f"[DEBUG] Refresh token response status: {response.status_code}")
+            logger.debug(f"[DEBUG] Refresh token response status: {response.status_code}")
             logger.info(f"Refresh token response status: {response.status_code}")
 
             if response.status_code == 200:
                 data = response.json()
-                print(f"[DEBUG] Refresh token response keys: {list(data.keys())}")
+                logger.debug(f"[DEBUG] Refresh token response keys: {list(data.keys())}")
                 logger.info(f"Refresh token response received: {list(data.keys())}")
                 
                 if "access_token" in data:
@@ -120,7 +120,7 @@ class ZohoCredentials(BaseTeamModel):
                     self.accessToken = data["access_token"]
                     new_token = self.accessToken[:20] + "..."
                     
-                    print(f"[DEBUG] Access token updated: {old_token} -> {new_token}")
+                    logger.debug(f"[DEBUG] Access token updated: {old_token} -> {new_token}")
                     logger.info(f"Access token refreshed successfully")
                     
                     # Set expiry to 50 minutes from now (Zoho tokens last 1 hour)
@@ -129,35 +129,35 @@ class ZohoCredentials(BaseTeamModel):
                     # Update connection status
                     self.is_connected = bool(self.accessToken and self.organisationId)
                     
-                    print(f"[DEBUG] Token expiry set to: {self.token_expiry}")
-                    print(f"[DEBUG] Connection status: {self.is_connected}")
+                    logger.debug(f"[DEBUG] Token expiry set to: {self.token_expiry}")
+                    logger.debug(f"[DEBUG] Connection status: {self.is_connected}")
                     
                     self.save(update_fields=["accessToken", "token_expiry", "is_connected", "update_at"])
                     
-                    print(f"[SUCCESS] Token refresh completed successfully")
+                    logger.info(f"[SUCCESS] Token refresh completed successfully")
                     logger.info(f"Token refresh completed successfully")
                     return True
                 else:
-                    print(f"[ERROR] No access_token in response: {data}")
+                    logger.error(f"[ERROR] No access_token in response: {data}")
                     logger.error(f"No access_token in refresh response: {data}")
             else:
                 error_text = response.text
-                print(f"[ERROR] Refresh token failed: {response.status_code} - {error_text}")
+                logger.error(f"[ERROR] Refresh token failed: {response.status_code} - {error_text}")
                 logger.error(f"Failed to refresh Zoho token: {response.status_code} - {error_text}")
                 
                 # Try to parse error response
                 try:
                     error_data = response.json()
-                    print(f"[ERROR] Zoho error details: {error_data}")
+                    logger.error(f"[ERROR] Zoho error details: {error_data}")
                     logger.error(f"Zoho refresh error details: {error_data}")
                 except:
                     pass
                     
         except Exception as e:
-            print(f"[EXCEPTION] Error refreshing Zoho token: {str(e)}")
+            logger.error(f"[EXCEPTION] Error refreshing Zoho token: {str(e)}")
             logger.exception(f"Exception refreshing Zoho token: {str(e)}")
 
-        print(f"[FAILED] Token refresh failed")
+        logger.error(f"[FAILED] Token refresh failed")
         logger.error(f"Token refresh failed")
         return False
 
@@ -346,7 +346,7 @@ class VendorBill(BaseTeamModel):
 
     def save(self, *args, **kwargs):
         if not self.billmunshiName and self.file:
-            print(f"[MODEL DEBUG] Generating billmunshiName for VendorBill with file: {self.file.name}")
+            logger.debug(f"[MODEL DEBUG] Generating billmunshiName for VendorBill with file: {self.file.name}")
 
             from datetime import date
             today = date.today()
@@ -359,7 +359,7 @@ class VendorBill(BaseTeamModel):
                 billmunshiName__startswith=bill_prefix
             ).values_list('billmunshiName', flat=True)
 
-            print(f"[MODEL DEBUG] Found {len(existing_bills)} existing bills with prefix {bill_prefix}")
+            logger.debug(f"[MODEL DEBUG] Found {len(existing_bills)} existing bills with prefix {bill_prefix}")
 
             # Extract numbers and find the maximum for today
             max_num = 0
@@ -373,7 +373,7 @@ class VendorBill(BaseTeamModel):
 
             next_num = max_num + 1
             self.billmunshiName = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
-            print(f"[MODEL DEBUG] Generated billmunshiName: {self.billmunshiName}")
+            logger.debug(f"[MODEL DEBUG] Generated billmunshiName: {self.billmunshiName}")
 
         super().save(*args, **kwargs)
 
@@ -636,7 +636,7 @@ class JournalBill(BaseTeamModel):
 
     def save(self, *args, **kwargs):
         if not self.billmunshiName and self.file:
-            print(f"[MODEL DEBUG] Generating billmunshiName for JournalBill with file: {self.file.name}")
+            logger.debug(f"[MODEL DEBUG] Generating billmunshiName for JournalBill with file: {self.file.name}")
 
             from datetime import date
             today = date.today()
@@ -649,7 +649,7 @@ class JournalBill(BaseTeamModel):
                 billmunshiName__startswith=bill_prefix
             ).values_list('billmunshiName', flat=True)
 
-            print(f"[MODEL DEBUG] Found {len(existing_bills)} existing bills with prefix {bill_prefix}")
+            logger.debug(f"[MODEL DEBUG] Found {len(existing_bills)} existing bills with prefix {bill_prefix}")
 
             # Extract numbers and find the maximum for today
             max_num = 0
@@ -663,7 +663,7 @@ class JournalBill(BaseTeamModel):
 
             next_num = max_num + 1
             self.billmunshiName = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
-            print(f"[MODEL DEBUG] Generated billmunshiName: {self.billmunshiName}")
+            logger.debug(f"[MODEL DEBUG] Generated billmunshiName: {self.billmunshiName}")
 
         super().save(*args, **kwargs)
 
@@ -908,7 +908,7 @@ class ExpenseBill(BaseTeamModel):
 
     def save(self, *args, **kwargs):
         if not self.billmunshiName and self.file:
-            print(f"[MODEL DEBUG] Generating billmunshiName for ExpenseBill with file: {self.file.name}")
+            logger.debug(f"[MODEL DEBUG] Generating billmunshiName for ExpenseBill with file: {self.file.name}")
 
             from datetime import date
             today = date.today()
@@ -921,7 +921,7 @@ class ExpenseBill(BaseTeamModel):
                 billmunshiName__startswith=bill_prefix
             ).values_list('billmunshiName', flat=True)
 
-            print(f"[MODEL DEBUG] Found {len(existing_bills)} existing bills with prefix {bill_prefix}")
+            logger.debug(f"[MODEL DEBUG] Found {len(existing_bills)} existing bills with prefix {bill_prefix}")
 
             # Extract numbers and find the maximum for today
             max_num = 0
@@ -935,7 +935,7 @@ class ExpenseBill(BaseTeamModel):
 
             next_num = max_num + 1
             self.billmunshiName = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
-            print(f"[MODEL DEBUG] Generated billmunshiName: {self.billmunshiName}")
+            logger.debug(f"[MODEL DEBUG] Generated billmunshiName: {self.billmunshiName}")
 
         super().save(*args, **kwargs)
 

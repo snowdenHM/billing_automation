@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from apps.module.zoho.models import (
@@ -13,6 +13,8 @@ from apps.module.zoho.models import (
     ZohoTaxes,
 )
 from apps.organizations.models import Organization
+
+User = get_user_model()
 
 
 class FileUploadField(serializers.FileField):

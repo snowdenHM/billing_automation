@@ -260,7 +260,7 @@ class OrganizationAPIKeyOrBearerToken(BasePermission):
                 pass
             except Exception as e:
                 # Log other exceptions for debugging
-                print(f"API Key validation error: {str(e)}")
+                logger.error(f"API Key validation error: {str(e)}")
                 pass
 
         # If not authenticated via API key, check for Bearer token
@@ -1797,7 +1797,7 @@ def vendor_bills_upload(request, org_id):
 
                             except (FileNotFoundError, OSError) as e:
                                 # Handle file access errors gracefully
-                                print(f"[TALLY VENDOR DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {str(e)}")
+                                logger.error(f"[TALLY VENDOR DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {str(e)}")
                                 continue
 
                 if potential_duplicate_files:
@@ -3374,7 +3374,7 @@ def vendor_bill_delete(request, org_id, bill_id):
 @permission_classes([OrganizationAPIKeyOrBearerToken])
 def vendor_bills_sync_list(request, org_id):
     """Get all synced bills with their products"""
-    print("vendor_bills_sync_list called")
+    logger.info("vendor_bills_sync_list called")
     # 🔹 Log caller info & headers
     try:
         logger.info(

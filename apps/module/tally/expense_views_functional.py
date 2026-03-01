@@ -295,7 +295,7 @@ class OrganizationAPIKeyOrBearerToken(BasePermission):
                 pass
             except Exception as e:
                 # Log other exceptions for debugging
-                print(f"API Key validation error: {str(e)}")
+                logger.error(f"API Key validation error: {str(e)}")
                 pass
 
         # If not authenticated via API key, check for Bearer token
@@ -1516,7 +1516,7 @@ def expense_bills_upload(request, org_id):
 
                             except (FileNotFoundError, OSError) as e:
                                 # Handle file access errors gracefully
-                                print(f"[TALLY EXPENSE DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {str(e)}")
+                                logger.error(f"[TALLY EXPENSE DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {str(e)}")
                                 continue
 
                 if potential_duplicate_files:

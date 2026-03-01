@@ -79,7 +79,7 @@ class OrganizationAPIKeyOrBearerToken(BasePermission):
                 pass
             except Exception as e:
                 # Log other exceptions for debugging
-                print(f"API Key validation error: {str(e)}")
+                logger.error(f"API Key validation error: {str(e)}")
                 pass
 
         # If not authenticated via API key, check for Bearer token
@@ -96,14 +96,14 @@ class OrganizationAPIKeyOrBearerToken(BasePermission):
 @permission_classes([OrganizationAPIKeyOrBearerToken])  # Use same permission as ViewSet
 def get_tally_config(request, org_id):
     """Get tally configuration for organization"""
-    print(f"get_tally_config called - Method: {request.method}, org_id: {org_id}")
+    logger.info(f"get_tally_config called - Method: {request.method}, org_id: {org_id}")
     
     try:
-        print(f"Getting TallyConfig for organization: {org_id}")
+        logger.info(f"Getting TallyConfig for organization: {org_id}")
         
         # Get organization
         organization = get_object_or_404(Organization, id=org_id)
-        print(f"Found organization: {organization.name}")
+        logger.debug(f"Found organization: {organization.name}")
         
         # Get tally config for this organization
         tally_config = TallyConfig.objects.filter(organization=organization).prefetch_related(
@@ -118,7 +118,7 @@ def get_tally_config(request, org_id):
         ).first()
         
         if not tally_config:
-            print("No TallyConfig found for this organization")
+            logger.debug("No TallyConfig found for this organization")
             return Response({
                 'success': False,
                 'message': 'No tally configuration found for this organization',
@@ -128,7 +128,7 @@ def get_tally_config(request, org_id):
         # Serialize the config
         serializer = TallyConfigSerializer(tally_config, context={'request': request, 'organization': organization})
         
-        print(f"Retrieved TallyConfig: {tally_config.id}")
+        logger.info(f"Retrieved TallyConfig: {tally_config.id}")
         return Response({
             'success': True,
             'message': 'Tally configuration retrieved successfully',
@@ -141,7 +141,7 @@ def get_tally_config(request, org_id):
             'message': 'Organization not found'
         }, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
-        print(f"Error in get_tally_config: {str(e)}")
+        logger.error(f"Error in get_tally_config: {str(e)}")
         return Response({
             'success': False,
             'message': f'Error retrieving tally configuration: {str(e)}'
@@ -153,15 +153,15 @@ def get_tally_config(request, org_id):
 @permission_classes([OrganizationAPIKeyOrBearerToken])  # Use same permission as ViewSet
 def create_or_update_tally_config(request, org_id):
     """Create or update tally configuration for organization"""
-    print(f"create_or_update_tally_config called - Method: {request.method}, org_id: {org_id}")
+    logger.info(f"create_or_update_tally_config called - Method: {request.method}, org_id: {org_id}")
     
     try:
-        print(f"Creating/updating TallyConfig for organization: {org_id}")
-        print(f"Request data: {request.data}")
+        logger.info(f"Creating/updating TallyConfig for organization: {org_id}")
+        logger.info(f"Request data: {request.data}")
         
         # Get organization
         organization = get_object_or_404(Organization, id=org_id)
-        print(f"Found organization: {organization.name}")
+        logger.debug(f"Found organization: {organization.name}")
         
         # Debug the parent ledger data being sent
         parent_fields = ['igst_parents', 'cgst_parents', 'sgst_parents', 'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents', 'tds_parents', 'payment_parents']
@@ -169,7 +169,7 @@ def create_or_update_tally_config(request, org_id):
         for field in parent_fields:
             if field in request.data:
                 parent_ids = request.data[field]
-                print(f"{field}: {parent_ids}")
+                logger.info(f"{field}: {parent_ids}")
                 
                 if parent_ids:
                     # Check if these parent ledger IDs exist for this organization
@@ -181,22 +181,22 @@ def create_or_update_tally_config(request, org_id):
                     existing_ids = [str(pid) for pid, _ in existing]
                     missing_ids = [pid for pid in parent_ids if str(pid) not in existing_ids]
                     
-                    print(f"  Found {len(existing)} matching parent ledgers: {list(existing)}")
+                    logger.debug(f"  Found {len(existing)} matching parent ledgers: {list(existing)}")
                     if missing_ids:
-                        print(f"  Missing ParentLedger IDs: {missing_ids}")
+                        logger.warning(f"  Missing ParentLedger IDs: {missing_ids}")
         
         # Check if config already exists for this organization
         existing_config = TallyConfig.objects.filter(organization=organization).first()
         
         # Get tally_product_allow_sync value
         tally_product_allow_sync = request.data.get('tally_product_allow_sync', False)
-        print(f"tally_product_allow_sync: {tally_product_allow_sync}")
+        logger.info(f"tally_product_allow_sync: {tally_product_allow_sync}")
         
         if existing_config:
-            print(f"Updating existing TallyConfig: {existing_config.id}")
+            logger.info(f"Updating existing TallyConfig: {existing_config.id}")
             tally_config = existing_config
         else:
-            print("Creating new TallyConfig")
+            logger.info("Creating new TallyConfig")
             tally_config = TallyConfig.objects.create(
                 organization=organization,
                 tally_product_allow_sync=tally_product_allow_sync
@@ -210,7 +210,7 @@ def create_or_update_tally_config(request, org_id):
         for field in parent_fields:
             if field in request.data:
                 parent_ids = request.data[field] or []
-                print(f"Setting {field} with IDs: {parent_ids}")
+                logger.info(f"Setting {field} with IDs: {parent_ids}")
                 
                 # Get parent ledger objects
                 parent_ledgers = ParentLedger.objects.filter(
@@ -220,7 +220,7 @@ def create_or_update_tally_config(request, org_id):
                 
                 # Set the many-to-many relationship
                 getattr(tally_config, field).set(parent_ledgers)
-                print(f"Set {field} with {parent_ledgers.count()} parent ledgers")
+                logger.info(f"Set {field} with {parent_ledgers.count()} parent ledgers")
         
         # Refresh from database
         tally_config.refresh_from_db()
@@ -230,7 +230,7 @@ def create_or_update_tally_config(request, org_id):
         response_serializer = TallyConfigSerializer(tally_config, context=context)
         
         message = 'Tally configuration updated successfully' if existing_config else 'Tally configuration created successfully'
-        print(f"Success: {message}")
+        logger.info(f"Success: {message}")
         
         return Response({
             'success': True,
@@ -244,7 +244,7 @@ def create_or_update_tally_config(request, org_id):
             'message': 'Organization not found'
         }, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
-        print(f"Error in create_or_update_tally_config: {str(e)}")
+        logger.error(f"Error in create_or_update_tally_config: {str(e)}")
         import traceback
         traceback.print_exc()
         return Response({
@@ -430,7 +430,7 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
                 'grouped_ledgers': grouped_ledgers
             }
 
-            print(f"Retrieved {total_ledgers} ledgers for {parent_type} from {parent_ledgers.count()} parent ledgers")
+            logger.info(f"Retrieved {total_ledgers} ledgers for {parent_type} from {parent_ledgers.count()} parent ledgers")
             return Response(response_data, status=status.HTTP_200_OK)
 
         except TallyConfig.DoesNotExist:
@@ -439,7 +439,7 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         except Exception as e:
-            print(f"Error retrieving ledgers by parent type: {str(e)}")
+            logger.error(f"Error retrieving ledgers by parent type: {str(e)}")
             return Response(
                 {'error': f'Error retrieving ledgers: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -478,26 +478,25 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
         if not organization:
             return ParentLedger.objects.none()
             
-        print(f"Getting ParentLedgers for organization: {organization.name} (ID: {organization.id})")
+        logger.info(f"Getting ParentLedgers for organization: {organization.name} (ID: {organization.id})")
         
         queryset = ParentLedger.objects.filter(organization=organization).order_by('parent')
-        print(f"Returning {queryset.count()} ParentLedgers")
+        logger.info(f"Returning {queryset.count()} ParentLedgers")
         return queryset
    
 
     def dispatch(self, request, *args, **kwargs):
         """Intercept all incoming calls for logging and debugging"""
         # Log the incoming request
-        print(f"LedgerViewSet - {request.method} {request.get_full_path()}")
-        print(f"Request Headers: {dict(request.headers)}")
-        print(f"Request Data: {request.data if hasattr(request, 'data') else 'No data'}")
+        logger.info(f"LedgerViewSet - {request.method} {request.get_full_path()}")
+        logger.info(f"Request Data: {request.data if hasattr(request, 'data') else 'No data'}")
 
         # Get organization info for debugging
         try:
             org = self.get_organization()
-            print(f"Organization: {org.name if org else 'None'} (ID: {org.id if org else 'None'})")
+            logger.info(f"Organization: {org.name if org else 'None'} (ID: {org.id if org else 'None'})")
         except Exception as e:
-            print(f"Error getting organization: {str(e)}")
+            logger.error(f"Error getting organization: {str(e)}")
 
         return super().dispatch(request, *args, **kwargs)
 
@@ -639,7 +638,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
                 'grouped_ledgers': grouped_ledgers
             }
 
-            print(f"Retrieved {total_ledgers} ledgers for {parent_type} from {parent_ledgers.count()} parent ledgers")
+            logger.info(f"Retrieved {total_ledgers} ledgers for {parent_type} from {parent_ledgers.count()} parent ledgers")
             return Response(response_data, status=status.HTTP_200_OK)
 
         except TallyConfig.DoesNotExist:
@@ -648,7 +647,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         except Exception as e:
-            print(f"Error retrieving ledgers by parent type: {str(e)}")
+            logger.error(f"Error retrieving ledgers by parent type: {str(e)}")
             return Response(
                 {'error': f'Error retrieving ledgers: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -659,7 +658,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
         description="Get all Tally configurations for the organization",
     )
     def list(self, request, *args, **kwargs):
-        print(f"LedgerViewSet.list called for org: {self.get_organization()}")
+        logger.info(f"LedgerViewSet.list called for org: {self.get_organization()}")
         return super().list(request, *args, **kwargs)
 
     @extend_schema(
@@ -667,9 +666,9 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
         description="Create a new Tally configuration for mapping parent ledgers to different GST types and categories. Accepts bulk data ingestion.",
     )
     def create(self, request, *args, **kwargs):
-        print(f"LedgerViewSet.create called with data: {request.data}")
+        logger.info(f"LedgerViewSet.create called with data: {request.data}")
         organization = self.get_organization()
-        print(f"Creating TallyConfig for organization: {organization}")
+        logger.info(f"Creating TallyConfig for organization: {organization}")
 
         # Handle bulk creation if data is a list
         if isinstance(request.data, list):
@@ -682,19 +681,19 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
                     if serializer.is_valid():
                         config = serializer.save(organization=organization)
                         created_configs.append(serializer.data)
-                        print(f"Created config: {config.id}")
+                        logger.info(f"Created config: {config.id}")
                     else:
                         errors.append({
                             'data': config_data,
                             'errors': serializer.errors
                         })
-                        print(f"Validation errors for config: {serializer.errors}")
+                        logger.error(f"Validation errors for config: {serializer.errors}")
                 except Exception as e:
                     errors.append({
                         'data': config_data,
                         'error': str(e)
                     })
-                    print(f"Error creating config: {str(e)}")
+                    logger.error(f"Error creating config: {str(e)}")
 
             response_data = {
                 'created': created_configs,
@@ -717,7 +716,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def retrieve(self, request, *args, **kwargs):
         config_id = kwargs.get('pk')
-        print(f"LedgerViewSet.retrieve called for config ID: {config_id}")
+        logger.info(f"LedgerViewSet.retrieve called for config ID: {config_id}")
         return super().retrieve(request, *args, **kwargs)
 
     @extend_schema(
@@ -726,7 +725,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def update(self, request, *args, **kwargs):
         config_id = kwargs.get('pk')
-        print(f"LedgerViewSet.update called for config ID: {config_id} with data: {request.data}")
+        logger.info(f"LedgerViewSet.update called for config ID: {config_id} with data: {request.data}")
         return super().update(request, *args, **kwargs)
 
     @extend_schema(
@@ -735,7 +734,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def partial_update(self, request, *args, **kwargs):
         config_id = kwargs.get('pk')
-        print(f"LedgerViewSet.partial_update called for config ID: {config_id} with data: {request.data}")
+        logger.info(f"LedgerViewSet.partial_update called for config ID: {config_id} with data: {request.data}")
         return super().partial_update(request, *args, **kwargs)
 
     @extend_schema(
@@ -744,7 +743,7 @@ class ParentLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def destroy(self, request, *args, **kwargs):
         config_id = kwargs.get('pk')
-        print(f"LedgerViewSet.destroy called for config ID: {config_id}")
+        logger.info(f"LedgerViewSet.destroy called for config ID: {config_id}")
         return super().destroy(request, *args, **kwargs)
 
 
@@ -774,7 +773,7 @@ class LedgerViewSet(viewsets.GenericViewSet):
             try:
                 return Organization.objects.get(id=org_id)
             except Organization.DoesNotExist:
-                print(f"Organization with ID {org_id} not found")
+                logger.warning(f"Organization with ID {org_id} not found")
                 return None
 
         # If using API key, get organization from API key (optional for testing)
@@ -796,22 +795,21 @@ class LedgerViewSet(viewsets.GenericViewSet):
             if membership:
                 return membership.organization
 
-        print("No organization found, operating in test mode")
+        logger.debug("No organization found, operating in test mode")
         return None
 
     def dispatch(self, request, *args, **kwargs):
         """Intercept all incoming calls for logging and debugging"""
         # Log the incoming request
-        print(f"LedgerViewSet - {request.method} {request.get_full_path()}")
-        print(f"Request Headers: {dict(request.headers)}")
-        print(f"Request Data: {request.data if hasattr(request, 'data') else 'No data'}")
+        logger.info(f"LedgerViewSet - {request.method} {request.get_full_path()}")
+        logger.info(f"Request Data: {request.data if hasattr(request, 'data') else 'No data'}")
 
         # Get organization info for debugging
         try:
             org = self.get_organization()
-            print(f"Organization: {org.name if org else 'TEST MODE - No Org'} (ID: {org.id if org else 'None'})")
+            logger.info(f"Organization: {org.name if org else 'TEST MODE - No Org'} (ID: {org.id if org else 'None'})")
         except Exception as e:
-            print(f"Error getting organization: {str(e)}")
+            logger.error(f"Error getting organization: {str(e)}")
 
         return super().dispatch(request, *args, **kwargs)
 
@@ -822,9 +820,9 @@ class LedgerViewSet(viewsets.GenericViewSet):
     )
     def list(self, request, *args, **kwargs):
         """List all ledgers for the organization grouped by parent ledger"""
-        print(f"LedgerViewSet.list called - TEST MODE")
+        logger.info(f"LedgerViewSet.list called - TEST MODE")
         queryset = self.get_queryset()
-        print(f"Found {queryset.count()} ledgers")
+        logger.debug(f"Found {queryset.count()} ledgers")
 
         # Group ledgers by parent ledger
         grouped_ledgers = {}
@@ -865,7 +863,7 @@ class LedgerViewSet(viewsets.GenericViewSet):
             "grouped_ledgers": grouped_ledgers
         }
 
-        print(f"Grouped into {len(grouped_ledgers)} parent categories")
+        logger.info(f"Grouped into {len(grouped_ledgers)} parent categories")
         return Response(response_data)
 
     @extend_schema(
@@ -881,25 +879,25 @@ class LedgerViewSet(viewsets.GenericViewSet):
         """
         # Print the full request URL for debugging
         full_url = request.build_absolute_uri()
-        print(f"Full Request URL: {full_url}")
-        print(f"LedgerViewSet.create called - TEST MODE")
-        print(f"Raw request data type: {type(request.data)}")
-        print(f"Raw request data keys: {list(request.data.keys()) if hasattr(request.data, 'keys') else 'No keys'}")
+        logger.info(f"Full Request URL: {full_url}")
+        logger.info(f"LedgerViewSet.create called - TEST MODE")
+        logger.debug(f"Raw request data type: {type(request.data)}")
+        logger.debug(f"Raw request data keys: {list(request.data.keys()) if hasattr(request.data, 'keys') else 'No keys'}")
 
         organization = self.get_organization()
         if not organization:
-            print("No organization found, using first available organization")
+            logger.debug("No organization found, using first available organization")
             try:
                 organization = Organization.objects.first()
                 if not organization:
-                    print("No organizations exist, this might cause issues")
+                    logger.info("No organizations exist, this might cause issues")
                     return Response(
                         {'error': 'No organization available for testing. Please create an organization first.'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
-                print(f"Using organization: {organization.name} (ID: {organization.id})")
+                logger.info(f"Using organization: {organization.name} (ID: {organization.id})")
             except Exception as e:
-                print(f"Error getting organization: {str(e)}")
+                logger.error(f"Error getting organization: {str(e)}")
                 return Response(
                     {'error': 'Could not determine organization for testing'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -916,13 +914,13 @@ class LedgerViewSet(viewsets.GenericViewSet):
         ledger_data = None
         if isinstance(request.data, dict):
             ledger_data = request.data.get("LEDGER", [])
-            print(f"Found LEDGER key with {len(ledger_data)} entries")
+            logger.debug(f"Found LEDGER key with {len(ledger_data)} entries")
         elif isinstance(request.data, list):
             # If the data is directly a list, assume it's the ledger data
             ledger_data = request.data
-            print(f"Data is directly a list with {len(ledger_data)} entries")
+            logger.info(f"Data is directly a list with {len(ledger_data)} entries")
         else:
-            print(f"Unexpected data format: {type(request.data)}")
+            logger.info(f"Unexpected data format: {type(request.data)}")
             return Response(
                 {'error': 'Invalid data format. Expected object with LEDGER key or array of ledgers.'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -934,7 +932,7 @@ class LedgerViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        print(f"Processing {len(ledger_data)} ledger entries")
+        logger.debug(f"Processing {len(ledger_data)} ledger entries")
         created_ledgers = []
         failed_ledgers = []
 
@@ -942,7 +940,7 @@ class LedgerViewSet(viewsets.GenericViewSet):
             with transaction.atomic():
                 for i, ledger_entry in enumerate(ledger_data):
                     try:
-                        print(f"Processing ledger {i+1}: {ledger_entry.get('Name', 'Unknown')} with parent: {ledger_entry.get('Parent', 'Unknown')}")
+                        logger.debug(f"Processing ledger {i+1}: {ledger_entry.get('Name', 'Unknown')} with parent: {ledger_entry.get('Parent', 'Unknown')}")
 
                         parent_name = ledger_entry.get('Parent', '').strip()
                         if not parent_name:
@@ -954,7 +952,7 @@ class LedgerViewSet(viewsets.GenericViewSet):
                             organization=organization
                         )
                         if created:
-                            print(f"Created new parent ledger: {parent_name}")
+                            logger.info(f"Created new parent ledger: {parent_name}")
 
                         # Clean and convert opening balance
                         opening_balance_str = str(ledger_entry.get('OpeningBalance', '0')).strip()
@@ -971,7 +969,7 @@ class LedgerViewSet(viewsets.GenericViewSet):
                             ).first()
 
                             if existing_ledger:
-                                print(f"Skipping duplicate ledger: master_id '{master_id}' already exists for organization '{organization.name}' (existing ledger: '{existing_ledger.name}')")
+                                logger.warning(f"Skipping duplicate ledger: master_id '{master_id}' already exists for organization '{organization.name}' (existing ledger: '{existing_ledger.name}')")
                                 failed_ledgers.append({
                                     'index': i+1,
                                     'name': ledger_entry.get('Name', 'Unknown'),
@@ -1007,10 +1005,10 @@ class LedgerViewSet(viewsets.GenericViewSet):
                             'company': ledger_instance.company
                         })
 
-                        print(f"Successfully created ledger: {ledger_instance.name}")
+                        logger.info(f"Successfully created ledger: {ledger_instance.name}")
 
                     except Exception as ledger_error:
-                        print(f"Error creating individual ledger {i+1}: {str(ledger_error)}")
+                        logger.error(f"Error creating individual ledger {i+1}: {str(ledger_error)}")
                         failed_ledgers.append({
                             'index': i+1,
                             'name': ledger_entry.get('Name', 'Unknown'),
@@ -1020,8 +1018,8 @@ class LedgerViewSet(viewsets.GenericViewSet):
                         # Continue processing other ledgers instead of failing the entire transaction
                         continue
 
-            print(f"Successfully created {len(created_ledgers)} ledgers")
-            print(f"Failed to create {len(failed_ledgers)} ledgers")
+            logger.info(f"Successfully created {len(created_ledgers)} ledgers")
+            logger.error(f"Failed to create {len(failed_ledgers)} ledgers")
 
             # Return detailed response
             response_data = {
@@ -1038,7 +1036,7 @@ class LedgerViewSet(viewsets.GenericViewSet):
                 return Response(response_data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
-            print(f"Error in bulk creation transaction: {str(e)}")
+            logger.error(f"Error in bulk creation transaction: {str(e)}")
             return Response({
                 'error': f'Bulk creation failed: {str(e)}',
                 'created_count': len(created_ledgers),
@@ -1063,7 +1061,7 @@ class MasterAPIView(APIView):
             try:
                 return Organization.objects.get(id=org_id)
             except Organization.DoesNotExist:
-                print(f"Organization with ID {org_id} not found")
+                logger.warning(f"Organization with ID {org_id} not found")
                 return None
 
         # If using API key, get organization from API key (optional for testing)
@@ -1085,22 +1083,21 @@ class MasterAPIView(APIView):
             if membership:
                 return membership.organization
 
-        print("No organization found, operating in test mode")
+        logger.debug("No organization found, operating in test mode")
         return None
 
     def dispatch(self, request, *args, **kwargs):
         """Intercept all incoming calls for logging and debugging"""
         # Log the incoming request
-        print(f"MasterAPIView - {request.method} {request.get_full_path()}")
-        print(f"Request Headers: {dict(request.headers)}")
-        print(f"Request Data: {request.data if hasattr(request, 'data') else 'No data'}")
+        logger.info(f"MasterAPIView - {request.method} {request.get_full_path()}")
+        logger.info(f"Request Data: {request.data if hasattr(request, 'data') else 'No data'}")
 
         # Get organization info for debugging
         try:
             org = self.get_organization()
-            print(f"Organization: {org.name if org else 'TEST MODE - No Org'} (ID: {org.id if org else 'None'})")
+            logger.info(f"Organization: {org.name if org else 'TEST MODE - No Org'} (ID: {org.id if org else 'None'})")
         except Exception as e:
-            print(f"Error getting organization: {str(e)}")
+            logger.error(f"Error getting organization: {str(e)}")
 
         return super().dispatch(request, *args, **kwargs)
 
@@ -1156,7 +1153,7 @@ class MasterAPIView(APIView):
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
-            print(f"Error in MasterAPIView GET: {str(e)}")
+            logger.error(f"Error in MasterAPIView GET: {str(e)}")
             return Response({
                 'success': False,
                 'error': f'Failed to retrieve data: {str(e)}'
@@ -1176,41 +1173,41 @@ class MasterAPIView(APIView):
             # Get organization
             organization = self.get_organization()
             if not organization:
-                print("No organization found, using first available organization")
+                logger.debug("No organization found, using first available organization")
                 try:
                     organization = Organization.objects.first()
                     if not organization:
-                        print("No organizations exist, this might cause issues")
+                        logger.info("No organizations exist, this might cause issues")
                         # Continue without organization for testing
                         organization = None
                     else:
-                        print(f"Using organization: {organization.name} (ID: {organization.id})")
+                        logger.info(f"Using organization: {organization.name} (ID: {organization.id})")
                 except Exception as e:
-                    print(f"Error getting organization: {str(e)}")
+                    logger.error(f"Error getting organization: {str(e)}")
                     organization = None
 
             # Get raw request body
             raw_data = request.body.decode('utf-8')
 
             # Log incoming request details
-            print(f"MasterAPIView - POST request received")
-            print(f"Organization: {organization.name if organization else 'TEST MODE'}")
-            print(f"Raw Data Length: {len(raw_data)} characters")
+            logger.info(f"MasterAPIView - POST request received")
+            logger.info(f"Organization: {organization.name if organization else 'TEST MODE'}")
+            logger.debug(f"Raw Data Length: {len(raw_data)} characters")
 
             # Parse JSON data for processing
             try:
                 import json
                 parsed_data = json.loads(raw_data) if raw_data else {}
                 data_keys = list(parsed_data.keys()) if isinstance(parsed_data, dict) else []
-                print(f"JSON Data Keys: {data_keys}")
+                logger.info(f"JSON Data Keys: {data_keys}")
 
                 # Log data structure info
                 if isinstance(parsed_data, dict):
-                    print(f"Data structure: Dictionary with {len(parsed_data)} keys")
+                    logger.info(f"Data structure: Dictionary with {len(parsed_data)} keys")
                 elif isinstance(parsed_data, list):
-                    print(f"Data structure: Array with {len(parsed_data)} items")
+                    logger.info(f"Data structure: Array with {len(parsed_data)} items")
                 else:
-                    print(f"Data structure: {type(parsed_data)}")
+                    logger.info(f"Data structure: {type(parsed_data)}")
 
                 # Process STOCKITEM data if present
                 stockitem_processing_result = None
@@ -1218,13 +1215,13 @@ class MasterAPIView(APIView):
                     stockitem_processing_result = self.process_stockitem_data(parsed_data['STOCKITEM'], organization)
 
             except json.JSONDecodeError:
-                print("Raw data is not valid JSON")
+                logger.debug("Raw data is not valid JSON")
                 return Response({
                     'error': 'Invalid JSON data provided',
                     'success': False
                 }, status=status.HTTP_400_BAD_REQUEST)
             except Exception as e:
-                print(f"Error parsing data: {str(e)}")
+                logger.error(f"Error parsing data: {str(e)}")
                 return Response({
                     'error': f'Error processing data: {str(e)}',
                     'success': False
@@ -1249,7 +1246,7 @@ class MasterAPIView(APIView):
             return Response(response_data, status=status.HTTP_200_OK)
 
         except Exception as e:
-            print(f"Error in MasterAPIView: {str(e)}")
+            logger.error(f"Error in MasterAPIView: {str(e)}")
             return Response({
                 'error': f'Failed to process incoming data: {str(e)}',
                 'success': False
@@ -1271,13 +1268,13 @@ class MasterAPIView(APIView):
             }
 
         if not organization:
-            print("No organization available for STOCKITEM processing")
+            logger.debug("No organization available for STOCKITEM processing")
             return {
                 'success': False,
                 'error': 'No organization available for processing'
             }
 
-        print(f"Processing {len(stockitem_data)} STOCKITEM entries")
+        logger.debug(f"Processing {len(stockitem_data)} STOCKITEM entries")
         created_items = []
         failed_items = []
         updated_items = []
@@ -1286,7 +1283,7 @@ class MasterAPIView(APIView):
             with transaction.atomic():
                 for i, item_entry in enumerate(stockitem_data):
                     try:
-                        print(f"Processing stock item {i+1}: {item_entry.get('Name', 'Unknown')}")
+                        logger.debug(f"Processing stock item {i+1}: {item_entry.get('Name', 'Unknown')}")
 
                         # Clean the company field (remove extra whitespace and newlines)
                         company = item_entry.get('Company', '').strip().replace('\r\n', '').replace('\n', '')
@@ -1336,13 +1333,13 @@ class MasterAPIView(APIView):
 
                         if created:
                             created_items.append(item_response)
-                            print(f"Successfully created stock item: {stock_item.name}")
+                            logger.info(f"Successfully created stock item: {stock_item.name}")
                         else:
                             updated_items.append(item_response)
-                            print(f"Successfully updated stock item: {stock_item.name}")
+                            logger.info(f"Successfully updated stock item: {stock_item.name}")
 
                     except Exception as item_error:
-                        print(f"Error processing stock item {i+1}: {str(item_error)}")
+                        logger.error(f"Error processing stock item {i+1}: {str(item_error)}")
                         failed_items.append({
                             'index': i+1,
                             'name': item_entry.get('Name', 'Unknown'),
@@ -1352,9 +1349,9 @@ class MasterAPIView(APIView):
                         # Continue processing other items instead of failing the entire transaction
                         continue
 
-            print(f"Successfully created {len(created_items)} stock items")
-            print(f"Successfully updated {len(updated_items)} stock items")
-            print(f"Failed to process {len(failed_items)} stock items")
+            logger.info(f"Successfully created {len(created_items)} stock items")
+            logger.info(f"Successfully updated {len(updated_items)} stock items")
+            logger.error(f"Failed to process {len(failed_items)} stock items")
 
             # Return detailed response
             return {
@@ -1369,7 +1366,7 @@ class MasterAPIView(APIView):
             }
 
         except Exception as e:
-            print(f"Error in STOCKITEM bulk processing transaction: {str(e)}")
+            logger.error(f"Error in STOCKITEM bulk processing transaction: {str(e)}")
             return {
                 'success': False,
                 'error': f'STOCKITEM bulk processing failed: {str(e)}',
@@ -1397,7 +1394,7 @@ def clean_decimal_value(value_str):
         return f"{float_val:.2f}"
 
     except (ValueError, TypeError) as e:
-        print(f"Error cleaning decimal value '{value_str}': {str(e)}")
+        logger.error(f"Error cleaning decimal value '{value_str}': {str(e)}")
         return '0.00'
 
 
@@ -1446,6 +1443,10 @@ def clean_decimal_value(value_str):
         }
     }
 )
+import logging
+
+logger = logging.getLogger(__name__)
+
 @api_view(['POST'])
 @permission_classes([OrganizationAPIKeyOrBearerToken])
 def update_bill_tally_sync_status(request, org_id):

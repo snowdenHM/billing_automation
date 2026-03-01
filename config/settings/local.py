@@ -23,7 +23,7 @@ CSRF_TRUSTED_ORIGINS = [
 
 # Faster passwords in dev
 PASSWORD_HASHERS = [
-    "django.contrib.auth.hashers.MD5PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
 ]
 
 # DRF browsable API helpful in local

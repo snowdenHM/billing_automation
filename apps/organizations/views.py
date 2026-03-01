@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.db import models
 from django.contrib.auth.hashers import make_password
+from django.utils.crypto import get_random_string
 from datetime import datetime
 from rest_framework import status
 from rest_framework.response import Response
@@ -166,9 +167,9 @@ def organization_invite_user_view(request, org_id):
         user_to_add = User.objects.get(email=user_email)
         user_created = False
     except User.DoesNotExist:
-        # Create new user with default password
-        current_year = datetime.now().year
-        default_password = f"Bill@{current_year}"
+        # Create new user with a random secure password
+        # User will need to use "forgot password" to set their own
+        default_password = get_random_string(length=20)
         
         # Use first name or email prefix as fallback
         if not first_name:

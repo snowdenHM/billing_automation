@@ -1449,9 +1449,9 @@ def vendor_bill_upload_view(request, org_id):
     files_data = []
 
     # Debug logging with prints (will show in gunicorn logs)
-    print(f"[VENDOR DEBUG] Request data keys: {list(request.data.keys())}")
-    print(f"[VENDOR DEBUG] 'files' in request.data: {'files' in request.data}")
-    print(f"[VENDOR DEBUG] 'file' in request.data: {'file' in request.data}")
+    logger.debug(f"[VENDOR DEBUG] Request data keys: {list(request.data.keys())}")
+    logger.debug(f"[VENDOR DEBUG] 'files' in request.data: {'files' in request.data}")
+    logger.debug(f"[VENDOR DEBUG] 'file' in request.data: {'file' in request.data}")
 
     # Check if files are provided as a list (multiple files)
     if 'files' in request.data:
@@ -1459,19 +1459,19 @@ def vendor_bill_upload_view(request, org_id):
         # Ensure files_data is always a list
         if not isinstance(files_data, list):
             files_data = [files_data] if files_data else []
-        print(f"[VENDOR DEBUG] Found 'files' field with {len(files_data)} file(s)")
+        logger.debug(f"[VENDOR DEBUG] Found 'files' field with {len(files_data)} file(s)")
     # Check if a single file is provided
     elif 'file' in request.data:
         single_file = request.data.get('file')
         if single_file:
             files_data = [single_file]
-        print(f"[VENDOR DEBUG] Found 'file' field with {len(files_data)} file(s)")
+        logger.debug(f"[VENDOR DEBUG] Found 'file' field with {len(files_data)} file(s)")
 
-    print(f"[VENDOR DEBUG] Total files collected: {len(files_data)}")
+    logger.debug(f"[VENDOR DEBUG] Total files collected: {len(files_data)}")
 
     # Debug: Print details about each file
     for i, f in enumerate(files_data):
-        print(f"[VENDOR DEBUG] File {i+1}: {getattr(f, 'name', 'Unknown')} - Size: {getattr(f, 'size', 'Unknown')}")
+        logger.debug(f"[VENDOR DEBUG] File {i+1}: {getattr(f, 'name', 'Unknown')} - Size: {getattr(f, 'size', 'Unknown')}")
 
     # Prepare data for serializer validation
     serializer_data = {
@@ -1479,7 +1479,7 @@ def vendor_bill_upload_view(request, org_id):
         'fileType': request.data.get('fileType', 'Single Invoice/File')
     }
 
-    print(f"[VENDOR DEBUG] Serializer data: files count = {len(serializer_data['files'])}, fileType = {serializer_data['fileType']}")
+    logger.debug(f"[VENDOR DEBUG] Serializer data: files count = {len(serializer_data['files'])}, fileType = {serializer_data['fileType']}")
 
     serializer = ZohoVendorBillMultipleUploadSerializer(data=serializer_data)
     if not serializer.is_valid():
@@ -1500,7 +1500,7 @@ def vendor_bill_upload_view(request, org_id):
     file_type = serializer.validated_data['fileType']
     created_bills = []
 
-    print(f"[VENDOR DEBUG] After serializer validation - files count: {len(files)}, fileType: {file_type}")
+    logger.debug(f"[VENDOR DEBUG] After serializer validation - files count: {len(files)}, fileType: {file_type}")
 
     if not files:
         return Response({
@@ -1511,13 +1511,13 @@ def vendor_bill_upload_view(request, org_id):
     try:
         # Temporarily removing atomic transaction to debug
         # with transaction.atomic():
-        print(f"[VENDOR DEBUG] Starting to process {len(files)} files")
+        logger.debug(f"[VENDOR DEBUG] Starting to process {len(files)} files")
 
         # Check for potential duplicates based on file characteristics
         upload_warnings = []
 
         for i, uploaded_file in enumerate(files):
-                print(f"[VENDOR DEBUG] Processing file {i+1}/{len(files)}: {uploaded_file.name}")
+                logger.debug(f"[VENDOR DEBUG] Processing file {i+1}/{len(files)}: {uploaded_file.name}")
                 file_extension = uploaded_file.name.lower().split('.')[-1]
 
                 # Check for potential file-level duplicates (same name, similar size)
@@ -1566,7 +1566,7 @@ def vendor_bill_upload_view(request, org_id):
 
                             except (FileNotFoundError, OSError) as e:
                                 # Handle file access errors gracefully
-                                print(f"[VENDOR DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {str(e)}")
+                                logger.error(f"[VENDOR DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {str(e)}")
                                 continue
 
                 if potential_duplicate_files:
@@ -1588,15 +1588,15 @@ def vendor_bill_upload_view(request, org_id):
                 if (file_type == 'Multiple Invoice/File' and
                         file_extension == 'pdf'):
 
-                    print(f"[VENDOR DEBUG] Processing as PDF split for file: {uploaded_file.name}")
+                    logger.debug(f"[VENDOR DEBUG] Processing as PDF split for file: {uploaded_file.name}")
                     pdf_bills = process_pdf_splitting_vendor(
                         uploaded_file, organization, file_type, request.user
                     )
-                    print(f"[VENDOR DEBUG] PDF splitting created {len(pdf_bills)} bills")
+                    logger.debug(f"[VENDOR DEBUG] PDF splitting created {len(pdf_bills)} bills")
                     created_bills.extend(pdf_bills)
                 else:
                     # Create single bill (including PDFs for single invoice type)
-                    print(f"[VENDOR DEBUG] Creating single bill for file: {uploaded_file.name}")
+                    logger.debug(f"[VENDOR DEBUG] Creating single bill for file: {uploaded_file.name}")
                     bill = VendorBill.objects.create(
                         file=uploaded_file,
                         fileType=file_type,
@@ -1604,17 +1604,17 @@ def vendor_bill_upload_view(request, org_id):
                         uploaded_by=request.user,
                         status='Draft'
                     )
-                    print(f"[VENDOR DEBUG] Created bill: {bill.billmunshiName} (ID: {bill.id})")
+                    logger.debug(f"[VENDOR DEBUG] Created bill: {bill.billmunshiName} (ID: {bill.id})")
                     created_bills.append(bill)
 
-        print(f"[VENDOR DEBUG] Completed processing all files. Total bills created: {len(created_bills)}")
+        logger.debug(f"[VENDOR DEBUG] Completed processing all files. Total bills created: {len(created_bills)}")
 
         # Auto-analyze uploaded bills and check for duplicates
         analysis_results = []
         all_duplicate_warnings = []
 
         for i, bill in enumerate(created_bills):
-            print(f"[VENDOR DEBUG] Bill {i+1}: {bill.billmunshiName} (ID: {bill.id})")
+            logger.debug(f"[VENDOR DEBUG] Bill {i+1}: {bill.billmunshiName} (ID: {bill.id})")
 
             # Auto-analyze the bill if it's in Draft status
             if bill.status == 'Draft':
@@ -1623,7 +1623,7 @@ def vendor_bill_upload_view(request, org_id):
                     bill.processing_error = ""
                     bill.save(update_fields=['is_processing', 'processing_error'])
 
-                    print(f"[VENDOR DEBUG] Auto-analyzing bill: {bill.billmunshiName}")
+                    logger.debug(f"[VENDOR DEBUG] Auto-analyzing bill: {bill.billmunshiName}")
 
                     # Read and analyze file content
                     bill.file.seek(0)
@@ -1679,7 +1679,7 @@ def vendor_bill_upload_view(request, org_id):
                         logger.warning(f"Duplicate detected for {bill.billmunshiName} - {len(duplicate_bills)} similar bills found")
 
                     analysis_results.append(analysis_result)
-                    print(f"[VENDOR DEBUG] Successfully analyzed bill: {bill.billmunshiName}")
+                    logger.debug(f"[VENDOR DEBUG] Successfully analyzed bill: {bill.billmunshiName}")
 
                 except Exception as analysis_error:
                     logger.error(f"Auto-analysis failed for bill {bill.billmunshiName}: {str(analysis_error)}")

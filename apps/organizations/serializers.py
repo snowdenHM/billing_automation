@@ -198,7 +198,7 @@ class OrgMembershipSerializer(serializers.ModelSerializer):
             )
         except Exception as e:
             # Log the error but don't fail the user creation
-            print(f"Failed to send welcome email to {user.email}: {str(e)}")
+            logger.error(f"Failed to send welcome email to {user.email}: {str(e)}")
 
     def _send_organization_invite_email(self, membership):
         """Send organization invitation email"""
@@ -226,7 +226,7 @@ class OrgMembershipSerializer(serializers.ModelSerializer):
             )
         except Exception as e:
             # Log the error but don't fail the membership creation
-            print(f"Failed to send organization invite email to {membership.user.email}: {str(e)}")
+            logger.error(f"Failed to send organization invite email to {membership.user.email}: {str(e)}")
 
 
 class APIKeyIssueSerializer(serializers.Serializer):
@@ -292,6 +292,10 @@ class OrganizationModuleSerializer(serializers.ModelSerializer):
         obj, created = OrganizationModule.objects.get_or_create(
             organization=org, module=mod, defaults={"is_enabled": is_enabled}
         )
+import logging
+
+logger = logging.getLogger(__name__)
+
         if not created and obj.is_enabled != is_enabled:
             obj.is_enabled = is_enabled
             obj.save(update_fields=["is_enabled"])

@@ -984,9 +984,9 @@ def expense_bill_upload_view(request, org_id):
     files_data = []
 
     # Debug logging with prints (will show in gunicorn logs)
-    print(f"[Expense DEBUG] Request data keys: {list(request.data.keys())}")
-    print(f"[Expense DEBUG] 'files' in request.data: {'files' in request.data}")
-    print(f"[Expense DEBUG] 'file' in request.data: {'file' in request.data}")
+    logger.debug(f"[Expense DEBUG] Request data keys: {list(request.data.keys())}")
+    logger.debug(f"[Expense DEBUG] 'files' in request.data: {'files' in request.data}")
+    logger.debug(f"[Expense DEBUG] 'file' in request.data: {'file' in request.data}")
 
     # Check if files are provided as a list (multiple files)
     if 'files' in request.data:
@@ -995,19 +995,19 @@ def expense_bill_upload_view(request, org_id):
         # Ensure files_data is always a list
         if not isinstance(files_data, list):
             files_data = [files_data] if files_data else []
-        print(f"[Expense DEBUG] Found 'files' field with {len(files_data)} file(s)")
+        logger.debug(f"[Expense DEBUG] Found 'files' field with {len(files_data)} file(s)")
     # Check if a single file is provided
     elif 'file' in request.data:
         single_file = request.data.get('file')
         if single_file:
             files_data = [single_file]
-        print(f"[Expense DEBUG] Found 'file' field with {len(files_data)} file(s)")
+        logger.debug(f"[Expense DEBUG] Found 'file' field with {len(files_data)} file(s)")
 
-    print(f"[Expense DEBUG] Total files collected: {len(files_data)}")
+    logger.debug(f"[Expense DEBUG] Total files collected: {len(files_data)}")
 
     # Debug: Print details about each file
     for i, f in enumerate(files_data):
-        print(f"[journal DEBUG] File {i + 1}: {getattr(f, 'name', 'Unknown')} - Size: {getattr(f, 'size', 'Unknown')}")
+        logger.debug(f"[journal DEBUG] File {i + 1}: {getattr(f, 'name', 'Unknown')} - Size: {getattr(f, 'size', 'Unknown')}")
 
     # Prepare data for serializer validation
     serializer_data = {
@@ -1015,7 +1015,7 @@ def expense_bill_upload_view(request, org_id):
         'fileType': request.data.get('fileType', 'Single Invoice/File')
     }
 
-    print(
+    logger.info(
         f"[Expense DEBUG] Serializer data: files count = {len(serializer_data['files'])}, fileType = {serializer_data['fileType']}")
 
     serializer = ZohoExpenseBillMultipleUploadSerializer(data=serializer_data)
@@ -1033,7 +1033,7 @@ def expense_bill_upload_view(request, org_id):
     file_type = serializer.validated_data['fileType']
     created_bills = []
 
-    print(f"[Expense DEBUG] After serializer validation - files count: {len(files)}, fileType: {file_type}")
+    logger.debug(f"[Expense DEBUG] After serializer validation - files count: {len(files)}, fileType: {file_type}")
 
     if not files:
         return Response(
@@ -1044,13 +1044,13 @@ def expense_bill_upload_view(request, org_id):
     try:
         # Temporarily removing atomic transaction to debug
         # with transaction.atomic():
-        print(f"[Expense DEBUG] Starting to process {len(files)} files")
+        logger.debug(f"[Expense DEBUG] Starting to process {len(files)} files")
 
         # Check for potential duplicates based on file characteristics
         upload_warnings = []
 
         for i, uploaded_file in enumerate(files):
-            print(f"[Expense DEBUG] Processing file {i + 1}/{len(files)}: {uploaded_file.name}")
+            logger.debug(f"[Expense DEBUG] Processing file {i + 1}/{len(files)}: {uploaded_file.name}")
             file_extension = uploaded_file.name.lower().split('.')[-1]
 
             # Check for potential file-level duplicates (same name, similar size)
@@ -1099,7 +1099,7 @@ def expense_bill_upload_view(request, org_id):
 
                         except (FileNotFoundError, OSError) as e:
                             # Handle file access errors gracefully
-                            print(f"[EXPENSE DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {str(e)}")
+                            logger.error(f"[EXPENSE DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {str(e)}")
                             continue
 
             if potential_duplicate_files:
@@ -1119,16 +1119,16 @@ def expense_bill_upload_view(request, org_id):
 
             # Handle PDF splitting for multiple invoice files
             if file_type == 'Multiple Invoice/File' and file_extension == 'pdf':
-                print(f"[Expense DEBUG] Processing as PDF split for file: {uploaded_file.name}")
+                logger.debug(f"[Expense DEBUG] Processing as PDF split for file: {uploaded_file.name}")
                 pdf_bills = process_pdf_splitting_expense(
                     uploaded_file, organization, file_type, request.user
                 )
-                print(f"[Expense DEBUG] PDF splitting created {len(pdf_bills)} bills")
+                logger.debug(f"[Expense DEBUG] PDF splitting created {len(pdf_bills)} bills")
                 created_bills.extend(pdf_bills)
             else:
                 # Create single bill (including PDFs for single invoice type)
                 # Let the model generate billmunshiName automatically
-                print(f"[Expense DEBUG] Creating single bill for file: {uploaded_file.name}")
+                logger.debug(f"[Expense DEBUG] Creating single bill for file: {uploaded_file.name}")
                 bill = ExpenseBill.objects.create(
                     file=uploaded_file,
                     fileType=file_type,
@@ -1136,22 +1136,22 @@ def expense_bill_upload_view(request, org_id):
                     organization=organization,
                     uploaded_by=request.user
                 )
-                print(f"[Expense DEBUG] Created bill: {bill.billmunshiName} (ID: {bill.id})")
+                logger.debug(f"[Expense DEBUG] Created bill: {bill.billmunshiName} (ID: {bill.id})")
                 created_bills.append(bill)
 
-        print(f"[Expense DEBUG] Completed processing all files. Total bills created: {len(created_bills)}")
+        logger.debug(f"[Expense DEBUG] Completed processing all files. Total bills created: {len(created_bills)}")
 
         # Auto-analyze uploaded bills and check for duplicates
         analysis_results = []
         all_duplicate_warnings = []
 
         for i, bill in enumerate(created_bills):
-            print(f"[Expense DEBUG] Bill {i + 1}: {bill.billmunshiName} (ID: {bill.id})")
+            logger.debug(f"[Expense DEBUG] Bill {i + 1}: {bill.billmunshiName} (ID: {bill.id})")
 
             # Auto-analyze the bill if it's in Draft status
             if bill.status == 'Draft':
                 try:
-                    print(f"[Expense DEBUG] Auto-analyzing bill: {bill.billmunshiName}")
+                    logger.debug(f"[Expense DEBUG] Auto-analyzing bill: {bill.billmunshiName}")
 
                     # Read and analyze file content
                     bill.file.seek(0)
@@ -1206,7 +1206,7 @@ def expense_bill_upload_view(request, org_id):
                         logger.warning(f"Expense duplicate detected for {bill.billmunshiName} - {len(duplicate_bills)} similar bills found")
 
                     analysis_results.append(analysis_result)
-                    print(f"[Expense DEBUG] Successfully analyzed bill: {bill.billmunshiName}")
+                    logger.debug(f"[Expense DEBUG] Successfully analyzed bill: {bill.billmunshiName}")
 
                 except Exception as analysis_error:
                     logger.error(f"Auto-analysis failed for expense bill {bill.billmunshiName}: {str(analysis_error)}")
@@ -1748,7 +1748,7 @@ def expense_bill_sync_view(request, org_id, bill_id):
     """Sync verified expense bill to Zoho Books as an expense entry."""
     # Immediate logging to ensure function is called - using both ERROR and print
     logger.error(f"[EXPENSE SYNC] Starting expense sync for org_id: {org_id}, bill_id: {bill_id}")
-    print(f"[EXPENSE SYNC DEBUG] Function called - org_id: {org_id}, bill_id: {bill_id}")
+    logger.debug(f"[EXPENSE SYNC DEBUG] Function called - org_id: {org_id}, bill_id: {bill_id}")
 
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
@@ -1886,10 +1886,10 @@ def expense_bill_sync_view(request, org_id, bill_id):
         logger.error(f"[EXPENSE SYNC] GST Treatment: {zoho_bill.vendor.gst_treatment if zoho_bill.vendor else 'None'}")
         logger.error(f"[EXPENSE SYNC] GST Number: '{zoho_bill.vendor.gstNo if zoho_bill.vendor else 'None'}'")
 
-        print(f"[EXPENSE SYNC DEBUG] Bill ID: {bill_id}")
-        print(f"[EXPENSE SYNC DEBUG] Bill No: '{zoho_bill.bill_no}'")
-        print(f"[EXPENSE SYNC DEBUG] Account Name: '{account_name}'")
-        print(f"[EXPENSE SYNC DEBUG] GST Number: '{zoho_bill.vendor.gstNo if zoho_bill.vendor else 'None'}'")
+        logger.debug(f"[EXPENSE SYNC DEBUG] Bill ID: {bill_id}")
+        logger.debug(f"[EXPENSE SYNC DEBUG] Bill No: '{zoho_bill.bill_no}'")
+        logger.debug(f"[EXPENSE SYNC DEBUG] Account Name: '{account_name}'")
+        logger.debug(f"[EXPENSE SYNC DEBUG] GST Number: '{zoho_bill.vendor.gstNo if zoho_bill.vendor else 'None'}'")
 
         expense_data = {
             "paid_through_account_name": account_name,
@@ -1911,7 +1911,7 @@ def expense_bill_sync_view(request, org_id, bill_id):
 
         # Log the expense data before converting to JSON - using ERROR level to ensure visibility
         logger.error(f"[EXPENSE SYNC] Raw expense_data: {expense_data}")
-        print(f"[EXPENSE SYNC DEBUG] Raw expense_data: {expense_data}")
+        logger.debug(f"[EXPENSE SYNC DEBUG] Raw expense_data: {expense_data}")
 
         # Sync to Zoho Books as expense
         url = f"https://www.zohoapis.in/books/v3/expenses?organization_id={current_token.organisationId}"
@@ -1920,8 +1920,8 @@ def expense_bill_sync_view(request, org_id, bill_id):
         # Log the payload being sent to Zoho for debugging - using ERROR level to ensure visibility
         logger.error(f"[EXPENSE SYNC] Payload being sent to Zoho Books API: {payload}")
         logger.error(f"[EXPENSE SYNC] URL: {url}")
-        print(f"[EXPENSE SYNC DEBUG] Payload: {payload}")
-        print(f"[EXPENSE SYNC DEBUG] URL: {url}")
+        logger.debug(f"[EXPENSE SYNC DEBUG] Payload: {payload}")
+        logger.debug(f"[EXPENSE SYNC DEBUG] URL: {url}")
 
         headers = {
             'Authorization': f'Zoho-oauthtoken {current_token.accessToken}',

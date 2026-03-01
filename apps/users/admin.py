@@ -1,3 +1,4 @@
+import os
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
@@ -36,7 +37,7 @@ class UserAdmin(BaseUserAdmin):
 
     def reset_user_passwords(self, request, queryset):
         """Reset selected users' passwords to a default value."""
-        default_password = "Welcome@123"
+        default_password = os.environ.get('DEFAULT_RESET_PASSWORD', 'ChangeMeNow!1')
         count = 0
         for user in queryset:
             user.set_password(default_password)
@@ -45,7 +46,7 @@ class UserAdmin(BaseUserAdmin):
 
         self.message_user(
             request,
-            f"Successfully reset passwords for {count} users to: {default_password}",
+            f"Successfully reset passwords for {count} users.",
             messages.SUCCESS
         )
     reset_user_passwords.short_description = "Reset selected users' passwords to default"

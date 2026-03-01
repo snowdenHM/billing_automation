@@ -932,9 +932,9 @@ def journal_bill_upload_view(request, org_id):
     files_data = []
     
     # Debug logging with prints (will show in gunicorn logs)
-    print(f"[journal DEBUG] Request data keys: {list(request.data.keys())}")
-    print(f"[journal DEBUG] 'files' in request.data: {'files' in request.data}")
-    print(f"[journal DEBUG] 'file' in request.data: {'file' in request.data}")
+    logger.debug(f"[journal DEBUG] Request data keys: {list(request.data.keys())}")
+    logger.debug(f"[journal DEBUG] 'files' in request.data: {'files' in request.data}")
+    logger.debug(f"[journal DEBUG] 'file' in request.data: {'file' in request.data}")
     
     # Check if files are provided as a list (multiple files)
     if 'files' in request.data:
@@ -942,19 +942,19 @@ def journal_bill_upload_view(request, org_id):
         # Ensure files_data is always a list
         if not isinstance(files_data, list):
             files_data = [files_data] if files_data else []
-        print(f"[journal DEBUG] Found 'files' field with {len(files_data)} file(s)")
+        logger.debug(f"[journal DEBUG] Found 'files' field with {len(files_data)} file(s)")
     # Check if a single file is provided
     elif 'file' in request.data:
         single_file = request.data.get('file')
         if single_file:
             files_data = [single_file]
-        print(f"[journal DEBUG] Found 'file' field with {len(files_data)} file(s)")
+        logger.debug(f"[journal DEBUG] Found 'file' field with {len(files_data)} file(s)")
     
-    print(f"[journal DEBUG] Total files collected: {len(files_data)}")
+    logger.debug(f"[journal DEBUG] Total files collected: {len(files_data)}")
     
     # Debug: Print details about each file
     for i, f in enumerate(files_data):
-        print(f"[journal DEBUG] File {i+1}: {getattr(f, 'name', 'Unknown')} - Size: {getattr(f, 'size', 'Unknown')}")
+        logger.debug(f"[journal DEBUG] File {i+1}: {getattr(f, 'name', 'Unknown')} - Size: {getattr(f, 'size', 'Unknown')}")
     
     # Prepare data for serializer validation
     serializer_data = {
@@ -962,7 +962,7 @@ def journal_bill_upload_view(request, org_id):
         'fileType': request.data.get('fileType', 'Single Invoice/File')
     }
     
-    print(f"[journal DEBUG] Serializer data: files count = {len(serializer_data['files'])}, fileType = {serializer_data['fileType']}")
+    logger.debug(f"[journal DEBUG] Serializer data: files count = {len(serializer_data['files'])}, fileType = {serializer_data['fileType']}")
     
     serializer = ZohoJournalBillMultipleUploadSerializer(data=serializer_data)
     if not serializer.is_valid():
@@ -979,7 +979,7 @@ def journal_bill_upload_view(request, org_id):
     file_type = serializer.validated_data['fileType']
     created_bills = []
     
-    print(f"[journal DEBUG] After serializer validation - files count: {len(files)}, fileType: {file_type}")
+    logger.debug(f"[journal DEBUG] After serializer validation - files count: {len(files)}, fileType: {file_type}")
     
     if not files:
         return Response(
@@ -990,13 +990,13 @@ def journal_bill_upload_view(request, org_id):
     try:
         # Temporarily removing atomic transaction to debug
         # with transaction.atomic():
-        print(f"[journal DEBUG] Starting to process {len(files)} files")
+        logger.debug(f"[journal DEBUG] Starting to process {len(files)} files")
 
         # Check for potential duplicates based on file characteristics
         upload_warnings = []
 
         for i, uploaded_file in enumerate(files):
-                print(f"[journal DEBUG] Processing file {i+1}/{len(files)}: {uploaded_file.name}")
+                logger.debug(f"[journal DEBUG] Processing file {i+1}/{len(files)}: {uploaded_file.name}")
                 file_extension = uploaded_file.name.lower().split('.')[-1]
 
                 # Check for potential file-level duplicates (same name, similar size)
@@ -1045,7 +1045,7 @@ def journal_bill_upload_view(request, org_id):
 
                             except (FileNotFoundError, OSError) as e:
                                 # Handle file access errors gracefully
-                                print(f"[JOURNAL DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {str(e)}")
+                                logger.error(f"[JOURNAL DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {str(e)}")
                                 continue
 
                 if potential_duplicate_files:
@@ -1065,16 +1065,16 @@ def journal_bill_upload_view(request, org_id):
 
                 # Handle PDF splitting for multiple invoice files
                 if file_type == 'Multiple Invoice/File' and file_extension == 'pdf':
-                    print(f"[journal DEBUG] Processing as PDF split for file: {uploaded_file.name}")
+                    logger.debug(f"[journal DEBUG] Processing as PDF split for file: {uploaded_file.name}")
                     pdf_bills = process_pdf_splitting_journal(
                         uploaded_file, organization, file_type, request.user
                     )
-                    print(f"[journal DEBUG] PDF splitting created {len(pdf_bills)} bills")
+                    logger.debug(f"[journal DEBUG] PDF splitting created {len(pdf_bills)} bills")
                     created_bills.extend(pdf_bills)
                 else:
                     # Create single bill (including PDFs for single invoice type)
                     # Let the model generate billmunshiName automatically
-                    print(f"[journal DEBUG] Creating single bill for file: {uploaded_file.name}")
+                    logger.debug(f"[journal DEBUG] Creating single bill for file: {uploaded_file.name}")
                     bill = JournalBill.objects.create(
                         file=uploaded_file,
                         fileType=file_type,
@@ -1082,22 +1082,22 @@ def journal_bill_upload_view(request, org_id):
                         organization=organization,
                         uploaded_by=request.user
                     )
-                    print(f"[journal DEBUG] Created bill: {bill.billmunshiName} (ID: {bill.id})")
+                    logger.debug(f"[journal DEBUG] Created bill: {bill.billmunshiName} (ID: {bill.id})")
                     created_bills.append(bill)
         
-        print(f"[journal DEBUG] Completed processing all files. Total bills created: {len(created_bills)}")
+        logger.debug(f"[journal DEBUG] Completed processing all files. Total bills created: {len(created_bills)}")
 
         # Auto-analyze uploaded bills and check for duplicates
         analysis_results = []
         all_duplicate_warnings = []
 
         for i, bill in enumerate(created_bills):
-            print(f"[journal DEBUG] Bill {i+1}: {bill.billmunshiName} (ID: {bill.id})")
+            logger.debug(f"[journal DEBUG] Bill {i+1}: {bill.billmunshiName} (ID: {bill.id})")
 
             # Auto-analyze the bill if it's in Draft status
             if bill.status == 'Draft':
                 try:
-                    print(f"[journal DEBUG] Auto-analyzing bill: {bill.billmunshiName}")
+                    logger.debug(f"[journal DEBUG] Auto-analyzing bill: {bill.billmunshiName}")
 
                     # Read and analyze file content
                     bill.file.seek(0)
@@ -1152,7 +1152,7 @@ def journal_bill_upload_view(request, org_id):
                         logger.warning(f"Journal duplicate detected for {bill.billmunshiName} - {len(duplicate_bills)} similar bills found")
 
                     analysis_results.append(analysis_result)
-                    print(f"[journal DEBUG] Successfully analyzed bill: {bill.billmunshiName}")
+                    logger.debug(f"[journal DEBUG] Successfully analyzed bill: {bill.billmunshiName}")
 
                 except Exception as analysis_error:
                     logger.error(f"Auto-analysis failed for journal bill {bill.billmunshiName}: {str(analysis_error)}")

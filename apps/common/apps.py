@@ -10,6 +10,10 @@ class CommonConfig(AppConfig):
         try:
             # Import and apply the DRF model_meta patch
             from . import drf_patches
-            print("Applied DRF model_meta patch for ManyToMany field safety")
+import logging
+
+logger = logging.getLogger(__name__)
+
+            logger.info("Applied DRF model_meta patch for ManyToMany field safety")
         except ImportError as e:
-            print(f"Warning: Could not apply DRF patches: {e}")
+            logger.warning(f"Warning: Could not apply DRF patches: {e}")

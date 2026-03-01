@@ -1,10 +1,12 @@
 from rest_framework import serializers
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from drf_spectacular.utils import extend_schema_field
 from ..models import TallyExpenseBill, TallyExpenseAnalyzedBill, TallyExpenseAnalyzedProduct
 import logging
 
 logger = logging.getLogger(__name__)
+
+User = get_user_model()
 
 
 class UploadedByUserSerializer(serializers.ModelSerializer):

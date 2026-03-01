@@ -2,11 +2,13 @@ from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_field
 from typing import List, Dict, Any
 from decimal import Decimal, InvalidOperation
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from ..models import TallyVendorBill, TallyVendorAnalyzedBill, TallyVendorAnalyzedProduct, Ledger
 import logging
 
 logger = logging.getLogger(__name__)
+
+User = get_user_model()
 
 
 class SafeDecimalField(serializers.DecimalField):
