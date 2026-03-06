@@ -55,7 +55,7 @@ class BaseZohoBillListSerializer(serializers.ModelSerializer):
 
     class Meta:
         fields = [
-            "id", "billmunshiName", "file", "fileType", "status",
+            "id", "billmunshiName", "file", "fileType", "analysed_data", "status",
             "process", "uploaded_by", "uploaded_by_name", "created_at", "update_at",
             "is_duplicate", "duplicate_description", "duplicate_score", "duplicate_matched_bills",
             "is_processing", "processing_error", "job_id",
@@ -63,7 +63,7 @@ class BaseZohoBillListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id", "billmunshiName", "file", "uploaded_by", "uploaded_by_name",
-            "created_at", "update_at",
+            "analysed_data", "created_at", "update_at",
             "is_duplicate", "duplicate_description", "duplicate_score", "duplicate_matched_bills",
             "is_processing", "processing_error", "job_id",
             "bill_belong_your_org", "description",
