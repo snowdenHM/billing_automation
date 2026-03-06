@@ -48,8 +48,11 @@ def organization_create_with_module_view(request):
     if not org_name:
         return Response({"detail": "Organization name is required."}, status=status.HTTP_400_BAD_REQUEST)
 
+    gst_number = request.data.get("gst_number", "").strip()
+
     organization = Organization.objects.create(
         name=org_name,
+        gst_number=gst_number if gst_number else None,
         owner=request.user,
         created_by=request.user,
         status=Organization.ACTIVE,
