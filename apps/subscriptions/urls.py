@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     PlanViewSet,
     SubscriptionViewSet,
-    OrganizationSubscriptionView,
+    organization_subscription_view,
 )
 
 # Setup DRF routers
@@ -16,7 +16,7 @@ app_name = "subscriptions"
 urlpatterns = [
     # Organization subscription detail view (uses UUID)
     path("organizations/<uuid:org_id>/subscription/",
-         OrganizationSubscriptionView.as_view(),
+         organization_subscription_view,
          name="organization-subscription"),
 
     # Include router URLs

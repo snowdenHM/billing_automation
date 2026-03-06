@@ -292,9 +292,6 @@ class OrganizationModuleSerializer(serializers.ModelSerializer):
         obj, created = OrganizationModule.objects.get_or_create(
             organization=org, module=mod, defaults={"is_enabled": is_enabled}
         )
-import logging
-
-logger = logging.getLogger(__name__)
 
         if not created and obj.is_enabled != is_enabled:
             obj.is_enabled = is_enabled

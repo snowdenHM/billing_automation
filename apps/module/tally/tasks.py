@@ -1,308 +1,153 @@
 # apps/module/tally/tasks.py
 """
-Background tasks for Tally bill processing using Django-RQ
+Background tasks for Tally bill processing using Django-RQ.
+
+Heavy lifting is delegated to ``apps.common.services.tasks`` — this module
+only provides the thin Tally-specific orchestrators.
 """
 import logging
-import django_rq
+
 from rq import get_current_job
-from django.utils import timezone
-from .models import TallyVendorBill, TallyExpenseBill
+
+from apps.common.services.tasks import (
+    build_duplicate_metadata,
+    enqueue_bill_processing,
+    get_job_status,                   # re-exported for view imports
+    mark_processing_done,
+    mark_processing_error,
+    mark_processing_start,
+    update_bill_duplicate_fields,
+)
+
+from .models import TallyExpenseBill, TallyVendorBill
 
 logger = logging.getLogger(__name__)
 
+# Re-export so existing ``from ..tasks import get_job_status`` still works.
+__all__ = [
+    "enqueue_vendor_bill_processing",
+    "enqueue_expense_bill_processing",
+    "get_job_status",
+    "process_vendor_bill_analysis",
+    "process_expense_bill_analysis",
+    "process_multiple_bills",
+]
 
-# Helper functions for RQ job management
+
+# ---------------------------------------------------------------------------
+# Enqueue helpers
+# ---------------------------------------------------------------------------
+
 def enqueue_vendor_bill_processing(bill_id):
-    """
-    Enqueue a vendor bill for background processing
-    """
-    queue = django_rq.get_queue('default')
-    job = queue.enqueue(process_vendor_bill_analysis, bill_id, timeout=600)
-    logger.info(f"Enqueued vendor bill {bill_id} processing - Job ID: {job.id}")
-    return job
+    """Enqueue a vendor bill for background processing."""
+    return enqueue_bill_processing(process_vendor_bill_analysis, bill_id)
 
 
 def enqueue_expense_bill_processing(bill_id):
-    """
-    Enqueue an expense bill for background processing
-    """
-    queue = django_rq.get_queue('default')
-    job = queue.enqueue(process_expense_bill_analysis, bill_id, timeout=600)
-    logger.info(f"Enqueued expense bill {bill_id} processing - Job ID: {job.id}")
-    return job
+    """Enqueue an expense bill for background processing."""
+    return enqueue_bill_processing(process_expense_bill_analysis, bill_id)
 
 
-def get_job_status(job_id):
+# ---------------------------------------------------------------------------
+# Task processors
+# ---------------------------------------------------------------------------
+
+def _process_tally_bill(bill_id, *, model_class, get_functions, bill_type):
     """
-    Get the status of a background job
+    Generic task body for Tally bill analysis + duplicate check.
+
+    Parameters
+    ----------
+    model_class : TallyVendorBill or TallyExpenseBill
+    get_functions : callable returning (analyze_fn, duplicate_fn)
+    bill_type : str – 'vendor' or 'expense' (for logging)
     """
+    job = get_current_job()
     try:
-        import redis
-        from rq import Job
-        from django_rq import get_connection
-        
-        connection = get_connection('default')
-        job = Job.fetch(job_id, connection=connection)
-        
-        return {
-            'id': job.id,
-            'status': job.get_status(),
-            'result': job.result,
-            'exc_info': job.exc_info,
-            'created_at': job.created_at,
-            'started_at': job.started_at,
-            'ended_at': job.ended_at,
-        }
-    except Exception as e:
-        logger.error(f"Error fetching job {job_id}: {str(e)}")
-        return None
+        bill = model_class.objects.get(id=bill_id)
+        organization = bill.organization
+        mark_processing_start(bill)
+        logger.info("Starting background analysis for %s bill %s", bill_type, bill_id)
+
+        analyze_fn, duplicate_fn = get_functions()
+
+        # Step 1 — AI analysis
+        try:
+            analyze_fn(bill, organization)
+            logger.info("AI analysis completed for %s bill %s", bill_type, bill_id)
+        except Exception as exc:
+            logger.error("AI analysis failed for %s bill %s: %s", bill_type, bill_id, exc)
+            mark_processing_error(bill, f"AI analysis failed: {exc}")
+            return
+
+        # Step 2 — duplicate check
+        try:
+            result = duplicate_fn(bill, organization)
+            update_bill_duplicate_fields(bill, result, include_url=True)
+            logger.info("Duplicate check completed for %s bill %s", bill_type, bill_id)
+        except Exception as exc:
+            logger.error("Duplicate check failed for %s bill %s: %s", bill_type, bill_id, exc)
+            bill.duplicate_description = f"Duplicate check failed: {exc}"
+            bill.save(update_fields=["duplicate_description"])
+
+        mark_processing_done(bill)
+        logger.info("Background processing completed for %s bill %s", bill_type, bill_id)
+        return f"Successfully processed {bill_type} bill {bill_id}"
+
+    except model_class.DoesNotExist:
+        logger.error("%s bill %s not found", bill_type.capitalize(), bill_id)
+        raise
+    except Exception as exc:
+        logger.error("Background processing failed for %s bill %s: %s", bill_type, bill_id, exc)
+        try:
+            mark_processing_error(model_class.objects.get(id=bill_id), str(exc))
+        except Exception:
+            pass
+        raise
 
 
 def process_vendor_bill_analysis(bill_id, **kwargs):
-    """
-    Background task to analyze vendor bill and check for duplicates
-    """
-    # Lazy import to avoid circular imports
-    from .vendor_views_functional import analyze_bill_with_ai, check_duplicate_tally_vendor_bill
-    
-    job = get_current_job()
-    try:
-        bill = TallyVendorBill.objects.get(id=bill_id)
-        organization = bill.organization
-        
-        # Mark as processing
-        bill.is_processing = True
-        bill.processing_error = ""
-        bill.save(update_fields=['is_processing', 'processing_error'])
-        
-        logger.info(f"Starting background analysis for vendor bill {bill_id}")
-        
-        # Step 1: Analyze bill with AI
-        try:
-            analyzed_bill = analyze_bill_with_ai(bill, organization)
-            logger.info(f"AI analysis completed for vendor bill {bill_id}")
-        except Exception as e:
-            error_message = str(e)
-            logger.error(f"AI analysis failed for vendor bill {bill_id}: {error_message}")
+    """Background task: AI-analyse a vendor bill, then check duplicates."""
+    def _fns():
+        from .views.vendor_bills import analyze_bill_with_ai, check_duplicate_tally_vendor_bill
+        return analyze_bill_with_ai, check_duplicate_tally_vendor_bill
 
-            # Mark as processing complete with error
-            bill.is_processing = False
-            bill.processing_error = f"AI analysis failed: {error_message}"
-            bill.save(update_fields=['is_processing', 'processing_error'])
-
-            # Don't raise the exception - let the task complete gracefully
-            logger.warning(f"Vendor bill {bill_id} processing completed with error, skipping duplicate check")
-            return
-
-        # Step 2: Check for duplicates
-        try:
-            duplicate_result = check_duplicate_tally_vendor_bill(bill, organization)
-            
-            if duplicate_result:
-                is_duplicate, duplicate_bills, similarity_score = duplicate_result
-                
-                # Update duplicate fields
-                bill.is_duplicate = is_duplicate
-                bill.duplicate_score = similarity_score
-                
-                if is_duplicate:
-                    # Create detailed duplicate description
-                    duplicate_info = []
-                    for dup_data in duplicate_bills[:3]:  # Limit to top 3 matches
-                        duplicate_bill = dup_data['bill']
-                        # Build bill URL
-                        bill_url = None
-                        if duplicate_bill.file:
-                            try:
-                                # Construct the full URL for the bill file
-                                from django.conf import settings
-                                if hasattr(settings, 'SITE_URL'):
-                                    bill_url = f"{settings.SITE_URL.rstrip('/')}{duplicate_bill.file.url}"
-                                else:
-                                    bill_url = duplicate_bill.file.url
-                            except Exception:
-                                bill_url = None
-
-                        duplicate_info.append({
-                            'bill_id': str(duplicate_bill.id),
-                            'bill_name': duplicate_bill.bill_munshi_name,
-                            'bill_url': bill_url,
-                            'invoice_number': dup_data.get('invoice_number', 'N/A'),
-                            'vendor_name': dup_data.get('vendor_name', 'N/A'),
-                            'total': dup_data.get('total', 0),
-                            'date': dup_data.get('date', 'N/A'),
-                            'similarity_score': dup_data.get('similarity_score', 0)
-                        })
-                    
-                    bill.duplicate_matched_bills = duplicate_info
-                    bill.duplicate_description = f"Found {len(duplicate_bills)} potential duplicate(s) with {similarity_score:.1f}% similarity"
-                else:
-                    bill.duplicate_description = "No duplicates found"
-                    bill.duplicate_matched_bills = []
-                    
-                bill.save(update_fields=['is_duplicate', 'duplicate_score', 'duplicate_matched_bills', 'duplicate_description'])
-                logger.info(f"Duplicate check completed for vendor bill {bill_id}: {is_duplicate}")
-                
-        except Exception as e:
-            logger.error(f"Duplicate check failed for vendor bill {bill_id}: {str(e)}")
-            # Don't fail the entire task for duplicate check errors
-            bill.duplicate_description = f"Duplicate check failed: {str(e)}"
-            bill.save(update_fields=['duplicate_description'])
-        
-        # Mark as processing complete
-        bill.is_processing = False
-        bill.save(update_fields=['is_processing'])
-        
-        logger.info(f"Background processing completed for vendor bill {bill_id}")
-        return f"Successfully processed vendor bill {bill_id}"
-        
-    except TallyVendorBill.DoesNotExist:
-        logger.error(f"Vendor bill {bill_id} not found")
-        raise
-    except Exception as e:
-        logger.error(f"Background processing failed for vendor bill {bill_id}: {str(e)}")
-        try:
-            bill = TallyVendorBill.objects.get(id=bill_id)
-            bill.is_processing = False
-            bill.processing_error = str(e)
-            bill.save(update_fields=['is_processing', 'processing_error'])
-        except:
-            pass
-        raise
+    return _process_tally_bill(
+        bill_id,
+        model_class=TallyVendorBill,
+        get_functions=_fns,
+        bill_type="vendor",
+    )
 
 
 def process_expense_bill_analysis(bill_id, **kwargs):
-    """
-    Background task to analyze expense bill and check for duplicates
-    """
-    # Lazy import to avoid circular imports
-    from .expense_views_functional import analyze_expense_bill_with_ai, check_duplicate_tally_expense_bill
-    
-    job = get_current_job()
-    try:
-        bill = TallyExpenseBill.objects.get(id=bill_id)
-        organization = bill.organization
-        
-        # Mark as processing
-        bill.is_processing = True
-        bill.processing_error = ""
-        bill.save(update_fields=['is_processing', 'processing_error'])
-        
-        logger.info(f"Starting background analysis for expense bill {bill_id}")
-        
-        # Step 1: Analyze bill with AI
-        try:
-            analyzed_bill = analyze_expense_bill_with_ai(bill, organization)
-            logger.info(f"AI analysis completed for expense bill {bill_id}")
-        except Exception as e:
-            error_message = str(e)
-            logger.error(f"AI analysis failed for expense bill {bill_id}: {error_message}")
+    """Background task: AI-analyse an expense bill, then check duplicates."""
+    def _fns():
+        from .views.expense_bills import analyze_expense_bill_with_ai, check_duplicate_tally_expense_bill
+        return analyze_expense_bill_with_ai, check_duplicate_tally_expense_bill
 
-            # Mark as processing complete with error
-            bill.is_processing = False
-            bill.processing_error = f"AI analysis failed: {error_message}"
-            bill.save(update_fields=['is_processing', 'processing_error'])
-
-            # Don't raise the exception - let the task complete gracefully
-            logger.warning(f"Expense bill {bill_id} processing completed with error, skipping duplicate check")
-            return
-
-        # Step 2: Check for duplicates
-        try:
-            duplicate_result = check_duplicate_tally_expense_bill(bill, organization)
-            
-            if duplicate_result:
-                is_duplicate, duplicate_bills, similarity_score = duplicate_result
-                
-                # Update duplicate fields
-                bill.is_duplicate = is_duplicate
-                bill.duplicate_score = similarity_score
-                
-                if is_duplicate:
-                    # Create detailed duplicate description
-                    duplicate_info = []
-                    for dup_data in duplicate_bills[:3]:  # Limit to top 3 matches
-                        duplicate_bill = dup_data['bill']
-                        # Build bill URL
-                        bill_url = None
-                        if duplicate_bill.file:
-                            try:
-                                # Construct the full URL for the bill file
-                                from django.conf import settings
-                                if hasattr(settings, 'SITE_URL'):
-                                    bill_url = f"{settings.SITE_URL.rstrip('/')}{duplicate_bill.file.url}"
-                                else:
-                                    bill_url = duplicate_bill.file.url
-                            except Exception:
-                                bill_url = None
-
-                        duplicate_info.append({
-                            'bill_id': str(duplicate_bill.id),
-                            'bill_name': duplicate_bill.bill_munshi_name,
-                            'bill_url': bill_url,
-                            'invoice_number': dup_data.get('invoice_number', 'N/A'),
-                            'vendor_name': dup_data.get('vendor_name', 'N/A'),
-                            'total': dup_data.get('total', 0),
-                            'date': dup_data.get('date', 'N/A'),
-                            'similarity_score': dup_data.get('similarity_score', 0)
-                        })
-                    
-                    bill.duplicate_matched_bills = duplicate_info
-                    bill.duplicate_description = f"Found {len(duplicate_bills)} potential duplicate(s) with {similarity_score:.1f}% similarity"
-                else:
-                    bill.duplicate_description = "No duplicates found"
-                    bill.duplicate_matched_bills = []
-                    
-                bill.save(update_fields=['is_duplicate', 'duplicate_score', 'duplicate_matched_bills', 'duplicate_description'])
-                logger.info(f"Duplicate check completed for expense bill {bill_id}: {is_duplicate}")
-                
-        except Exception as e:
-            logger.error(f"Duplicate check failed for expense bill {bill_id}: {str(e)}")
-            # Don't fail the entire task for duplicate check errors
-            bill.duplicate_description = f"Duplicate check failed: {str(e)}"
-            bill.save(update_fields=['duplicate_description'])
-        
-        # Mark as processing complete
-        bill.is_processing = False
-        bill.save(update_fields=['is_processing'])
-        
-        logger.info(f"Background processing completed for expense bill {bill_id}")
-        return f"Successfully processed expense bill {bill_id}"
-        
-    except TallyExpenseBill.DoesNotExist:
-        logger.error(f"Expense bill {bill_id} not found")
-        raise
-    except Exception as e:
-        logger.error(f"Background processing failed for expense bill {bill_id}: {str(e)}")
-        try:
-            bill = TallyExpenseBill.objects.get(id=bill_id)
-            bill.is_processing = False
-            bill.processing_error = str(e)
-            bill.save(update_fields=['is_processing', 'processing_error'])
-        except:
-            pass
-        raise
+    return _process_tally_bill(
+        bill_id,
+        model_class=TallyExpenseBill,
+        get_functions=_fns,
+        bill_type="expense",
+    )
 
 
-def process_multiple_bills(bill_ids, bill_type='vendor'):
-    """
-    Process multiple bills in batch for better performance
-    """
-    logger.info(f"Processing batch of {len(bill_ids)} {bill_type} bills")
-    
-    # Get the default queue
-    queue = django_rq.get_queue('default')
-    
+# ---------------------------------------------------------------------------
+# Batch helper
+# ---------------------------------------------------------------------------
+
+def process_multiple_bills(bill_ids, bill_type="vendor"):
+    """Enqueue a batch of bills for background processing."""
+    logger.info("Processing batch of %d %s bills", len(bill_ids), bill_type)
+    fn = process_vendor_bill_analysis if bill_type == "vendor" else process_expense_bill_analysis
     results = []
     for bill_id in bill_ids:
         try:
-            if bill_type == 'vendor':
-                job = queue.enqueue(process_vendor_bill_analysis, bill_id, timeout=600)
-            else:
-                job = queue.enqueue(process_expense_bill_analysis, bill_id, timeout=600)
-            results.append(f"Started processing {bill_type} bill {bill_id} - Job ID: {job.id}")
-        except Exception as e:
-            logger.error(f"Failed to start processing {bill_type} bill {bill_id}: {str(e)}")
-            results.append(f"Failed to start processing {bill_type} bill {bill_id}: {str(e)}")
-    
+            job = enqueue_bill_processing(fn, bill_id)
+            results.append(f"Started processing {bill_type} bill {bill_id} — Job ID: {job.id}")
+        except Exception as exc:
+            logger.error("Failed to start processing %s bill %s: %s", bill_type, bill_id, exc)
+            results.append(f"Failed to start processing {bill_type} bill {bill_id}: {exc}")
     return results

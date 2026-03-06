@@ -6,11 +6,12 @@ The `urlpatterns` list routes URLs to views. For more information please see:
 """
 
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, re_path
 from django.conf import settings
 from django.conf.urls.static import static
 from django.views.generic import TemplateView
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
+from apps.common.views import serve_bill_file
 
 # Main URL patterns
 urlpatterns = [
@@ -34,4 +35,7 @@ urlpatterns = [
 
 # Serve media files in development
 if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    # Custom view for all media files with proper iframe headers
+    urlpatterns += [
+        re_path(r'^media/(?P<path>.*)$', serve_bill_file, name='serve_media_file'),
+    ]

@@ -20,6 +20,8 @@ class UserAdmin(BaseUserAdmin):
     ordering = ("-date_joined",)
     readonly_fields = ("date_joined", "last_login")
     actions = ["reset_user_passwords"]
+    date_hierarchy = "date_joined"
+    list_per_page = 50
 
     fieldsets = (
         (None, {"fields": ("email", "password")}),

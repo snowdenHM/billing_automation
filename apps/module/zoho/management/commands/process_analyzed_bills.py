@@ -19,6 +19,7 @@ from apps.module.zoho.models import (
     ZohoChartOfAccount,
     ZohoTaxes,
 )
+from apps.common.utils import safe_numeric_string
 
 logger = logging.getLogger(__name__)
 
@@ -279,18 +280,6 @@ class Command(BaseCommand):
             except (ValueError, TypeError):
                 pass
 
-        # Safe numeric conversion
-        def safe_numeric_string(value, default='0'):
-            try:
-                if value is None:
-                    return default
-                if isinstance(value, (int, float)):
-                    return str(value)
-                float(str(value))  # Validate it's numeric
-                return str(value)
-            except (ValueError, TypeError):
-                return default
-
         # Create VendorZohoBill
         zoho_bill = VendorZohoBill.objects.create(
             selectBill=bill,
@@ -363,18 +352,6 @@ class Command(BaseCommand):
                 bill_date = datetime.strptime(date_issued, '%Y-%m-%d').date()
             except (ValueError, TypeError):
                 pass
-
-        # Safe numeric conversion
-        def safe_numeric_string(value, default='0'):
-            try:
-                if value is None:
-                    return default
-                if isinstance(value, (int, float)):
-                    return str(value)
-                float(str(value))  # Validate it's numeric
-                return str(value)
-            except (ValueError, TypeError):
-                return default
 
         # Create JournalZohoBill
         zoho_bill = JournalZohoBill.objects.create(

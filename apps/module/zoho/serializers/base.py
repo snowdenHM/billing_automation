@@ -1,10 +1,6 @@
 from rest_framework import serializers
-from apps.organizations.models import Organization
 
-
-class OrgField(serializers.PrimaryKeyRelatedField):
-    def get_queryset(self):
-        return Organization.objects.all()
+from apps.common.serializers import OrgField  # noqa: F401
 
 
 class EmptySerializer(serializers.Serializer):

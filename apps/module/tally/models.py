@@ -1,30 +1,20 @@
 # apps/module/tally/models.py
 from __future__ import annotations
 
-import os
 import re
 import uuid
 from decimal import Decimal
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
 from django.db import models
 
 from apps.organizations.models import Organization
+from apps.common.validators import validate_file_extension
 
 
 # -----------------------------
 # Helpers / Base
 # -----------------------------
-
-def validate_file_extension(value):
-    """
-    Validates the file extension for uploads (PDF/Images only).
-    """
-    ext = os.path.splitext(getattr(value, "name", ""))[1].lower()
-    valid = {".pdf", ".png", ".jpg", ".jpeg"}
-    if ext not in valid:
-        raise ValidationError(f"Unsupported file extension '{ext}'. Allowed: {', '.join(sorted(valid))}")
 
 
 class BaseOrgModel(models.Model):

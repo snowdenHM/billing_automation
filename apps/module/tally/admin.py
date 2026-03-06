@@ -4,6 +4,8 @@ from django.http import JsonResponse
 from django.urls import path, reverse
 from django.utils.safestring import mark_safe
 
+from apps.common.admin import BaseOrgAdmin, FileDisplayMixin, OwnershipDisplayMixin
+
 from .models import (
     ParentLedger,
     Ledger,
@@ -21,31 +23,37 @@ from .models import (
 from .forms import TallyConfigForm
 
 
-class ParentLedgerAdmin(admin.ModelAdmin):
+# ============================================================================
+# Parent Ledger & Ledger Admin
+# ============================================================================
+
+@admin.register(ParentLedger)
+class ParentLedgerAdmin(BaseOrgAdmin):
+    """Admin interface for Tally Parent Ledgers."""
+    
     list_display = ('parent', 'organization', 'created_at', 'updated_at')
     list_filter = ('organization', 'created_at')
     search_fields = ('parent', 'organization__name')
-    readonly_fields = ('created_at', 'updated_at')
     autocomplete_fields = ('organization',)
-
-    def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        if db_field.name == "organization":
-            # Only show organizations that the user has access to
-            if not request.user.is_superuser:
-                kwargs["queryset"] = request.user.organizations.all()
-        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+    readonly_fields = ('created_at', 'updated_at')
+    date_hierarchy = 'created_at'
+    list_per_page = 50
 
 
-class LedgerAdmin(admin.ModelAdmin):
+@admin.register(Ledger)
+class LedgerAdmin(BaseOrgAdmin):
+    """Admin interface for Tally Ledgers."""
+    
     list_display = ('name', 'parent', 'master_id', 'alter_id', 'organization', 'created_at')
     list_filter = ('organization', 'parent', 'created_at')
     search_fields = ('name', 'master_id', 'parent__parent', 'organization__name')
-    readonly_fields = ('created_at', 'updated_at')
     autocomplete_fields = ('organization',)
+    readonly_fields = ('created_at', 'updated_at')
+    date_hierarchy = 'created_at'
+    list_per_page = 50
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "parent":
-            # Filter parent ledgers by organization if editing existing object
             obj_id = request.resolver_match.kwargs.get('object_id')
             if obj_id:
                 try:
@@ -54,28 +62,32 @@ class LedgerAdmin(admin.ModelAdmin):
                 except Ledger.DoesNotExist:
                     pass
             else:
-                # For new objects, get organization from GET params
                 org_id = request.GET.get('organization')
                 if org_id:
                     kwargs["queryset"] = ParentLedger.objects.filter(organization_id=org_id)
                 else:
                     kwargs["queryset"] = ParentLedger.objects.none()
-        elif db_field.name == "organization":
-            if not request.user.is_superuser:
-                kwargs["queryset"] = request.user.organizations.all()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     class Media:
         js = ('admin/js/dependent_dropdown.js',)
 
 
-class TallyConfigAdmin(admin.ModelAdmin):
+# ============================================================================
+# Tally Configuration Admin
+# ============================================================================
+
+@admin.register(TallyConfig)
+class TallyConfigAdmin(BaseOrgAdmin):
+    """Admin interface for Tally Configuration."""
+    
     form = TallyConfigForm
     list_display = ('organization', 'display_mappings', 'display_parent_ledgers')
     list_filter = ('organization',)
     search_fields = ('organization__name',)
     ordering = ('organization__name',)
     autocomplete_fields = ('organization',)
+    list_per_page = 50
 
     fieldsets = (
         ('Organization', {
@@ -102,7 +114,7 @@ class TallyConfigAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         """Filter queryset based on user permissions and prefetch related data"""
         qs = super().get_queryset(request)
-        qs = qs.select_related('organization').prefetch_related(
+        return qs.prefetch_related(
             'igst_parents',
             'cgst_parents',
             'sgst_parents',
@@ -112,12 +124,6 @@ class TallyConfigAdmin(admin.ModelAdmin):
             'tds_parents',
             'payment_parents'
         )
-
-        # Filter by user organization if not superuser
-        if not request.user.is_superuser:
-            qs = qs.filter(organization__in=request.user.organizations.all())
-
-        return qs
 
     def get_urls(self):
         urls = super().get_urls()
@@ -134,12 +140,6 @@ class TallyConfigAdmin(admin.ModelAdmin):
             parent_ledgers = ParentLedger.objects.filter(organization_id=org_id).values('id', 'parent')
             return JsonResponse({'parent_ledgers': list(parent_ledgers)})
         return JsonResponse({'parent_ledgers': []})
-
-    def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        if db_field.name == "organization":
-            if not request.user.is_superuser:
-                kwargs["queryset"] = request.user.organizations.all()
-        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def get_form(self, request, obj=None, **kwargs):
         """Use custom form and add JavaScript for dynamic updates"""
@@ -164,6 +164,7 @@ class TallyConfigAdmin(admin.ModelAdmin):
         context['get_parent_ledgers_url'] = reverse('admin:tally_tallyconfig_get_parent_ledgers')
         return super().render_change_form(request, context, *args, **kwargs)
 
+    @admin.display(description="Configuration Summary")
     def display_mappings(self, obj):
         """Display a summary of the number of ledger mappings"""
         return format_html(
@@ -177,8 +178,8 @@ class TallyConfigAdmin(admin.ModelAdmin):
             obj.tds_parents.count(),
             obj.payment_parents.count(),
         )
-    display_mappings.short_description = "Configuration Summary"
 
+    @admin.display(description="Parent Ledger Details")
     def display_parent_ledgers(self, obj):
         """Display detailed parent ledger information for organization context"""
         details = []
@@ -233,30 +234,37 @@ class TallyConfigAdmin(admin.ModelAdmin):
 
         return format_html("<br>".join(details)) if details else "No mappings configured"
 
-    display_parent_ledgers.short_description = "Parent Ledger Details"
-
     class Media:
         js = ('admin/js/tally_dependent_dropdown.js',)
 
 
-# Enhanced admin classes for other models with organization filtering
+# ============================================================================
+# Vendor Bill Related Admin
+# ============================================================================
 class TallyVendorAnalyzedProductInline(admin.TabularInline):
+    """Inline admin for Vendor Analyzed Products."""
+    
     model = TallyVendorAnalyzedProduct
     extra = 0
     fields = ('item_name', 'item_details', 'taxes', 'price', 'quantity', 'amount', 'product_gst', 'igst', 'cgst', 'sgst')
     readonly_fields = ('created_at', 'igst', 'cgst', 'sgst')
 
 
-class TallyVendorAnalyzedBillAdmin(admin.ModelAdmin):
+@admin.register(TallyVendorAnalyzedBill)
+class TallyVendorAnalyzedBillAdmin(BaseOrgAdmin):
+    """Admin interface for Vendor Analyzed Bills."""
+    
     list_display = ('__str__', 'vendor', 'bill_no', 'bill_date', 'due_date', 'total', 'discount', 'gst_type', 'organization')
-    list_filter = ('organization', 'gst_type', 'created_at')
+    list_filter = ('organization', 'gst_type', 'created_at', 'bill_date')
     search_fields = ('bill_no', 'vendor__name', 'selected_bill__bill_munshi_name')
-    readonly_fields = ('created_at',)
     inlines = [TallyVendorAnalyzedProductInline]
-    autocomplete_fields = ('organization',)
+    autocomplete_fields = ('organization', 'vendor', 'selected_bill')
+    readonly_fields = ('created_at',)
+    date_hierarchy = 'created_at'
+    list_per_page = 50
 
     fieldsets = (
-        (None, {
+        ('Bill Information', {
             'fields': ('selected_bill', 'vendor', 'bill_no', 'bill_date', 'due_date', 'note')
         }),
         ('GST Details', {
@@ -266,93 +274,110 @@ class TallyVendorAnalyzedBillAdmin(admin.ModelAdmin):
             'fields': ('discount', 'discount_taxes'),
             'description': 'Discount amount and associated ledger mapping.'
         }),
-        ('Meta', {
-            'fields': ('organization', 'created_at')
+        ('Metadata', {
+            'fields': ('organization', 'created_at'),
+            'classes': ('collapse',)
         }),
     )
-
-    def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        if not request.user.is_superuser:
-            qs = qs.filter(organization__in=request.user.organizations.all())
-        return qs
-
-
-class TallyVendorBillAdmin(admin.ModelAdmin):
-    list_display = ('bill_munshi_name', 'status', 'display_ownership', 'tally_synced', 'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'display_file', 'created_at')
-    list_filter = ('status', 'bill_belong_your_org', 'tally_synced', 'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'created_at')
-    search_fields = ('bill_munshi_name', 'description', 'uploaded_by__username', 'uploaded_by__first_name', 'uploaded_by__last_name', 'organization__name')
-    readonly_fields = ('created_at', 'updated_at')
-    fields = ('bill_munshi_name', 'file', 'file_type', 'status', 'bill_belong_your_org', 'description', 'tally_synced', 'process', 'uploaded_by', 'organization', 'is_duplicate', 'duplicate_description', 'duplicate_score', 'duplicate_matched_bills', 'is_processing', 'processing_error', 'analysed_data', 'created_at', 'updated_at')
-    autocomplete_fields = ('uploaded_by', 'organization')
-
-    def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        if not request.user.is_superuser:
-            qs = qs.filter(organization__in=request.user.organizations.all())
-        return qs
-
-    def display_file(self, obj):
-        if obj.file:
-            return format_html('<a href="{}" target="_blank">View File</a>', obj.file.url)
-        return "-"
-    display_file.short_description = "File"
     
-    def display_ownership(self, obj):
-        if obj.bill_belong_your_org:
-            return format_html('<span style="color: green;">✓ Own Bill</span>')
-        else:
-            return format_html('<span style="color: orange;">⚬ Vendor Bill</span>')
-    display_ownership.short_description = "Ownership"
-    display_ownership.admin_order_field = 'bill_belong_your_org'
-
-
-class TallyExpenseBillAdmin(admin.ModelAdmin):
-    list_display = ('bill_munshi_name', 'status', 'display_ownership', 'tally_synced', 'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'display_file', 'created_at')
-    list_filter = ('status', 'bill_belong_your_org', 'tally_synced', 'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'created_at')
-    search_fields = ('bill_munshi_name', 'description', 'uploaded_by__username', 'uploaded_by__first_name', 'uploaded_by__last_name', 'organization__name')
-    readonly_fields = ('created_at', 'updated_at')
-    fields = ('bill_munshi_name', 'file', 'file_type', 'status', 'bill_belong_your_org', 'description', 'tally_synced', 'process', 'uploaded_by', 'organization', 'is_duplicate', 'duplicate_description', 'duplicate_score', 'duplicate_matched_bills', 'is_processing', 'processing_error', 'analysed_data', 'created_at', 'updated_at')
-    autocomplete_fields = ('uploaded_by', 'organization')
-
     def get_queryset(self, request):
+        """Optimize queryset with select_related."""
         qs = super().get_queryset(request)
-        if not request.user.is_superuser:
-            qs = qs.filter(organization__in=request.user.organizations.all())
-        return qs
+        return qs.select_related('organization', 'vendor', 'selected_bill')
 
-    def display_file(self, obj):
-        if obj.file:
-            return format_html('<a href="{}" target="_blank">View File</a>', obj.file.url)
-        return "-"
-    display_file.short_description = "File"
+
+class _TallyBillAdminBase(FileDisplayMixin, OwnershipDisplayMixin, BaseOrgAdmin):
+    """Shared base for TallyVendorBillAdmin and TallyExpenseBillAdmin."""
     
-    def display_ownership(self, obj):
-        if obj.bill_belong_your_org:
-            return format_html('<span style="color: green;">✓ Own Bill</span>')
-        else:
-            return format_html('<span style="color: orange;">⚬ Vendor Bill</span>')
-    display_ownership.short_description = "Ownership"
-    display_ownership.admin_order_field = 'bill_belong_your_org'
+    list_display = (
+        'bill_munshi_name', 'status', 'display_ownership', 'tally_synced', 
+        'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 
+        'organization', 'display_file', 'created_at'
+    )
+    list_filter = (
+        'status', 'bill_belong_your_org', 'tally_synced', 'file_type', 
+        'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'created_at'
+    )
+    search_fields = (
+        'bill_munshi_name', 'description', 'uploaded_by__username', 
+        'uploaded_by__first_name', 'uploaded_by__last_name', 'organization__name'
+    )
+    readonly_fields = (
+        'analysed_data', 'created_at', 'updated_at', 'duplicate_matched_bills', 'processing_error'
+    )
+    date_hierarchy = 'created_at'
+    list_per_page = 50
+    autocomplete_fields = ('uploaded_by', 'organization')
+    
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('bill_munshi_name', 'file', 'file_type', 'status', 'description')
+        }),
+        ('Ownership & Sync', {
+            'fields': ('bill_belong_your_org', 'tally_synced', 'process')
+        }),
+        ('Processing Status', {
+            'fields': ('is_processing', 'processing_error', 'analysed_data')
+        }),
+        ('Duplicate Detection', {
+            'fields': ('is_duplicate', 'duplicate_description', 'duplicate_score', 'duplicate_matched_bills'),
+            'classes': ('collapse',)
+        }),
+        ('Metadata', {
+            'fields': ('uploaded_by', 'organization', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def get_queryset(self, request):
+        """Optimize queryset with select_related."""
+        qs = super().get_queryset(request)
+        return qs.select_related('uploaded_by', 'organization')
 
+    class Meta:
+        abstract = True
+
+
+@admin.register(TallyVendorBill)
+class TallyVendorBillAdmin(_TallyBillAdminBase):
+    """Admin interface for Tally Vendor Bills."""
+    pass
+
+
+@admin.register(TallyExpenseBill)
+class TallyExpenseBillAdmin(_TallyBillAdminBase):
+    """Admin interface for Tally Expense Bills."""
+    pass
+
+
+# ============================================================================
+# Expense Bill Related Admin
+# ============================================================================
 
 class TallyExpenseAnalyzedProductInline(admin.TabularInline):
+    """Inline admin for Expense Analyzed Products."""
+    
     model = TallyExpenseAnalyzedProduct
     extra = 0
     fields = ('item_details', 'chart_of_accounts', 'amount', 'debit_or_credit')
     readonly_fields = ('created_at',)
 
 
-class TallyExpenseAnalyzedBillAdmin(admin.ModelAdmin):
+@admin.register(TallyExpenseAnalyzedBill)
+class TallyExpenseAnalyzedBillAdmin(BaseOrgAdmin):
+    """Admin interface for Expense Analyzed Bills."""
+    
     list_display = ('__str__', 'vendor', 'bill_no', 'bill_date', 'due_date', 'total', 'organization')
-    list_filter = ('organization', 'created_at')
+    list_filter = ('organization', 'created_at', 'bill_date')
     search_fields = ('bill_no', 'vendor__name', 'selected_bill__bill_munshi_name', 'voucher')
-    readonly_fields = ('created_at',)
     inlines = [TallyExpenseAnalyzedProductInline]
-    autocomplete_fields = ('organization',)
+    autocomplete_fields = ('organization', 'vendor', 'selected_bill')
+    readonly_fields = ('created_at',)
+    date_hierarchy = 'created_at'
+    list_per_page = 50
 
     fieldsets = (
-        (None, {
+        ('Bill Information', {
             'fields': ('selected_bill', 'vendor', 'voucher', 'bill_no', 'bill_date', 'due_date', 'note')
         }),
         ('GST Details', {
@@ -361,23 +386,32 @@ class TallyExpenseAnalyzedBillAdmin(admin.ModelAdmin):
         ('TDS & Other Adjustments', {
             'fields': ('tds', 'tds_taxes', 'other_adjustment', 'other_adjustment_taxes')
         }),
-        ('Meta', {
-            'fields': ('organization', 'created_at')
+        ('Metadata', {
+            'fields': ('organization', 'created_at'),
+            'classes': ('collapse',)
         }),
     )
-
+    
     def get_queryset(self, request):
+        """Optimize queryset with select_related."""
         qs = super().get_queryset(request)
-        if not request.user.is_superuser:
-            qs = qs.filter(organization__in=request.user.organizations.all())
-        return qs
+        return qs.select_related('organization', 'vendor', 'selected_bill')
 
 
-class TallyVendorConsolidatedProductAdmin(admin.ModelAdmin):
+# ============================================================================
+# Consolidated Products Admin
+# ============================================================================
+
+@admin.register(TallyVendorConsolidatedProduct)
+class TallyVendorConsolidatedProductAdmin(BaseOrgAdmin):
+    """Admin interface for Vendor Consolidated Products."""
+    
     list_display = ('vendor_bill_name', 'item_name_short', 'amount', 'product_gst', 'original_items_count', 'organization', 'created_at')
     list_filter = ('organization', 'product_gst', 'created_at')
     search_fields = ('item_name', 'item_details', 'vendor_bill_analyzed__selected_bill__bill_munshi_name', 'organization__name')
-    readonly_fields = ('created_at', 'updated_at', 'igst', 'cgst', 'sgst')
+    readonly_fields = ('igst', 'cgst', 'sgst', 'created_at', 'updated_at')
+    date_hierarchy = 'created_at'
+    list_per_page = 50
     autocomplete_fields = ('organization', 'vendor_bill_analyzed', 'taxes')
     
     fieldsets = (
@@ -403,71 +437,105 @@ class TallyVendorConsolidatedProductAdmin(admin.ModelAdmin):
         }),
     )
     
+    @admin.display(description='Vendor Bill', ordering='vendor_bill_analyzed__selected_bill__bill_munshi_name')
     def vendor_bill_name(self, obj):
-        """Display vendor bill name"""
-        return obj.vendor_bill_analyzed.selected_bill.bill_munshi_name if obj.vendor_bill_analyzed and obj.vendor_bill_analyzed.selected_bill else 'N/A'
-    vendor_bill_name.short_description = 'Vendor Bill'
-    vendor_bill_name.admin_order_field = 'vendor_bill_analyzed__selected_bill__bill_munshi_name'
+        """Display vendor bill name."""
+        if obj.vendor_bill_analyzed and obj.vendor_bill_analyzed.selected_bill:
+            return obj.vendor_bill_analyzed.selected_bill.bill_munshi_name
+        return 'N/A'
     
+    @admin.display(description='Item Name')
     def item_name_short(self, obj):
-        """Display shortened item name"""
-        return obj.item_name[:50] + '...' if obj.item_name and len(obj.item_name) > 50 else obj.item_name or 'N/A'
-    item_name_short.short_description = 'Item Name'
+        """Display shortened item name."""
+        if obj.item_name:
+            return obj.item_name[:50] + '...' if len(obj.item_name) > 50 else obj.item_name
+        return 'N/A'
     
     def get_queryset(self, request):
+        """Optimize queryset with select_related."""
         qs = super().get_queryset(request)
-        if not request.user.is_superuser:
-            qs = qs.filter(organization__in=request.user.organizations.all())
-        return qs
+        return qs.select_related('organization', 'vendor_bill_analyzed', 'vendor_bill_analyzed__selected_bill')
 
 
-class TallyExpenseConsolidatedProductAdmin(admin.ModelAdmin):
-    list_display = ('expense_bill_name', 'item_details_short', 'amount', 'debit_or_credit', 'original_entries_count', 'organization', 'created_at')
+@admin.register(TallyExpenseConsolidatedProduct)
+class TallyExpenseConsolidatedProductAdmin(BaseOrgAdmin):
+    """Admin interface for Expense Consolidated Products."""
+    
+    list_display = (
+        'expense_bill_name', 'item_details_short', 'amount', 'debit_or_credit', 
+        'original_entries_count', 'organization', 'created_at'
+    )
     list_filter = ('organization', 'debit_or_credit', 'created_at')
     search_fields = ('item_details', 'expense_bill__selected_bill__bill_munshi_name', 'organization__name')
     readonly_fields = ('created_at', 'updated_at')
+    date_hierarchy = 'created_at'
+    list_per_page = 50
     autocomplete_fields = ('organization', 'expense_bill', 'chart_of_accounts')
     
-    def expense_bill_name(self, obj):
-        """Display expense bill name"""
-        return obj.expense_bill.selected_bill.bill_munshi_name if obj.expense_bill and obj.expense_bill.selected_bill else 'N/A'
-    expense_bill_name.short_description = 'Expense Bill'
-    expense_bill_name.admin_order_field = 'expense_bill__selected_bill__bill_munshi_name'
+    fieldsets = (
+        ('Bill Information', {
+            'fields': ('expense_bill', 'organization')
+        }),
+        ('Item Details', {
+            'fields': ('item_details', 'chart_of_accounts', 'debit_or_credit')
+        }),
+        ('Financial Details', {
+            'fields': ('amount',)
+        }),
+        ('Consolidation Metadata', {
+            'fields': ('original_entries_count', 'consolidation_notes')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
     
+    @admin.display(description='Expense Bill', ordering='expense_bill__selected_bill__bill_munshi_name')
+    def expense_bill_name(self, obj):
+        """Display expense bill name."""
+        if obj.expense_bill and obj.expense_bill.selected_bill:
+            return obj.expense_bill.selected_bill.bill_munshi_name
+        return 'N/A'
+    
+    @admin.display(description='Item Details')
     def item_details_short(self, obj):
-        """Display shortened item details"""
-        return obj.item_details[:50] + '...' if obj.item_details and len(obj.item_details) > 50 else obj.item_details or 'N/A'
-    item_details_short.short_description = 'Item Details'
+        """Display shortened item details."""
+        if obj.item_details:
+            return obj.item_details[:50] + '...' if len(obj.item_details) > 50 else obj.item_details
+        return 'N/A'
     
     def get_queryset(self, request):
+        """Optimize queryset with select_related."""
         qs = super().get_queryset(request)
-        if not request.user.is_superuser:
-            qs = qs.filter(organization__in=request.user.organizations.all())
-        return qs
+        return qs.select_related('organization', 'expense_bill', 'expense_bill__selected_bill')
 
 
-class StockItemAdmin(admin.ModelAdmin):
+# ============================================================================
+# Stock Item Admin
+# ============================================================================
+
+@admin.register(StockItem)
+class StockItemAdmin(BaseOrgAdmin):
+    """Admin interface for Tally Stock Items."""
+    
     list_display = ('name', 'parent', 'unit', 'category', 'organization', 'created_at')
     list_filter = ('organization', 'category', 'gst_applicable', 'created_at')
     search_fields = ('name', 'item_code', 'alias', 'organization__name')
     readonly_fields = ('created_at', 'updated_at')
+    date_hierarchy = 'created_at'
+    list_per_page = 50
     autocomplete_fields = ('organization',)
-
-    def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        if not request.user.is_superuser:
-            qs = qs.filter(organization__in=request.user.organizations.all())
-        return qs
-
-
-# Register models with the admin site
-admin.site.register(StockItem, StockItemAdmin)
-admin.site.register(ParentLedger, ParentLedgerAdmin)
-admin.site.register(Ledger, LedgerAdmin)
-admin.site.register(TallyConfig, TallyConfigAdmin)
-admin.site.register(TallyVendorBill, TallyVendorBillAdmin)
-admin.site.register(TallyVendorAnalyzedBill, TallyVendorAnalyzedBillAdmin)
-admin.site.register(TallyVendorConsolidatedProduct, TallyVendorConsolidatedProductAdmin)
-admin.site.register(TallyExpenseBill, TallyExpenseBillAdmin)
-admin.site.register(TallyExpenseAnalyzedBill, TallyExpenseAnalyzedBillAdmin)
-admin.site.register(TallyExpenseConsolidatedProduct, TallyExpenseConsolidatedProductAdmin)
+    
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('name', 'item_code', 'alias', 'parent', 'category')
+        }),
+        ('Unit & GST', {
+            'fields': ('unit', 'gst_applicable', 'gst_rate')
+        }),
+        ('Metadata', {
+            'fields': ('organization', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )

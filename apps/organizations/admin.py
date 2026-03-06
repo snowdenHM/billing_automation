@@ -1,43 +1,138 @@
 from django.contrib import admin
+from django.utils.html import format_html
 from .models import Organization, OrgMembership, OrganizationAPIKey, Module, OrganizationModule
 
 
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin):
+    """Admin interface for Organization model."""
+    
     list_display = ("id", "name", "slug", "gst_number", "status", "owner", "created_by", "created_at")
-    search_fields = ("name", "slug", "gst_number")
-    list_filter = ("status",)
+    search_fields = ("name", "slug", "gst_number", "owner__email", "created_by__email")
+    list_filter = ("status", "created_at", "updated_at")
+    readonly_fields = ("created_at", "updated_at")
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ("owner", "created_by")
+    
+    fieldsets = (
+        ("Basic Information", {
+            "fields": ("name", "slug", "gst_number")
+        }),
+        ("Status & Ownership", {
+            "fields": ("status", "owner", "created_by")
+        }),
+        ("Timestamps", {
+            "fields": ("created_at", "updated_at"),
+            "classes": ("collapse",)
+        }),
+    )
 
 
 @admin.register(OrgMembership)
 class OrgMembershipAdmin(admin.ModelAdmin):
+    """Admin interface for Organization Membership."""
+    
     list_display = ("id", "organization", "user", "role", "is_active", "created_at")
-    list_filter = ("role", "is_active")
-    search_fields = ("organization__name", "user__email")
+    list_filter = ("role", "is_active", "created_at")
+    search_fields = ("organization__name", "user__email", "user__first_name", "user__last_name")
+    readonly_fields = ("created_at", "updated_at")
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ("organization", "user")
+    
+    fieldsets = (
+        ("Membership Details", {
+            "fields": ("organization", "user", "role", "is_active")
+        }),
+        ("Timestamps", {
+            "fields": ("created_at", "updated_at"),
+            "classes": ("collapse",)
+        }),
+    )
 
 
 @admin.register(OrganizationAPIKey)
 class OrganizationAPIKeyAdmin(admin.ModelAdmin):
-    list_display = ("id", "organization", "name", "api_key_prefix", "created_by", "created_at")
-    search_fields = ("organization__name", "name")
-    list_filter = ("created_at",)
-    readonly_fields = ("api_key",)
+    """Admin interface for Organization API Keys."""
     
+    list_display = ("id", "organization", "name", "api_key_prefix", "created_by", "created_at")
+    search_fields = ("organization__name", "name", "created_by__email")
+    list_filter = ("created_at",)
+    readonly_fields = ("api_key", "created_at", "updated_at")
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ("organization", "created_by")
+    
+    fieldsets = (
+        ("API Key Information", {
+            "fields": ("organization", "name", "api_key")
+        }),
+        ("Metadata", {
+            "fields": ("created_by", "created_at", "updated_at"),
+            "classes": ("collapse",)
+        }),
+    )
+    
+    @admin.display(description="API Key Prefix", ordering="api_key")
     def api_key_prefix(self, obj):
-        """Display API key prefix for identification"""
-        return obj.api_key.prefix if obj.api_key else "N/A"
-    api_key_prefix.short_description = "API Key Prefix"
+        """Display API key prefix for identification."""
+        if obj.api_key:
+            return format_html(
+                '<code>{}</code>',
+                obj.api_key.prefix if hasattr(obj.api_key, 'prefix') else str(obj.api_key)[:8] + '...'
+            )
+        return "N/A"
 
 
 @admin.register(Module)
 class ModuleAdmin(admin.ModelAdmin):
-    list_display = ("id", "code", "name", "created_at")
-    search_fields = ("code", "name")
+    """Admin interface for Module model."""
+    
+    list_display = ("id", "code", "name", "description_short", "created_at")
+    search_fields = ("code", "name", "description")
+    list_filter = ("created_at",)
+    readonly_fields = ("created_at", "updated_at")
+    date_hierarchy = "created_at"
+    list_per_page = 50
     ordering = ("code",)
+    
+    fieldsets = (
+        ("Module Information", {
+            "fields": ("code", "name", "description")
+        }),
+        ("Timestamps", {
+            "fields": ("created_at", "updated_at"),
+            "classes": ("collapse",)
+        }),
+    )
+    
+    @admin.display(description="Description")
+    def description_short(self, obj):
+        """Display shortened description."""
+        if obj.description:
+            return obj.description[:50] + '...' if len(obj.description) > 50 else obj.description
+        return "-"
 
 
 @admin.register(OrganizationModule)
 class OrganizationModuleAdmin(admin.ModelAdmin):
-    list_display = ("id", "organization", "module", "is_enabled", "created_at")
-    list_filter = ("is_active", "module")
+    """Admin interface for Organization Module assignments."""
+    
+    list_display = ("id", "organization", "module", "is_active", "created_at")
+    list_filter = ("is_active", "module", "created_at")
     search_fields = ("organization__name", "module__code", "module__name")
+    readonly_fields = ("created_at", "updated_at")
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ("organization", "module")
+    
+    fieldsets = (
+        ("Module Assignment", {
+            "fields": ("organization", "module", "is_active")
+        }),
+        ("Timestamps", {
+            "fields": ("created_at", "updated_at"),
+            "classes": ("collapse",)
+        }),
+    )

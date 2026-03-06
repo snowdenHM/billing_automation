@@ -3,7 +3,8 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
-from django.urls import reverse
+
+from apps.common.admin import BaseOrgAdmin, FKLinkMixin, admin_change_url
 
 from .models import (
     ZohoCredentials,
@@ -23,49 +24,8 @@ from .models import (
     ExpenseZohoProduct,
 )
 
-# -----------------------------
-# Base admin helpers
-# -----------------------------
-
-class BaseOrgScopedAdmin(admin.ModelAdmin):
-    """
-    - If user isn't superuser and has organization_id, scope queryset to it.
-    - Auto-fill organization on save when missing.
-    - Make created_at / update_at readonly when present on the model.
-    """
-
-    def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        if hasattr(self.model, "organization"):
-            qs = qs.select_related("organization")
-        if request.user.is_superuser:
-            return qs
-
-        user_org_id = getattr(request.user, "organization_id", None)
-        if user_org_id and hasattr(self.model, "organization_id"):
-            qs = qs.filter(organization_id=user_org_id)
-        return qs
-
-    def save_model(self, request, obj, form, change):
-        if hasattr(obj, "organization_id") and not obj.organization_id:
-            user_org_id = getattr(request.user, "organization_id", None)
-            if user_org_id:
-                obj.organization_id = user_org_id
-        super().save_model(request, obj, form, change)
-
-    def get_readonly_fields(self, request, obj=None):
-        ro = list(super().get_readonly_fields(request, obj))
-        # Add common timestamp fields only if they exist on the model
-        model_field_names = {f.name for f in self.model._meta.get_fields()}
-        for f in ("created_at", "update_at"):
-            if f in model_field_names and f not in ro:
-                ro.append(f)
-        return ro
-
-
-def admin_change_url_for_instance(obj):
-    """Return the admin change URL for any model instance."""
-    return reverse(f"admin:{obj._meta.app_label}_{obj._meta.model_name}_change", args=[obj.pk])
+# Keep backward compat alias in case anything imports from here
+BaseOrgScopedAdmin = BaseOrgAdmin
 
 
 # -----------------------------
@@ -73,43 +33,86 @@ def admin_change_url_for_instance(obj):
 # -----------------------------
 
 @admin.register(ZohoCredentials)
-class ZohoCredentialsAdmin(BaseOrgScopedAdmin):
+class ZohoCredentialsAdmin(BaseOrgAdmin):
+    """Admin interface for Zoho API Credentials."""
+    
     list_display = ["organization", "clientId", "token_expiry", "created_at"]
     list_filter = ["created_at", "token_expiry"]
     search_fields = ["organization__name", "clientId"]
+    readonly_fields = ["created_at", "update_at"]
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ["organization"]
+    
+    fieldsets = (
+        ('Organization', {
+            'fields': ('organization',)
+        }),
+        ('Credentials', {
+            'fields': ('clientId', 'clientSecret', 'token_expiry')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'update_at'),
+            'classes': ('collapse',)
+        }),
+    )
 
 
 
 @admin.register(ZohoVendor)
-class ZohoVendorAdmin(BaseOrgScopedAdmin):
-    list_display = ["companyName", "gstNo", "contactId", "organization"]
-    list_filter = ["organization"]
+class ZohoVendorAdmin(BaseOrgAdmin):
+    """Admin interface for Zoho Vendors."""
+    
+    list_display = ["companyName", "gstNo", "contactId", "organization", "created_at"]
+    list_filter = ["organization", "created_at"]
     search_fields = ["companyName", "gstNo", "contactId"]
+    readonly_fields = ["created_at"]
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ["organization"]
 
 
 @admin.register(ZohoChartOfAccount)
-class ZohoChartOfAccountAdmin(BaseOrgScopedAdmin):
-    list_display = ["accountName", "accountId", "organization"]
-    list_filter = ["organization"]
+class ZohoChartOfAccountAdmin(BaseOrgAdmin):
+    """Admin interface for Zoho Chart of Accounts."""
+    
+    list_display = ["accountName", "accountId", "organization", "created_at"]
+    list_filter = ["organization", "created_at"]
     search_fields = ["accountName", "accountId"]
+    readonly_fields = ["created_at"]
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ["organization"]
 
 
 @admin.register(ZohoTaxes)
-class ZohoTaxesAdmin(BaseOrgScopedAdmin):
-    list_display = ["taxName", "taxId", "organization"]
-    list_filter = ["organization"]
+class ZohoTaxesAdmin(BaseOrgAdmin):
+    """Admin interface for Zoho Taxes."""
+    
+    list_display = ["taxName", "taxId", "organization", "created_at"]
+    list_filter = ["organization", "created_at"]
     search_fields = ["taxName", "taxId"]
+    readonly_fields = ["created_at"]
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ["organization"]
 
 
 @admin.register(ZohoTdsTcs)
-class ZohoTDSTCSAdmin(BaseOrgScopedAdmin):
-    list_display = ["taxName", "taxId", "organization"]
-    list_filter = ["organization"]
+class ZohoTDSTCSAdmin(BaseOrgAdmin):
+    """Admin interface for Zoho TDS/TCS."""
+    
+    list_display = ["taxName", "taxId", "organization", "created_at"]
+    list_filter = ["organization", "created_at"]
     search_fields = ["taxName", "taxId"]
+    readonly_fields = ["created_at"]
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ["organization"]
 
 
 # @admin.register(ZohoVendorCredit)
-# class ZohoVendorCreditsAdmin(BaseOrgScopedAdmin):
+# class ZohoVendorCreditsAdmin(BaseOrgAdmin):
 #     list_display = ("organization", "vendor_name", "vendor_credit_number", "vendor_credit_id", "created_at")
 #     search_fields = ("vendor_name", "vendor_credit_number", "vendor_credit_id", "organization__name")
 #     list_filter = ("organization",)
@@ -122,6 +125,8 @@ class ZohoTDSTCSAdmin(BaseOrgScopedAdmin):
 # -----------------------------
 
 class JournalZohoProductInline(admin.TabularInline):
+    """Inline admin for Journal Zoho Products."""
+    
     model = JournalZohoProduct
     extra = 0
     autocomplete_fields = ("chart_of_accounts",)
@@ -136,11 +141,17 @@ class JournalZohoProductInline(admin.TabularInline):
 
 
 @admin.register(JournalBill)
-class JournalBillAdmin(BaseOrgScopedAdmin):
+class JournalBillAdmin(BaseOrgAdmin):
+    """Admin interface for Journal Bills."""
+    
     list_display = ["billmunshiName", "fileType", "status", "process", "uploaded_by", "organization", "created_at"]
     list_filter = ["status", "fileType", "process", "uploaded_by", "organization", "created_at"]
     search_fields = ["billmunshiName", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
     readonly_fields = ["analysed_data", "created_at", "update_at"]
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ("organization", "uploaded_by")
+    
     fields = (
         "organization",
         "billmunshiName",
@@ -153,7 +164,6 @@ class JournalBillAdmin(BaseOrgScopedAdmin):
         "created_at",
         "update_at",
     )
-    autocomplete_fields = ("organization", "uploaded_by")
 
     @admin.display(description="File", ordering="file")
     def file_link(self, obj):
@@ -163,7 +173,9 @@ class JournalBillAdmin(BaseOrgScopedAdmin):
 
 
 @admin.register(JournalZohoBill)
-class JournalZohoBillAdmin(BaseOrgScopedAdmin):
+class JournalZohoBillAdmin(BaseOrgAdmin):
+    """Admin interface for Journal Zoho Bills."""
+    
     list_display = [
         "bill_no",
         "vendor",
@@ -171,16 +183,18 @@ class JournalZohoBillAdmin(BaseOrgScopedAdmin):
         "total",
         "organization",
     ]
-    list_filter = ["bill_date", "organization", "vendor"]
+    list_filter = ["bill_date", "organization", "vendor", "created_at"]
     search_fields = ["bill_no", "vendor__companyName"]
     readonly_fields = ("created_at",)
+    date_hierarchy = "bill_date"
+    list_per_page = 50
     inlines = [JournalZohoProductInline]
     autocomplete_fields = ("organization", "vendor", "selectBill")
 
     @admin.display(description="Selected Bill")
     def selectBill_link(self, obj):
         if obj.selectBill_id:
-            url = admin_change_url_for_instance(obj.selectBill)
+            url = admin_change_url(obj.selectBill)
             label = obj.selectBill.billmunshiName or str(obj.selectBill_id)
             return mark_safe(f'<a href="{url}">{label}</a>')
         return "-"
@@ -191,6 +205,8 @@ class JournalZohoBillAdmin(BaseOrgScopedAdmin):
 # -----------------------------
 
 class VendorZohoProductInline(admin.TabularInline):
+    """Inline admin for Vendor Zoho Products."""
+    
     model = VendorZohoProduct
     extra = 0
     autocomplete_fields = ("chart_of_accounts", "taxes")
@@ -210,7 +226,9 @@ class VendorZohoProductInline(admin.TabularInline):
 
 
 @admin.register(VendorBill)
-class VendorBillAdmin(BaseOrgScopedAdmin):
+class VendorBillAdmin(BaseOrgAdmin):
+    """Admin interface for Vendor Bills."""
+    
     list_display = [
         "billmunshiName", "status", "fileType", "process", "is_duplicate", "bill_belong_your_org", 
         "is_processing", "uploaded_by", "organization", "created_at"
@@ -221,6 +239,9 @@ class VendorBillAdmin(BaseOrgScopedAdmin):
     ]
     search_fields = ["billmunshiName", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
     readonly_fields = ["analysed_data", "created_at", "update_at", "duplicate_matched_bills", "processing_error"]
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ("organization", "uploaded_by")
     
     fieldsets = (
         ('Basic Information', {
@@ -236,10 +257,15 @@ class VendorBillAdmin(BaseOrgScopedAdmin):
             'fields': ('bill_belong_your_org', 'description')
         }),
         ('Metadata', {
-            'fields': ('uploaded_by', 'created_at', 'update_at')
+            'fields': ('uploaded_by', 'created_at', 'update_at'),
+            'classes': ('collapse',)
         }),
     )
-    autocomplete_fields = ("organization", "uploaded_by")
+    
+    def get_queryset(self, request):
+        """Optimize queryset with select_related."""
+        qs = super().get_queryset(request)
+        return qs.select_related('organization', 'uploaded_by')
     
     @admin.display(description="Duplicate", boolean=True)
     def duplicate_status(self, obj):
@@ -261,7 +287,9 @@ class VendorBillAdmin(BaseOrgScopedAdmin):
 
 
 @admin.register(VendorZohoBill)
-class VendorZohoBillAdmin(BaseOrgScopedAdmin):
+class VendorZohoBillAdmin(BaseOrgAdmin):
+    """Admin interface for Vendor Zoho Bills."""
+    
     list_display = [
         "bill_no",
         "vendor",
@@ -271,9 +299,11 @@ class VendorZohoBillAdmin(BaseOrgScopedAdmin):
         "discount_amount",
         "organization",
     ]
-    list_filter = ["bill_date", "due_date", "organization", "vendor", "discount_type"]
+    list_filter = ["bill_date", "due_date", "organization", "vendor", "discount_type", "created_at"]
     search_fields = ["bill_no", "vendor__companyName"]
     readonly_fields = ("created_at",)
+    date_hierarchy = "bill_date"
+    list_per_page = 50
     inlines = [VendorZohoProductInline]
     autocomplete_fields = ("organization", "vendor", "selectBill", "tds_tcs_id", "discount_account")
     
@@ -288,14 +318,20 @@ class VendorZohoBillAdmin(BaseOrgScopedAdmin):
             'fields': ('igst', 'cgst', 'sgst', 'tds_tcs_id', 'is_tax')
         }),
         ('Metadata', {
-            'fields': ('organization', 'created_at')
+            'fields': ('organization', 'created_at'),
+            'classes': ('collapse',)
         }),
     )
+    
+    def get_queryset(self, request):
+        """Optimize queryset with select_related."""
+        qs = super().get_queryset(request)
+        return qs.select_related('organization', 'vendor', 'selectBill')
 
     @admin.display(description="Selected Bill")
     def selectBill_link(self, obj):
         if obj.selectBill_id:
-            url = admin_change_url_for_instance(obj.selectBill)
+            url = admin_change_url(obj.selectBill)
             label = obj.selectBill.billmunshiName or str(obj.selectBill_id)
             return mark_safe(f'<a href="{url}">{label}</a>')
         return "-"
@@ -306,8 +342,11 @@ class VendorZohoBillAdmin(BaseOrgScopedAdmin):
 # -----------------------------
 
 class ExpenseZohoProductInline(admin.TabularInline):
+    """Inline admin for Expense Zoho Products."""
+    
     model = ExpenseZohoProduct
     extra = 0
+    autocomplete_fields = ("chart_of_accounts", "taxes")
     fields = (
         "item_details",
         "amount",
@@ -319,11 +358,17 @@ class ExpenseZohoProductInline(admin.TabularInline):
 
 
 @admin.register(ExpenseBill)
-class ExpenseBillAdmin(BaseOrgScopedAdmin):
+class ExpenseBillAdmin(BaseOrgAdmin):
+    """Admin interface for Expense Bills."""
+    
     list_display = ["billmunshiName", "status", "fileType", "uploaded_by", "organization", "created_at"]
     list_filter = ["status", "fileType", "uploaded_by", "organization", "created_at"]
     search_fields = ["billmunshiName", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
     readonly_fields = ["billmunshiName", "analysed_data", "created_at", "update_at"]
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ("organization", "uploaded_by")
+    
     fields = (
         "organization",
         "billmunshiName",
@@ -336,7 +381,11 @@ class ExpenseBillAdmin(BaseOrgScopedAdmin):
         "created_at",
         "update_at",
     )
-    autocomplete_fields = ("organization", "uploaded_by")
+    
+    def get_queryset(self, request):
+        """Optimize queryset with select_related."""
+        qs = super().get_queryset(request)
+        return qs.select_related('organization', 'uploaded_by')
 
     @admin.display(description="File", ordering="file")
     def file_link(self, obj):
@@ -346,7 +395,9 @@ class ExpenseBillAdmin(BaseOrgScopedAdmin):
 
 
 @admin.register(ExpenseZohoBill)
-class ExpenseZohoBillAdmin(BaseOrgScopedAdmin):
+class ExpenseZohoBillAdmin(BaseOrgAdmin):
+    """Admin interface for Expense Zoho Bills."""
+    
     list_display = [
         "id",
         "selectBill_link",
@@ -359,20 +410,29 @@ class ExpenseZohoBillAdmin(BaseOrgScopedAdmin):
     list_filter = ["bill_date", "organization", "created_at"]
     search_fields = ["bill_no", "vendor__companyName", "selectBill__billmunshiName"]
     readonly_fields = ("created_at",)
+    date_hierarchy = "bill_date"
+    list_per_page = 50
     inlines = [ExpenseZohoProductInline]
     autocomplete_fields = ("organization", "selectBill", "vendor")
+    
+    def get_queryset(self, request):
+        """Optimize queryset with select_related."""
+        qs = super().get_queryset(request)
+        return qs.select_related('organization', 'vendor', 'selectBill')
 
     @admin.display(description="Expense Bill")
     def selectBill_link(self, obj):
         if obj.selectBill_id:
-            url = admin_change_url_for_instance(obj.selectBill)
+            url = admin_change_url(obj.selectBill)
             label = obj.selectBill.billmunshiName or str(obj.selectBill_id)
             return mark_safe(f'<a href="{url}">{label}</a>')
         return "-"
 
 
 @admin.register(ExpenseZohoProduct)
-class ExpenseZohoProductAdmin(BaseOrgScopedAdmin):
+class ExpenseZohoProductAdmin(BaseOrgAdmin):
+    """Admin interface for Expense Zoho Products."""
+    
     list_display = (
         "organization",
         "zohoBill_link",
@@ -388,12 +448,19 @@ class ExpenseZohoProductAdmin(BaseOrgScopedAdmin):
     )
     list_filter = ("organization", "created_at")
     readonly_fields = ("created_at",)
+    date_hierarchy = "created_at"
+    list_per_page = 50
     autocomplete_fields = ("organization", "zohoBill", "chart_of_accounts", "taxes")
+    
+    def get_queryset(self, request):
+        """Optimize queryset with select_related."""
+        qs = super().get_queryset(request)
+        return qs.select_related('organization', 'zohoBill')
 
     @admin.display(description="Zoho Bill")
     def zohoBill_link(self, obj):
         if obj.zohoBill_id:
-            url = admin_change_url_for_instance(obj.zohoBill)
+            url = admin_change_url(obj.zohoBill)
             label = obj.zohoBill.bill_no or str(obj.zohoBill_id)
             return mark_safe(f'<a href="{url}">{label}</a>')
         return "-"
@@ -404,7 +471,9 @@ class ExpenseZohoProductAdmin(BaseOrgScopedAdmin):
 # -----------------------------
 
 @admin.register(VendorZohoConsolidatedProduct)
-class VendorZohoConsolidatedProductAdmin(BaseOrgScopedAdmin):
+class VendorZohoConsolidatedProductAdmin(BaseOrgAdmin):
+    """Admin interface for Vendor Zoho Consolidated Products."""
+    
     list_display = (
         "organization",
         "zohoBill_link",
@@ -421,6 +490,8 @@ class VendorZohoConsolidatedProductAdmin(BaseOrgScopedAdmin):
     )
     list_filter = ("organization", "created_at")
     readonly_fields = ("created_at", "updated_at")
+    date_hierarchy = "created_at"
+    list_per_page = 50
     autocomplete_fields = ("organization", "zohoBill", "chart_of_accounts", "taxes")
 
     fieldsets = (
@@ -434,14 +505,20 @@ class VendorZohoConsolidatedProductAdmin(BaseOrgScopedAdmin):
             'fields': ('chart_of_accounts', 'taxes', 'itc_eligibility', 'reverse_charge_tax_id')
         }),
         ('Metadata', {
-            'fields': ('zohoBill', 'organization', 'consolidation_notes', 'created_at', 'updated_at')
+            'fields': ('zohoBill', 'organization', 'consolidation_notes', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
         }),
     )
+    
+    def get_queryset(self, request):
+        """Optimize queryset with select_related."""
+        qs = super().get_queryset(request)
+        return qs.select_related('organization', 'zohoBill', 'zohoBill__selectBill')
 
     @admin.display(description="Zoho Bill")
     def zohoBill_link(self, obj):
         if obj.zohoBill_id:
-            url = admin_change_url_for_instance(obj.zohoBill)
+            url = admin_change_url(obj.zohoBill)
             label = obj.zohoBill.bill_no or str(obj.zohoBill_id)
             return mark_safe(f'<a href="{url}">{label}</a>')
         return "-"

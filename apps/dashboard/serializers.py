@@ -70,20 +70,8 @@ class ErrorResponseSerializer(serializers.Serializer):
     error = serializers.CharField()
 
 
-# Tally Dashboard Serializers (mirroring Zoho structure)
-class TallyOverviewResponseSerializer(serializers.Serializer):
-    vendor_bills = BillStatsSerializer()
-    expense_bills = BillStatsSerializer()
-    financial_summary = FinancialSummarySerializer()
-    vendor_count = serializers.IntegerField()
-    recent_activity = RecentActivitySerializer()
-
-
-class TallyFunnelResponseSerializer(serializers.Serializer):
-    vendor_bills_funnel = FunnelDataSerializer()
-    expense_bills_funnel = FunnelDataSerializer()
-
-
-class TallyUsageResponseSerializer(serializers.Serializer):
-    usage_by_period = serializers.DictField(child=UsageStatsSerializer())
-    file_statistics = FileStatsSerializer()
+# Tally and Zoho share the same response shape — keep aliases for
+# drf-spectacular's extended_schema tag differentiation.
+TallyOverviewResponseSerializer = ZohoOverviewResponseSerializer
+TallyFunnelResponseSerializer = ZohoFunnelResponseSerializer
+TallyUsageResponseSerializer = ZohoUsageResponseSerializer

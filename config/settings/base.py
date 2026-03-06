@@ -299,3 +299,6 @@ SIMPLE_JWT = {
 WAFFLE_FLAG_DEFAULT = False
 WAFFLE_SWITCH_DEFAULT = False
 WAFFLE_SAMPLE_DEFAULT = False
+
+# Allow iframe embedding for file viewer
+X_FRAME_OPTIONS = 'ALLOWALL'

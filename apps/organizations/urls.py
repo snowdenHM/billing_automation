@@ -6,11 +6,14 @@ from .views import (
     organization_add_member_view,
     organization_invite_user_view,
     organization_members_view,
-    organization_remove_member_view,    organization_delete_member_view,    organization_delete_member_view,
+    organization_remove_member_view,
+    organization_delete_member_view,
     organization_update_member_role_view,
     organization_issue_api_key_view,
     organization_list_api_keys_view,
+    organization_revoke_api_key_view,
     organization_modules_view,
+    organization_set_module_view,
     modules_catalog_view,
     membership_list_view,
     membership_detail_view,
@@ -19,10 +22,6 @@ from .views import (
     organization_create_with_module_view,
     organization_onboarding_create_view,
     organization_onboarding_enable_module_view,
-)
-from .class_views import (
-    OrganizationRevokeAPIKeyView,
-    OrganizationSetModuleView,
 )
 
 app_name = "organizations"
@@ -44,11 +43,11 @@ urlpatterns = [
     # API Key management endpoints
     path("org/<uuid:org_id>/api-keys/", organization_list_api_keys_view, name="org-list-api-keys"),
     path("org/<uuid:org_id>/api-keys/issue/", organization_issue_api_key_view, name="org-issue-api-key"),
-    path("org/<uuid:org_id>/api-keys/<uuid:key_id>/revoke/", OrganizationRevokeAPIKeyView.as_view(), name="org-revoke-api-key"),
+    path("org/<uuid:org_id>/api-keys/<uuid:key_id>/revoke/", organization_revoke_api_key_view, name="org-revoke-api-key"),
 
     # Module management endpoints
     path("org/<uuid:org_id>/modules/", organization_modules_view, name="org-modules"),
-    path("org/<uuid:org_id>/modules/<str:code>/", OrganizationSetModuleView.as_view(), name="org-set-module"),
+    path("org/<uuid:org_id>/modules/<str:code>/", organization_set_module_view, name="org-set-module"),
     path("modules/catalog/", modules_catalog_view, name="modules-catalog"),
 
     # Membership endpoints

@@ -1,32 +1,21 @@
 # apps/zoho/models.py
 
-import os
 import re
 import uuid
 
 from decimal import Decimal
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
 from apps.organizations.models import Organization
+from apps.common.validators import validate_file_extension
 
 
 # -----------------------------
 # Helpers / Base
 # -----------------------------
-
-def validate_file_extension(value):
-    """
-    Simple file extension validator for uploaded bills.
-    Adjust the allowed list if needed.
-    """
-    allowed = {".pdf", ".png", ".jpg", ".jpeg"}
-    ext = os.path.splitext(getattr(value, "name", ""))[1].lower()
-    if ext not in allowed:
-        raise ValidationError(f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(allowed))}")
 
 
 class BaseTeamModel(models.Model):
@@ -345,6 +334,9 @@ class VendorBill(BaseTeamModel):
         return self.billmunshiName or f"Bill:{self.id}"
 
     def save(self, *args, **kwargs):
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if not self.billmunshiName and self.file:
             logger.debug(f"[MODEL DEBUG] Generating billmunshiName for VendorBill with file: {self.file.name}")
 
@@ -378,8 +370,6 @@ class VendorBill(BaseTeamModel):
         super().save(*args, **kwargs)
 
         # Log successful save
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(f"Successfully saved VendorBill: {self.billmunshiName} (ID: {self.id})")
 
 
@@ -635,6 +625,9 @@ class JournalBill(BaseTeamModel):
         return self.billmunshiName or f"JournalBill:{self.id}"
 
     def save(self, *args, **kwargs):
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if not self.billmunshiName and self.file:
             logger.debug(f"[MODEL DEBUG] Generating billmunshiName for JournalBill with file: {self.file.name}")
 
@@ -668,8 +661,6 @@ class JournalBill(BaseTeamModel):
         super().save(*args, **kwargs)
 
         # Log successful save
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(f"Successfully saved JournalBill: {self.billmunshiName} (ID: {self.id})")
 
 
@@ -907,6 +898,9 @@ class ExpenseBill(BaseTeamModel):
         return self.billmunshiName or f"ExpenseBill:{self.id}"
 
     def save(self, *args, **kwargs):
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if not self.billmunshiName and self.file:
             logger.debug(f"[MODEL DEBUG] Generating billmunshiName for ExpenseBill with file: {self.file.name}")
 
@@ -940,8 +934,6 @@ class ExpenseBill(BaseTeamModel):
         super().save(*args, **kwargs)
 
         # Log successful save
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(f"Successfully saved ExpenseBill: {self.billmunshiName} (ID: {self.id})")
 
 

@@ -1,4 +1,7 @@
 from django.apps import AppConfig
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class CommonConfig(AppConfig):
@@ -10,10 +13,6 @@ class CommonConfig(AppConfig):
         try:
             # Import and apply the DRF model_meta patch
             from . import drf_patches
-import logging
-
-logger = logging.getLogger(__name__)
-
             logger.info("Applied DRF model_meta patch for ManyToMany field safety")
         except ImportError as e:
             logger.warning(f"Warning: Could not apply DRF patches: {e}")

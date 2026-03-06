@@ -1,19 +1,18 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-# Import functional expense views
-from .expense_views_functional import (
-    expense_bills_list,
-    expense_bills_upload,
-    expense_bill_detail,
-    expense_bill_delete,
-    expense_bill_analyze,
-    expense_bill_verify,
-    expense_bill_sync,
-    expense_bills_sync_list,
-    expense_bill_sync_external
-)
-from .vendor_views_functional import (
+from .views import (
+    # Config
+    get_tally_config,
+    create_or_update_tally_config,
+    TallyConfigViewSet,
+    # Ledger / Parent Ledger / Master
+    LedgerViewSet,
+    ParentLedgerViewSet,
+    MasterAPIView,
+    # Bill status
+    update_bill_tally_sync_status,
+    # Vendor bills
     vendor_bills_list,
     vendor_bills_upload,
     vendor_bill_detail,
@@ -22,14 +21,22 @@ from .vendor_views_functional import (
     vendor_bill_verify,
     vendor_bill_sync,
     vendor_bills_sync_list,
-    vendor_bill_sync_external
+    vendor_bill_sync_external,
+    # Expense bills
+    expense_bills_list,
+    expense_bills_upload,
+    expense_bill_detail,
+    expense_bill_delete,
+    expense_bill_analyze,
+    expense_bill_verify,
+    expense_bill_sync,
+    expense_bills_sync_list,
+    expense_bill_sync_external,
+    # Bill move
+    move_tally_bills_between_modules_view,
+    # Organization data
+    organization_tally_data,
 )
-from .bill_move_view import move_tally_bills_between_modules_view
-from .views import (
-    LedgerViewSet, TallyConfigViewSet, ParentLedgerViewSet, MasterAPIView,
-    get_tally_config, create_or_update_tally_config, update_bill_tally_sync_status
-)
-from .organization_data_views import organization_tally_data
 
 # Create router for the remaining viewsets
 router = DefaultRouter()

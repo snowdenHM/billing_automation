@@ -1,346 +1,214 @@
 # apps/module/zoho/tasks.py
+"""
+Background tasks for Zoho bill processing using Django-RQ.
 
+Heavy lifting is delegated to ``apps.common.services.tasks`` — this module
+only provides the thin Zoho-specific orchestrators.
+"""
 import logging
+
 import django_rq
-from django.apps import apps
+
+from apps.common.services.tasks import (
+    enqueue_bill_processing,
+    mark_processing_done,
+    mark_processing_error,
+    mark_processing_start,
+    update_bill_duplicate_fields,
+)
 
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Enqueue helpers
+# ---------------------------------------------------------------------------
+
 def enqueue_vendor_bill_analysis(bill_id, organization_id):
-    """Enqueue vendor bill analysis task"""
-    queue = django_rq.get_queue('default')
-    return queue.enqueue(
-        process_zoho_vendor_bill_analysis,
-        bill_id,
-        organization_id,
-        timeout=600
+    """Enqueue vendor bill analysis task."""
+    return enqueue_bill_processing(
+        process_zoho_vendor_bill_analysis, bill_id, organization_id,
     )
 
 
 def enqueue_expense_bill_analysis(bill_id, organization_id):
-    """Enqueue expense bill analysis task"""
-    queue = django_rq.get_queue('default')
-    return queue.enqueue(
-        process_zoho_expense_bill_analysis,
-        bill_id,
-        organization_id,
-        timeout=600
+    """Enqueue expense bill analysis task."""
+    return enqueue_bill_processing(
+        process_zoho_expense_bill_analysis, bill_id, organization_id,
     )
 
 
 def enqueue_journal_bill_analysis(bill_id, organization_id):
-    """Enqueue journal bill analysis task"""
-    queue = django_rq.get_queue('default')
-    return queue.enqueue(
-        process_zoho_journal_bill_analysis,
-        bill_id,
-        organization_id,
-        timeout=600
+    """Enqueue journal bill analysis task."""
+    return enqueue_bill_processing(
+        process_zoho_journal_bill_analysis, bill_id, organization_id,
     )
 
 
-@django_rq.job('default', timeout=600)
-def process_zoho_vendor_bill_analysis(bill_id, organization_id, **kwargs):
-    """Background task to analyze Zoho vendor bill and check for duplicates"""
-    from .models import VendorBill
+# ---------------------------------------------------------------------------
+# Internal: shared Zoho-specific task skeleton
+# ---------------------------------------------------------------------------
+
+def _process_zoho_bill(
+    bill_id,
+    organization_id,
+    *,
+    model_class,
+    analysed_status,
+    get_functions,
+    bill_type: str,
+    has_duplicate_check: bool = False,
+):
+    """
+    Generic task body for all three Zoho bill types.
+
+    Parameters
+    ----------
+    get_functions : callable
+        A zero-arg function that lazily imports and returns the needed
+        callables as a tuple:
+        ``(analyze_fn, create_objects_fn)`` – or –
+        ``(analyze_fn, create_objects_fn, duplicate_fn)`` when
+        *has_duplicate_check* is True.
+    """
     from apps.organizations.models import Organization
-    
-    # Lazy import to avoid circular imports
-    def get_analyze_function():
-        from .vendor_views import analyze_vendor_bill_with_openai, create_vendor_zoho_objects_from_analysis
-        return analyze_vendor_bill_with_openai, create_vendor_zoho_objects_from_analysis
-    
+
     try:
-        # Get bill and organization
-        bill = VendorBill.objects.get(id=bill_id)
+        bill = model_class.objects.get(id=bill_id)
         organization = Organization.objects.get(id=organization_id)
-        
-        # Mark as processing
-        bill.is_processing = True
-        bill.processing_error = ""
-        bill.save(update_fields=['is_processing', 'processing_error'])
-        
-        logger.info(f"Starting background processing for Zoho vendor bill {bill_id}")
-        
-        # Step 1: AI Analysis + Full Automation + Duplicate Detection
+        mark_processing_start(bill)
+        logger.info("Starting background processing for Zoho %s bill %s", bill_type, bill_id)
+
+        # Step 1 — AI analysis + object creation
         try:
-            analyze_bill, create_zoho_objects = get_analyze_function()
-            
-            # Read file content
+            fns = get_functions()
+            analyze_fn, create_objects_fn = fns[0], fns[1]
+            duplicate_fn = fns[2] if has_duplicate_check and len(fns) > 2 else None
+
             if not bill.file:
                 raise Exception("No file attached to bill")
-                
+
             file_content = bill.file.read()
-            file_extension = bill.file.name.split('.')[-1].lower()
-            
-            # Analyze with OpenAI
-            logger.info(f"🤖 Running AI analysis for Zoho vendor bill {bill_id}")
-            analyzed_data = analyze_bill(file_content, file_extension)
-            
-            # Update bill with analyzed data
+            file_extension = bill.file.name.split(".")[-1].lower()
+
+            logger.info("Running AI analysis for Zoho %s bill %s", bill_type, bill_id)
+            analyzed_data = analyze_fn(file_content, file_extension)
+
             bill.analysed_data = analyzed_data
-            bill.status = VendorBill.BillStatus.ANALYSED
-            bill.save(update_fields=['analysed_data', 'status'])
-            
-            # Create Zoho objects with FULL AUTOMATION (includes duplicate detection)
-            logger.info(f"⚙️ Running full automation for Zoho vendor bill {bill_id}")
-            zoho_bill = create_zoho_objects(bill, analyzed_data, organization)
-            
-            logger.info(f"✅ Background automation completed successfully for Zoho vendor bill {bill_id}")
-            
-        except Exception as e:
-            logger.error(f"❌ AI analysis + automation failed for Zoho vendor bill {bill_id}: {str(e)}")
-            bill.is_processing = False
-            bill.processing_error = f"Analysis + automation failed: {str(e)}"
-            bill.save(update_fields=['is_processing', 'processing_error'])
+            bill.status = analysed_status
+            bill.save(update_fields=["analysed_data", "status"])
+
+            logger.info("Running automation for Zoho %s bill %s", bill_type, bill_id)
+            create_objects_fn(bill, analyzed_data, organization)
+
+        except Exception as exc:
+            logger.error("AI analysis + automation failed for Zoho %s bill %s: %s", bill_type, bill_id, exc)
+            mark_processing_error(bill, f"Analysis + automation failed: {exc}")
+            # Reset status to Draft so user can retry
+            bill.status = "Draft"
+            bill.save(update_fields=["status"])
+            # Re-raise to be handled by outer exception handler
             raise
-        
-        # Mark as processing complete
-        bill.is_processing = False
-        bill.save(update_fields=['is_processing'])
-        
-        logger.info(f"🎉 Background processing with full automation completed for Zoho vendor bill {bill_id}")
-        return f"Successfully processed Zoho vendor bill {bill_id} with full field automation"
-        
-    except VendorBill.DoesNotExist:
-        logger.error(f"❌ Zoho vendor bill {bill_id} not found")
-        raise
-    except Exception as e:
-        logger.error(f"❌ Background automation failed for Zoho vendor bill {bill_id}: {str(e)}")
+
+        # Step 2 — optional duplicate check
+        if has_duplicate_check and duplicate_fn:
+            try:
+                result = duplicate_fn(bill, organization)
+                update_bill_duplicate_fields(bill, result)
+                logger.info("Duplicate check completed for Zoho %s bill %s", bill_type, bill_id)
+            except Exception as exc:
+                logger.error("Duplicate check failed for Zoho %s bill %s: %s", bill_type, bill_id, exc)
+                bill.duplicate_description = f"Duplicate check failed: {exc}"
+                bill.save(update_fields=["duplicate_description"])
+
+        mark_processing_done(bill)
+        logger.info("Background processing completed for Zoho %s bill %s", bill_type, bill_id)
+        return f"Successfully processed Zoho {bill_type} bill {bill_id}"
+
+    except model_class.DoesNotExist:
+        logger.error("Zoho %s bill %s not found", bill_type, bill_id)
+        return f"Error: Zoho {bill_type} bill {bill_id} not found"
+    except Exception as exc:
+        logger.error("Background automation failed for Zoho %s bill %s: %s", bill_type, bill_id, exc)
         try:
-            bill = VendorBill.objects.get(id=bill_id)
-            bill.is_processing = False
-            bill.processing_error = f"Automation failed: {str(e)}"
-            bill.save(update_fields=['is_processing', 'processing_error'])
-        except:
+            bill = model_class.objects.get(id=bill_id)
+            mark_processing_error(bill, f"Automation failed: {exc}")
+            # Reset status to Draft so user can retry
+            bill.status = "Draft"
+            bill.save(update_fields=["status"])
+        except Exception:
             pass
-        raise
+        return f"Error: Background automation failed for Zoho {bill_type} bill {bill_id}: {exc}"
 
 
-@django_rq.job('default', timeout=600)
+# ---------------------------------------------------------------------------
+# Task processors
+# ---------------------------------------------------------------------------
+
+@django_rq.job("default", timeout=600)
+def process_zoho_vendor_bill_analysis(bill_id, organization_id, **kwargs):
+    """Background task: analyse Zoho vendor bill + create objects + duplicate check."""
+    from .models import VendorBill
+
+    def _fns():
+        from .views.vendor_bills import (
+            analyze_vendor_bill_with_openai,
+            check_duplicate_bill,
+            create_vendor_zoho_objects_from_analysis,
+        )
+        return analyze_vendor_bill_with_openai, create_vendor_zoho_objects_from_analysis, check_duplicate_bill
+
+    return _process_zoho_bill(
+        bill_id, organization_id,
+        model_class=VendorBill,
+        analysed_status="Analysed",
+        get_functions=_fns,
+        bill_type="vendor",
+        has_duplicate_check=True,
+    )
+
+
+@django_rq.job("default", timeout=600)
 def process_zoho_expense_bill_analysis(bill_id, organization_id, **kwargs):
-    """Background task to analyze Zoho expense bill and check for duplicates"""
+    """Background task: analyse Zoho expense bill + create objects + duplicate check."""
     from .models import ExpenseBill
-    from apps.organizations.models import Organization
-    
-    # Lazy import to avoid circular imports
-    def get_analyze_function():
-        from .expense_views import analyze_bill_with_openai, create_expense_zoho_objects_from_analysis, check_duplicate_expense_bill
+
+    def _fns():
+        from .views.expense_bills import (
+            analyze_bill_with_openai,
+            check_duplicate_expense_bill,
+            create_expense_zoho_objects_from_analysis,
+        )
         return analyze_bill_with_openai, create_expense_zoho_objects_from_analysis, check_duplicate_expense_bill
-    
-    try:
-        # Get bill and organization
-        bill = ExpenseBill.objects.get(id=bill_id)
-        organization = Organization.objects.get(id=organization_id)
-        
-        # Mark as processing
-        bill.is_processing = True
-        bill.processing_error = ""
-        bill.save(update_fields=['is_processing', 'processing_error'])
-        
-        logger.info(f"🚀 Starting background automation processing for Zoho expense bill {bill_id}")
-        
-        # Step 1: AI Analysis + Full Automation (if available)
-        try:
-            analyze_bill, create_zoho_objects, check_duplicate = get_analyze_function()
-            
-            # Read file content
-            if not bill.file:
-                raise Exception("No file attached to bill")
-                
-            file_content = bill.file.read()
-            file_extension = bill.file.name.split('.')[-1].lower()
-            
-            # Analyze with OpenAI
-            logger.info(f"🤖 Running AI analysis for Zoho expense bill {bill_id}")
-            analyzed_data = analyze_bill(file_content, file_extension)
-            
-            # Create Zoho objects (with automation if available)
-            logger.info(f"⚙️ Running automation for Zoho expense bill {bill_id}")
-            create_zoho_objects(bill, analyzed_data, organization)
-            
-            # Update bill status
-            bill.status = ExpenseBill.BillStatus.ANALYSED
-            bill.save(update_fields=['status'])
-            
-        except Exception as e:
-            logger.error(f"❌ AI analysis + automation failed for Zoho expense bill {bill_id}: {str(e)}")
-            bill.is_processing = False
-            bill.processing_error = f"Analysis + automation failed: {str(e)}"
-            bill.save(update_fields=['is_processing', 'processing_error'])
-            raise
-        
-        # Step 2: Check for duplicates (fallback if not integrated)
-        try:
-            duplicate_result = check_duplicate(bill, organization)
-            
-            if duplicate_result:
-                is_duplicate, duplicate_bills, similarity_score = duplicate_result
-                
-                # Update duplicate fields
-                bill.is_duplicate = is_duplicate
-                bill.duplicate_score = similarity_score
-                
-                if is_duplicate:
-                    # Create detailed duplicate description
-                    duplicate_info = []
-                    for dup_data in duplicate_bills[:3]:  # Limit to top 3 matches
-                        duplicate_info.append({
-                            'bill_id': str(dup_data['bill'].id),
-                            'invoice_number': dup_data.get('invoice_number', 'N/A'),
-                            'vendor_name': dup_data.get('vendor_name', 'N/A'),
-                            'total': dup_data.get('total', 0),
-                            'date': dup_data.get('date', 'N/A'),
-                            'similarity_score': dup_data.get('similarity_score', 0)
-                        })
-                    
-                    bill.duplicate_matched_bills = duplicate_info
-                    bill.duplicate_description = f"Found {len(duplicate_bills)} potential duplicate(s) with {similarity_score:.1f}% similarity"
-                else:
-                    bill.duplicate_description = "No duplicates found"
-                    bill.duplicate_matched_bills = []
-                    
-                bill.save(update_fields=['is_duplicate', 'duplicate_score', 'duplicate_matched_bills', 'duplicate_description'])
-                logger.info(f"Duplicate check completed for Zoho expense bill {bill_id}: {is_duplicate}")
-                
-        except Exception as e:
-            logger.error(f"Duplicate check failed for Zoho expense bill {bill_id}: {str(e)}")
-            # Don't fail the entire task for duplicate check errors
-            bill.duplicate_description = f"Duplicate check failed: {str(e)}"
-            bill.save(update_fields=['duplicate_description'])
-        
-        # Mark as processing complete
-        bill.is_processing = False
-        bill.save(update_fields=['is_processing'])
-        
-        logger.info(f"🎉 Background automation completed for Zoho expense bill {bill_id}")
-        return f"Successfully processed Zoho expense bill {bill_id} with automation"
-        
-    except ExpenseBill.DoesNotExist:
-        logger.error(f"❌ Zoho expense bill {bill_id} not found")
-        raise
-    except Exception as e:
-        logger.error(f"❌ Background automation failed for Zoho expense bill {bill_id}: {str(e)}")
-        try:
-            bill = ExpenseBill.objects.get(id=bill_id)
-            bill.is_processing = False
-            bill.processing_error = f"Automation failed: {str(e)}"
-            bill.save(update_fields=['is_processing', 'processing_error'])
-        except:
-            pass
-        raise
+
+    return _process_zoho_bill(
+        bill_id, organization_id,
+        model_class=ExpenseBill,
+        analysed_status="Analysed",
+        get_functions=_fns,
+        bill_type="expense",
+        has_duplicate_check=True,
+    )
 
 
-@django_rq.job('default', timeout=600)
+@django_rq.job("default", timeout=600)
 def process_zoho_journal_bill_analysis(bill_id, organization_id, **kwargs):
-    """Background task to analyze Zoho journal bill and check for duplicates"""
+    """Background task: analyse Zoho journal bill + create objects + duplicate check."""
     from .models import JournalBill
-    from apps.organizations.models import Organization
-    
-    # Lazy import to avoid circular imports
-    def get_analyze_function():
-        from .journal_views import analyze_bill_with_openai, create_journal_zoho_objects_from_analysis, check_duplicate_journal_bill
+
+    def _fns():
+        from .views.journal_bills import (
+            analyze_bill_with_openai,
+            check_duplicate_journal_bill,
+            create_journal_zoho_objects_from_analysis,
+        )
         return analyze_bill_with_openai, create_journal_zoho_objects_from_analysis, check_duplicate_journal_bill
-    
-    try:
-        # Get bill and organization
-        bill = JournalBill.objects.get(id=bill_id)
-        organization = Organization.objects.get(id=organization_id)
-        
-        # Mark as processing
-        bill.is_processing = True
-        bill.processing_error = ""
-        bill.save(update_fields=['is_processing', 'processing_error'])
-        
-        logger.info(f"🚀 Starting background automation processing for Zoho journal bill {bill_id}")
-        
-        # Step 1: AI Analysis + Full Automation (if available) 
-        try:
-            analyze_bill, create_zoho_objects, check_duplicate = get_analyze_function()
-            
-            # Read file content
-            if not bill.file:
-                raise Exception("No file attached to bill")
-                
-            file_content = bill.file.read()
-            file_extension = bill.file.name.split('.')[-1].lower()
-            
-            # Analyze with OpenAI
-            logger.info(f"🤖 Running AI analysis for Zoho journal bill {bill_id}")
-            analyzed_data = analyze_bill(file_content, file_extension)
-            
-            # Create Zoho objects (with automation if available)
-            logger.info(f"⚙️ Running automation for Zoho journal bill {bill_id}")
-            create_zoho_objects(bill, analyzed_data, organization)
-            
-            # Update bill status
-            bill.status = JournalBill.BillStatus.ANALYSED
-            bill.save(update_fields=['status'])
-            
-        except Exception as e:
-            logger.error(f"❌ AI analysis + automation failed for Zoho journal bill {bill_id}: {str(e)}")
-            bill.is_processing = False
-            bill.processing_error = f"Analysis + automation failed: {str(e)}"
-            bill.save(update_fields=['is_processing', 'processing_error'])
-            raise
-        
-        # Step 2: Check for duplicates (fallback if not integrated)
-        try:
-            duplicate_result = check_duplicate(bill, organization)
-            
-            if duplicate_result:
-                is_duplicate, duplicate_bills, similarity_score = duplicate_result
-                
-                # Update duplicate fields
-                bill.is_duplicate = is_duplicate
-                bill.duplicate_score = similarity_score
-                
-                if is_duplicate:
-                    # Create detailed duplicate description
-                    duplicate_info = []
-                    for dup_data in duplicate_bills[:3]:  # Limit to top 3 matches
-                        duplicate_info.append({
-                            'bill_id': str(dup_data['bill'].id),
-                            'invoice_number': dup_data.get('invoice_number', 'N/A'),
-                            'vendor_name': dup_data.get('vendor_name', 'N/A'),
-                            'total': dup_data.get('total', 0),
-                            'date': dup_data.get('date', 'N/A'),
-                            'similarity_score': dup_data.get('similarity_score', 0)
-                        })
-                    
-                    bill.duplicate_matched_bills = duplicate_info
-                    bill.duplicate_description = f"Found {len(duplicate_bills)} potential duplicate(s) with {similarity_score:.1f}% similarity"
-                else:
-                    bill.duplicate_description = "No duplicates found"
-                    bill.duplicate_matched_bills = []
-                    
-                bill.save(update_fields=['is_duplicate', 'duplicate_score', 'duplicate_matched_bills', 'duplicate_description'])
-                logger.info(f"Duplicate check completed for Zoho journal bill {bill_id}: {is_duplicate}")
-                
-        except Exception as e:
-            logger.error(f"Duplicate check failed for Zoho journal bill {bill_id}: {str(e)}")
-            # Don't fail the entire task for duplicate check errors
-            bill.duplicate_description = f"Duplicate check failed: {str(e)}"
-            bill.save(update_fields=['duplicate_description'])
-        
-        # Mark as processing complete
-        bill.is_processing = False
-        bill.save(update_fields=['is_processing'])
-        
-        logger.info(f"🎉 Background automation completed for Zoho journal bill {bill_id}")
-        return f"Successfully processed Zoho journal bill {bill_id} with automation"
-        
-    except JournalBill.DoesNotExist:
-        logger.error(f"❌ Zoho journal bill {bill_id} not found")
-        raise
-    except Exception as e:
-        logger.error(f"❌ Background automation failed for Zoho journal bill {bill_id}: {str(e)}")
-        try:
-            bill = JournalBill.objects.get(id=bill_id)
-            bill.is_processing = False
-            bill.processing_error = f"Automation failed: {str(e)}"
-            bill.save(update_fields=['is_processing', 'processing_error'])
-        except:
-            pass
-        raise
+
+    return _process_zoho_bill(
+        bill_id, organization_id,
+        model_class=JournalBill,
+        analysed_status="Analysed",
+        get_functions=_fns,
+        bill_type="journal",
+        has_duplicate_check=True,
+    )

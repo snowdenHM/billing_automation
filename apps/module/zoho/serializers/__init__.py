@@ -17,5 +17,5 @@ __all__ = [
     "ZohoChartOfAccountSerializer",
     "ZohoTaxesSerializer",
     "ZohoTdsTcsSerializer",
-    "ZohoVendorCreditSerializer",
+    "ZohoVendorCreditsSerializer",
 ]
