@@ -151,12 +151,26 @@ def process_zoho_vendor_bill_analysis(bill_id, organization_id, **kwargs):
     from .models import VendorBill
 
     def _fns():
-        from .views.vendor_bills import (
-            analyze_vendor_bill_with_openai,
-            check_duplicate_bill,
-            create_vendor_zoho_objects_from_analysis,
-        )
-        return analyze_vendor_bill_with_openai, create_vendor_zoho_objects_from_analysis, check_duplicate_bill
+        try:
+            from .views.vendor_bills import (
+                analyze_vendor_bill_with_openai,
+                check_duplicate_bill,
+                create_vendor_zoho_objects_from_analysis,
+            )
+            return analyze_vendor_bill_with_openai, create_vendor_zoho_objects_from_analysis, check_duplicate_bill
+        except ImportError as e:
+            logger.error(f"Import error in vendor bill analysis: {e}")
+            # Try alternative import path
+            try:
+                from apps.module.zoho.views.vendor_bills import (
+                    analyze_vendor_bill_with_openai,
+                    check_duplicate_bill,
+                    create_vendor_zoho_objects_from_analysis,
+                )
+                return analyze_vendor_bill_with_openai, create_vendor_zoho_objects_from_analysis, check_duplicate_bill
+            except ImportError as e2:
+                logger.error(f"Alternative import also failed: {e2}")
+                raise
 
     return _process_zoho_bill(
         bill_id, organization_id,
@@ -174,12 +188,26 @@ def process_zoho_expense_bill_analysis(bill_id, organization_id, **kwargs):
     from .models import ExpenseBill
 
     def _fns():
-        from .views.expense_bills import (
-            analyze_bill_with_openai,
-            check_duplicate_expense_bill,
-            create_expense_zoho_objects_from_analysis,
-        )
-        return analyze_bill_with_openai, create_expense_zoho_objects_from_analysis, check_duplicate_expense_bill
+        try:
+            from .views.expense_bills import (
+                analyze_bill_with_openai,
+                check_duplicate_expense_bill,
+                create_expense_zoho_objects_from_analysis,
+            )
+            return analyze_bill_with_openai, create_expense_zoho_objects_from_analysis, check_duplicate_expense_bill
+        except ImportError as e:
+            logger.error(f"Import error in expense bill analysis: {e}")
+            # Try alternative import path
+            try:
+                from apps.module.zoho.views.expense_bills import (
+                    analyze_bill_with_openai,
+                    check_duplicate_expense_bill,
+                    create_expense_zoho_objects_from_analysis,
+                )
+                return analyze_bill_with_openai, create_expense_zoho_objects_from_analysis, check_duplicate_expense_bill
+            except ImportError as e2:
+                logger.error(f"Alternative import also failed: {e2}")
+                raise
 
     return _process_zoho_bill(
         bill_id, organization_id,
@@ -197,12 +225,26 @@ def process_zoho_journal_bill_analysis(bill_id, organization_id, **kwargs):
     from .models import JournalBill
 
     def _fns():
-        from .views.journal_bills import (
-            analyze_bill_with_openai,
-            check_duplicate_journal_bill,
-            create_journal_zoho_objects_from_analysis,
-        )
-        return analyze_bill_with_openai, create_journal_zoho_objects_from_analysis, check_duplicate_journal_bill
+        try:
+            from .views.journal_bills import (
+                analyze_bill_with_openai,
+                check_duplicate_journal_bill,
+                create_journal_zoho_objects_from_analysis,
+            )
+            return analyze_bill_with_openai, create_journal_zoho_objects_from_analysis, check_duplicate_journal_bill
+        except ImportError as e:
+            logger.error(f"Import error in journal bill analysis: {e}")
+            # Try alternative import path
+            try:
+                from apps.module.zoho.views.journal_bills import (
+                    analyze_bill_with_openai,
+                    check_duplicate_journal_bill,
+                    create_journal_zoho_objects_from_analysis,
+                )
+                return analyze_bill_with_openai, create_journal_zoho_objects_from_analysis, check_duplicate_journal_bill
+            except ImportError as e2:
+                logger.error(f"Alternative import also failed: {e2}")
+                raise
 
     return _process_zoho_bill(
         bill_id, organization_id,
