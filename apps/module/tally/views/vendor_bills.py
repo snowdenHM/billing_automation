@@ -96,11 +96,13 @@ def analyze_bill_with_ai(bill, organization):
 def validate_bill_ownership(json_data, organization):
     """Validate if the bill belongs to the organization — delegates to shared service.
 
-    Checks the ``from`` field (vendor/issuer) against the organization.
+    Checks the ``to`` field (bill recipient = our organization) against the
+    organization. The ``from`` field is the vendor who issued the bill, not us.
     """
     from apps.common.services.ownership import validate_bill_ownership_simple
     return validate_bill_ownership_simple(
-        json_data, organization, check_field='from', bill_type='vendor bill',
+        json_data, organization, check_field='to', allow_empty=True,
+        bill_type='vendor bill',
     )
 
 
