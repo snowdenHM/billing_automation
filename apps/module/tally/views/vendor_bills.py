@@ -591,6 +591,22 @@ def vendor_bill_analyze(request, org_id):
         )
 
     if bill.process:
+        # Re-validate ownership using stored analysed_data so that bills processed
+        # before the check_field fix get their description/flag corrected automatically.
+        if bill.analysed_data:
+            try:
+                bill_belongs_to_org, ownership_description = validate_bill_ownership(bill.analysed_data, organization)
+                if (bill.bill_belong_your_org != bill_belongs_to_org or
+                        bill.description != ownership_description):
+                    bill.bill_belong_your_org = bill_belongs_to_org
+                    bill.description = ownership_description
+                    bill.save(update_fields=['bill_belong_your_org', 'description'])
+                    logger.info(
+                        "Re-validated ownership for already-processed bill %s: %s",
+                        bill.id, bill_belongs_to_org,
+                    )
+            except Exception as exc:
+                logger.warning("Ownership re-validation failed for bill %s: %s", bill.id, exc)
         return Response({
             'message': 'Bill Already Analyzed',
             'data': 'This bill has already been processed and analyzed. Use the verification endpoint to modify the analyzed data.',
