@@ -108,28 +108,24 @@ def _process_tally_bill(bill_id, *, model_class, get_functions, bill_type):
 
 def process_vendor_bill_analysis(bill_id, **kwargs):
     """Background task: AI-analyse a vendor bill, then check duplicates."""
-    def _fns():
-        from .views.vendor_bills import analyze_bill_with_ai, check_duplicate_tally_vendor_bill
-        return analyze_bill_with_ai, check_duplicate_tally_vendor_bill
+    from .bill_processors import analyze_bill_with_ai, check_duplicate_tally_vendor_bill
 
     return _process_tally_bill(
         bill_id,
         model_class=TallyVendorBill,
-        get_functions=_fns,
+        get_functions=lambda: (analyze_bill_with_ai, check_duplicate_tally_vendor_bill),
         bill_type="vendor",
     )
 
 
 def process_expense_bill_analysis(bill_id, **kwargs):
     """Background task: AI-analyse an expense bill, then check duplicates."""
-    def _fns():
-        from .views.expense_bills import analyze_expense_bill_with_ai, check_duplicate_tally_expense_bill
-        return analyze_expense_bill_with_ai, check_duplicate_tally_expense_bill
+    from .bill_processors import analyze_expense_bill_with_ai, check_duplicate_tally_expense_bill
 
     return _process_tally_bill(
         bill_id,
         model_class=TallyExpenseBill,
-        get_functions=_fns,
+        get_functions=lambda: (analyze_expense_bill_with_ai, check_duplicate_tally_expense_bill),
         bill_type="expense",
     )
 

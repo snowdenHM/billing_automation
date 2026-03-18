@@ -157,20 +157,19 @@ def process_zoho_vendor_bill_analysis(bill_id, organization_id, **kwargs):
                 check_duplicate_bill,
                 create_vendor_zoho_objects_from_analysis,
             )
-            return analyze_vendor_bill_with_openai, create_vendor_zoho_objects_from_analysis, check_duplicate_bill
-        except ImportError as e:
-            logger.error(f"Import error in vendor bill analysis: {e}")
-            # Try alternative import path
+        except (ImportError, ModuleNotFoundError) as e:
+            logger.error("Sub-package import failed for vendor bill analysis: %s", e)
+            # Fall back to flat views.py (server) or package __init__ (dev)
             try:
-                from apps.module.zoho.views.vendor_bills import (
+                from .views import (
                     analyze_vendor_bill_with_openai,
                     check_duplicate_bill,
                     create_vendor_zoho_objects_from_analysis,
                 )
-                return analyze_vendor_bill_with_openai, create_vendor_zoho_objects_from_analysis, check_duplicate_bill
-            except ImportError as e2:
-                logger.error(f"Alternative import also failed: {e2}")
+            except (ImportError, ModuleNotFoundError) as e2:
+                logger.error("Fallback import also failed: %s", e2)
                 raise
+        return analyze_vendor_bill_with_openai, create_vendor_zoho_objects_from_analysis, check_duplicate_bill
 
     return _process_zoho_bill(
         bill_id, organization_id,
@@ -194,20 +193,18 @@ def process_zoho_expense_bill_analysis(bill_id, organization_id, **kwargs):
                 check_duplicate_expense_bill,
                 create_expense_zoho_objects_from_analysis,
             )
-            return analyze_bill_with_openai, create_expense_zoho_objects_from_analysis, check_duplicate_expense_bill
-        except ImportError as e:
-            logger.error(f"Import error in expense bill analysis: {e}")
-            # Try alternative import path
+        except (ImportError, ModuleNotFoundError) as e:
+            logger.error("Sub-package import failed for expense bill analysis: %s", e)
             try:
-                from apps.module.zoho.views.expense_bills import (
+                from .views import (
                     analyze_bill_with_openai,
                     check_duplicate_expense_bill,
                     create_expense_zoho_objects_from_analysis,
                 )
-                return analyze_bill_with_openai, create_expense_zoho_objects_from_analysis, check_duplicate_expense_bill
-            except ImportError as e2:
-                logger.error(f"Alternative import also failed: {e2}")
+            except (ImportError, ModuleNotFoundError) as e2:
+                logger.error("Fallback import also failed: %s", e2)
                 raise
+        return analyze_bill_with_openai, create_expense_zoho_objects_from_analysis, check_duplicate_expense_bill
 
     return _process_zoho_bill(
         bill_id, organization_id,
@@ -231,20 +228,18 @@ def process_zoho_journal_bill_analysis(bill_id, organization_id, **kwargs):
                 check_duplicate_journal_bill,
                 create_journal_zoho_objects_from_analysis,
             )
-            return analyze_bill_with_openai, create_journal_zoho_objects_from_analysis, check_duplicate_journal_bill
-        except ImportError as e:
-            logger.error(f"Import error in journal bill analysis: {e}")
-            # Try alternative import path
+        except (ImportError, ModuleNotFoundError) as e:
+            logger.error("Sub-package import failed for journal bill analysis: %s", e)
             try:
-                from apps.module.zoho.views.journal_bills import (
+                from .views import (
                     analyze_bill_with_openai,
                     check_duplicate_journal_bill,
                     create_journal_zoho_objects_from_analysis,
                 )
-                return analyze_bill_with_openai, create_journal_zoho_objects_from_analysis, check_duplicate_journal_bill
-            except ImportError as e2:
-                logger.error(f"Alternative import also failed: {e2}")
+            except (ImportError, ModuleNotFoundError) as e2:
+                logger.error("Fallback import also failed: %s", e2)
                 raise
+        return analyze_bill_with_openai, create_journal_zoho_objects_from_analysis, check_duplicate_journal_bill
 
     return _process_zoho_bill(
         bill_id, organization_id,
