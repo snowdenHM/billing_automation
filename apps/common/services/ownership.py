@@ -68,12 +68,16 @@ def _compare_gst(party_gst: str, org_gst: str) -> tuple[bool, bool]:
 
 
 def _name_similarity(party_name: str, org_name: str) -> float:
-    """Similarity score (0–1) using the shared enhanced normaliser."""
+    """Similarity score (0–1) using the shared enhanced normaliser.
+
+    Both names are lowercased before comparison so that casing differences
+    like 'HostBooks Limited' vs 'Hostbooks Limited' never cause a mismatch.
+    """
     if not party_name or not org_name:
         return 0.0
     return calculate_string_similarity(
-        normalize_company_name_enhanced(party_name),
-        normalize_company_name_enhanced(org_name),
+        normalize_company_name_enhanced(party_name).lower(),
+        normalize_company_name_enhanced(org_name).lower(),
     )
 
 
