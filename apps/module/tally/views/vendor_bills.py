@@ -1230,6 +1230,28 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                     if discount_ledger:
                         analyzed_bill.discount_taxes = discount_ledger
 
+            # Update Cess
+            cess_data = taxes_data.get('cess', {})
+            if 'amount' in cess_data:
+                analyzed_bill.cess = round(float(cess_data['amount']), 2)
+            if 'ledger' in cess_data and cess_data['ledger'] != "No Tax Ledger":
+                current_cess_ledger = analyzed_bill.cess_taxes
+                if not current_cess_ledger or str(current_cess_ledger) != cess_data['ledger']:
+                    cess_ledger = find_or_create_tax_ledger(cess_data['ledger'], 'CESS', organization)
+                    if cess_ledger:
+                        analyzed_bill.cess_taxes = cess_ledger
+
+            # Update Freight
+            freight_data = taxes_data.get('freight', {})
+            if 'amount' in freight_data:
+                analyzed_bill.freight = round(float(freight_data['amount']), 2)
+            if 'ledger' in freight_data and freight_data['ledger'] != "No Tax Ledger":
+                current_freight_ledger = analyzed_bill.freight_taxes
+                if not current_freight_ledger or str(current_freight_ledger) != freight_data['ledger']:
+                    freight_ledger = find_or_create_tax_ledger(freight_data['ledger'], 'FREIGHT', organization)
+                    if freight_ledger:
+                        analyzed_bill.freight_taxes = freight_ledger
+
         # Determine GST type based on updated amounts
         if analyzed_bill.igst and analyzed_bill.igst > 0:
             analyzed_bill.gst_type = TallyVendorAnalyzedBill.GSTType.IGST
@@ -1624,6 +1646,14 @@ def get_structured_bill_data(analyzed_bill, organization):
             "discount": {
                 "amount": float(analyzed_bill.discount or 0),
                 "ledger": str(analyzed_bill.discount_taxes) if analyzed_bill.discount_taxes else "No Tax Ledger",
+            },
+            "cess": {
+                "amount": float(analyzed_bill.cess or 0),
+                "ledger": str(analyzed_bill.cess_taxes) if analyzed_bill.cess_taxes else "No Tax Ledger",
+            },
+            "freight": {
+                "amount": float(analyzed_bill.freight or 0),
+                "ledger": str(analyzed_bill.freight_taxes) if analyzed_bill.freight_taxes else "No Tax Ledger",
             }
         },
         "products": [
@@ -1909,6 +1939,14 @@ def prepare_sync_data(analyzed_bill, organization):
             "discount": {
                 "amount": float(analyzed_bill.discount or 0),
                 "ledger": str(analyzed_bill.discount_taxes) if analyzed_bill.discount_taxes else "No Tax Ledger",
+            },
+            "cess": {
+                "amount": float(analyzed_bill.cess or 0),
+                "ledger": str(analyzed_bill.cess_taxes) if analyzed_bill.cess_taxes else "No Tax Ledger",
+            },
+            "freight": {
+                "amount": float(analyzed_bill.freight or 0),
+                "ledger": str(analyzed_bill.freight_taxes) if analyzed_bill.freight_taxes else "No Tax Ledger",
             }
         },
         "products": []

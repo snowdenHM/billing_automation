@@ -56,6 +56,8 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
     cgst = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
     sgst = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
     discount = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    cess = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    freight = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
 
     def get_consolidated_product(self, obj):
         """Get consolidated product data as array for verification flexibility (like Zoho)"""
@@ -113,6 +115,7 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
             'id', 'selected_bill', 'selected_bill_name', 'vendor', 'vendor_name',
             'bill_no', 'bill_date', 'due_date', 'total', 'igst', 'igst_taxes',
             'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes', 'discount', 'discount_taxes',
+            'cess', 'cess_taxes', 'freight', 'freight_taxes',
             'gst_type', 'note', 'consolidate', 'products', 'created_at'
         ]
         read_only_fields = ['id', 'created_at', 'vendor_name', 'selected_bill_name', 'products']
@@ -141,6 +144,10 @@ class BillVerificationSerializer(serializers.Serializer):
     igst_taxes_id = serializers.UUIDField(required=False, allow_null=True)
     cgst_taxes_id = serializers.UUIDField(required=False, allow_null=True)
     sgst_taxes_id = serializers.UUIDField(required=False, allow_null=True)
+    cess = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
+    cess_taxes_id = serializers.UUIDField(required=False, allow_null=True)
+    freight = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
+    freight_taxes_id = serializers.UUIDField(required=False, allow_null=True)
 
     products = serializers.ListField(
         child=serializers.DictField(),

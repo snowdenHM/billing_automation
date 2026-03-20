@@ -320,6 +320,16 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="discount_tally_vendor_analysed_bills"
     )
 
+    cess = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    cess_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="cess_tally_vendor_analysed_bills"
+    )
+
+    freight = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    freight_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="freight_tally_vendor_analysed_bills"
+    )
+
     gst_type = models.CharField(max_length=20, choices=GSTType.choices, default=GSTType.UNKNOWN)
     note = models.TextField(blank=True, null=True, default="Enter Your Description")
 
