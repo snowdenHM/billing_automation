@@ -89,8 +89,8 @@ class OrganizationAPIKeyAdmin(admin.ModelAdmin):
 class ModuleAdmin(admin.ModelAdmin):
     """Admin interface for Module model."""
     
-    list_display = ("id", "code", "name", "description_short", "created_at")
-    search_fields = ("code", "name", "description")
+    list_display = ("id", "code", "name", "created_at")
+    search_fields = ("code", "name")
     list_filter = ("created_at",)
     readonly_fields = ("created_at", "updated_at")
     date_hierarchy = "created_at"
@@ -99,7 +99,7 @@ class ModuleAdmin(admin.ModelAdmin):
     
     fieldsets = (
         ("Module Information", {
-            "fields": ("code", "name", "description")
+            "fields": ("code", "name")
         }),
         ("Timestamps", {
             "fields": ("created_at", "updated_at"),
@@ -107,13 +107,6 @@ class ModuleAdmin(admin.ModelAdmin):
         }),
     )
     
-    @admin.display(description="Description")
-    def description_short(self, obj):
-        """Display shortened description."""
-        if obj.description:
-            return obj.description[:50] + '...' if len(obj.description) > 50 else obj.description
-        return "-"
-
 
 @admin.register(OrganizationModule)
 class OrganizationModuleAdmin(admin.ModelAdmin):
