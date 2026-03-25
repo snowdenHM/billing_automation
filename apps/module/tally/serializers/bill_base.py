@@ -61,10 +61,12 @@ class BaseTallyBillSerializer(serializers.ModelSerializer):
     # Common fields that all bill serializers share
     base_fields = [
         'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
-        'status', 'process', 'uploaded_by', 'uploaded_by_name', 
+        'status', 'process', 'uploaded_by', 'uploaded_by_name',
         'bill_belong_your_org', 'description',
         'is_duplicate', 'duplicate_description', 'duplicate_score', 'duplicate_matched_bills',
-        'is_processing', 'processing_error', 'created_at', 'updated_at'
+        'is_processing', 'processing_error',
+        'tally_synced', 'tally_sync_message',
+        'created_at', 'updated_at'
     ]
 
     base_read_only_fields = [

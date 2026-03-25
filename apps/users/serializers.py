@@ -251,12 +251,12 @@ class RefreshTokenSerializer(serializers.Serializer):
             # Update last active timestamp
             user.update_last_active()
 
-            # Generate new access token
-            new_refresh = RefreshToken.for_user(user)
-
+            # Generate new access token from the existing refresh token
+            # (don't create a new refresh token to avoid race conditions
+            # when multiple requests refresh concurrently)
             return {
-                "access": str(new_refresh.access_token),
-                "refresh": str(new_refresh),
+                "access": str(refresh.access_token),
+                "refresh": refresh_token,
                 "user": UserSerializer(user, context=self.context).data,
             }
 

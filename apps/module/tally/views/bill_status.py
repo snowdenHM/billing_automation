@@ -26,6 +26,21 @@ logger = logging.getLogger(__name__)
                 "id": {"type": "string", "format": "uuid", "description": "Bill ID to update"},
                 "status": {"type": "boolean", "description": "Tally sync status to set"},
                 "mode": {"type": "string", "enum": ["vendor", "expense"], "description": "Bill type mode"},
+                "message": {"type": "string", "description": "Message from Tally about sync result (success info or error reason)"},
+                "Data": {
+                    "type": "array",
+                    "description": "Bulk update array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "format": "uuid"},
+                            "status": {"type": "boolean"},
+                            "mode": {"type": "string", "enum": ["vendor", "expense"]},
+                            "message": {"type": "string", "description": "Message from Tally about sync result"},
+                        },
+                        "required": ["id", "status", "mode"],
+                    },
+                },
             },
             "required": ["id", "status", "mode"],
         }
@@ -41,6 +56,7 @@ logger = logging.getLogger(__name__)
                     "properties": {
                         "id": {"type": "string"},
                         "tally_synced": {"type": "boolean"},
+                        "tally_sync_message": {"type": "string"},
                         "mode": {"type": "string"},
                     },
                 },
@@ -78,6 +94,7 @@ def update_bill_tally_sync_status(request, org_id):
             bill_id = bill_data.get("id")
             sync_status = bill_data.get("status")
             mode = bill_data.get("mode")
+            sync_message = bill_data.get("message")
 
             if not all([bill_id is not None, sync_status is not None, mode is not None]):
                 return {"error": "Missing required fields: id, status, and mode are all required"}
@@ -97,8 +114,16 @@ def update_bill_tally_sync_status(request, org_id):
                 return {"error": f"Invalid UUID format for bill ID {bill_id}"}
 
             bill.tally_synced = sync_status
+            if sync_message is not None:
+                bill.tally_sync_message = sync_message
             bill.save()
-            return {"success": True, "id": str(bill.id), "tally_synced": bill.tally_synced, "mode": mode}
+            return {
+                "success": True,
+                "id": str(bill.id),
+                "tally_synced": bill.tally_synced,
+                "tally_sync_message": bill.tally_sync_message,
+                "mode": mode,
+            }
 
         # Bulk update
         bulk_data = request.data.get("Data")
@@ -128,7 +153,12 @@ def update_bill_tally_sync_status(request, org_id):
             {
                 "success": True,
                 "message": f'{result["mode"].capitalize()} bill tally sync status updated successfully',
-                "data": {"id": result["id"], "tally_synced": result["tally_synced"], "mode": result["mode"]},
+                "data": {
+                    "id": result["id"],
+                    "tally_synced": result["tally_synced"],
+                    "tally_sync_message": result["tally_sync_message"],
+                    "mode": result["mode"],
+                },
             },
             status=status.HTTP_200_OK,
         )
