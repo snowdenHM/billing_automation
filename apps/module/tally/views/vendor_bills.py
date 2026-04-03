@@ -48,7 +48,8 @@ from ..models import (
     TallyExpenseConsolidatedProduct,
     Ledger,
     ParentLedger,
-    TallyConfig
+    TallyConfig,
+    StockItem
 )
 from ..serializers import (
     TallyVendorBillSerializer,
@@ -1911,12 +1912,19 @@ def prepare_sync_data(analyzed_bill, organization):
     except Exception:
         allow_product_sync = False
 
+    # Build stock item name -> unit lookup for uom when product sync is enabled
+    stock_unit_map = {}
+    if allow_product_sync:
+        stock_items = StockItem.objects.filter(organization=organization).values_list('name', 'unit')
+        stock_unit_map = {name: unit for name, unit in stock_items if name}
+
     vendor_name = vendor_ledger.name if vendor_ledger and vendor_ledger.name else "Unknown Vendor"
     bill_url = f"https://billmunshi.com/tally/vendor-bill/{analyzed_bill.selected_bill.id}"
     notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
 
     bill_data = {
         "id": str(analyzed_bill.selected_bill.id),
+        "voucher_type":"Purchase Voucher",
         "vendor_name": vendor_name,
         "bill_no": analyzed_bill.bill_no,
         "bill_date": bill_date_str,
@@ -2016,6 +2024,7 @@ def prepare_sync_data(analyzed_bill, organization):
                         "igst": float(consolidated_product.igst or 0),  # ✅ Direct field
                         "cgst": float(consolidated_product.cgst or 0),  # ✅ Direct field
                         "sgst": float(consolidated_product.sgst or 0),  # ✅ Direct field
+                        "uom": stock_unit_map.get(consolidated_product.item_name, ""),
                     }
                 else:
                     product_data = {
@@ -2054,6 +2063,7 @@ def prepare_sync_data(analyzed_bill, organization):
                     "igst": float(item.igst or 0),
                     "cgst": float(item.cgst or 0),
                     "sgst": float(item.sgst or 0),
+                    "uom": stock_unit_map.get(item.item_name, ""),
                 }
             else:
                 product_data = {
