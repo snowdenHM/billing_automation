@@ -1219,7 +1219,6 @@ def get_structured_expense_bill_data(analyzed_bill, organization):
     team_slug = organization.name if hasattr(organization, 'name') else str(organization.id)
 
     return {
-        "voucher_type":"Journal Voucher",
         "vendor": {
             "master_id": vendor_ledger.master_id if vendor_ledger and vendor_ledger.master_id else "No Ledger",
             "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
@@ -1595,6 +1594,7 @@ def prepare_expense_sync_data(analyzed_bill, organization):
 
     bill_data = {
         "id": str(analyzed_bill.selected_bill.id),
+        "voucher_type":"Journal Voucher",
         "voucher": analyzed_bill.voucher or "",
         "bill_no": analyzed_bill.bill_no or "",
         "bill_date": bill_date_str,
