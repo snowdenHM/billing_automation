@@ -1924,7 +1924,7 @@ def prepare_sync_data(analyzed_bill, organization):
 
     bill_data = {
         "id": str(analyzed_bill.selected_bill.id),
-        "voucher_type":"Purchase Voucher",
+        "voucher_type":"Purchase",
         "vendor_name": vendor_name,
         "bill_no": analyzed_bill.bill_no,
         "bill_date": bill_date_str,

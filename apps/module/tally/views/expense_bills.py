@@ -1594,7 +1594,7 @@ def prepare_expense_sync_data(analyzed_bill, organization):
 
     bill_data = {
         "id": str(analyzed_bill.selected_bill.id),
-        "voucher_type":"Journal Voucher",
+        "voucher_type":"Journal",
         "voucher": analyzed_bill.voucher or "",
         "bill_no": analyzed_bill.bill_no or "",
         "bill_date": bill_date_str,
