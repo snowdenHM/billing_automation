@@ -246,7 +246,8 @@ class BaseBillDetailSerializer(serializers.ModelSerializer):
     base_fields = [
         'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
         'status', 'process', 'uploaded_by', 'uploaded_by_username',
-        'organization_name', 'created_at', 'updated_at', 'analyzed_bill', 'next_bill'
+        'organization_name', 'tally_synced', 'tally_sync_message',
+        'created_at', 'updated_at', 'analyzed_bill', 'next_bill'
     ]
 
     base_read_only_fields = [
