@@ -811,13 +811,18 @@ def expense_bill_verify(request, org_id):
             status=status.HTTP_404_NOT_FOUND
         )
 
-    if bill.status not in [TallyExpenseBill.BillStatus.ANALYSED, TallyExpenseBill.BillStatus.VERIFIED]:
+    # Allow re-verification of Synced bills only if tally_synced is still False
+    allowed_statuses = [TallyExpenseBill.BillStatus.ANALYSED, TallyExpenseBill.BillStatus.VERIFIED]
+    if bill.status == TallyExpenseBill.BillStatus.SYNCED and not bill.tally_synced:
+        allowed_statuses.append(TallyExpenseBill.BillStatus.SYNCED)
+
+    if bill.status not in allowed_statuses:
         return Response(
             {
                 'error': 'Invalid Expense Bill Status',
-                'message': f'Expense bill must be in "Analysed" or "Verified" status to perform verification. Current status: {bill.status}',
+                'message': f'Expense bill must be in "Analysed", "Verified", or "Synced" (not yet posted to Tally) status to perform verification. Current status: {bill.status}',
                 'current_status': bill.status,
-                'required_status': ['Analysed', 'Verified'],
+                'required_status': ['Analysed', 'Verified', 'Synced (not posted)'],
                 'error_code': 'INVALID_EXPENSE_BILL_STATUS'
             },
             status=status.HTTP_422_UNPROCESSABLE_ENTITY

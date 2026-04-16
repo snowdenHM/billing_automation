@@ -1075,12 +1075,17 @@ def vendor_bill_verify(request, org_id):
             'error_code': 'ANALYSIS_MISMATCH'
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
-    if bill.status not in [TallyVendorBill.BillStatus.ANALYSED, TallyVendorBill.BillStatus.VERIFIED]:
+    # Allow re-verification of Synced bills only if tally_synced is still False
+    allowed_statuses = [TallyVendorBill.BillStatus.ANALYSED, TallyVendorBill.BillStatus.VERIFIED]
+    if bill.status == TallyVendorBill.BillStatus.SYNCED and not bill.tally_synced:
+        allowed_statuses.append(TallyVendorBill.BillStatus.SYNCED)
+
+    if bill.status not in allowed_statuses:
         return Response({
             'error': 'Invalid Bill Status',
-            'message': f'Bill must be in "Analysed" or "Verified" status to perform verification. Current status: {bill.status}',
+            'message': f'Bill must be in "Analysed", "Verified", or "Synced" (not yet posted to Tally) status to perform verification. Current status: {bill.status}',
             'current_status': bill.status,
-            'required_status': ['Analysed', 'Verified'],
+            'required_status': ['Analysed', 'Verified', 'Synced (not posted)'],
             'error_code': 'INVALID_BILL_STATUS'
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
