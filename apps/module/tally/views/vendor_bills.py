@@ -1903,6 +1903,17 @@ def get_client_ip(request):
     return request.META.get("REMOTE_ADDR")
 
 
+def _clean_tally_text(value):
+    """Sanitize text for Tally sync: replace straight double-quotes with the
+    Unicode double-prime (″, U+2033, the proper inch symbol) so the JSON payload
+    doesn't need backslash escaping (which breaks Tally's parser), and collapse
+    newlines/tabs/carriage-returns to spaces."""
+    if value is None:
+        return None
+    text = str(value).replace('"', '″').replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
+    return ' '.join(text.split())
+
+
 def prepare_sync_data(analyzed_bill, organization):
     """Prepare bill data for Tally sync using structured format with consolidation support"""
     vendor_ledger = analyzed_bill.vendor
@@ -2019,8 +2030,8 @@ def prepare_sync_data(analyzed_bill, organization):
                 if allow_product_sync:
                     product_data = {
                         "id": str(consolidated_product.id),
-                        "item_name": consolidated_product.item_name,  # ✅ Direct field
-                        "item_details": consolidated_product.item_details,  # ✅ Direct field
+                        "item_name": _clean_tally_text(consolidated_product.item_name),  # ✅ Direct field
+                        "item_details": _clean_tally_text(consolidated_product.item_details),  # ✅ Direct field
                         "tax_ledger": str(consolidated_product.taxes) if consolidated_product.taxes else "PURCHAGE GST",
                         "price": float(consolidated_product.price or 0),  # ✅ Direct field
                         "quantity": int(consolidated_product.quantity or 1),  # ✅ Direct field
@@ -2058,8 +2069,8 @@ def prepare_sync_data(analyzed_bill, organization):
             if allow_product_sync:
                 product_data = {
                     "id": str(item.id),
-                    "item_name": item.item_name,
-                    "item_details": item.item_details,
+                    "item_name": _clean_tally_text(item.item_name),
+                    "item_details": _clean_tally_text(item.item_details),
                     "tax_ledger": str(item.taxes) if item.taxes else "No Tax Ledger",
                     "price": float(item.price or 0),
                     "quantity": int(item.quantity or 0),
