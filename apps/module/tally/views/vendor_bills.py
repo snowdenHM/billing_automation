@@ -11,6 +11,7 @@ from PyPDF2 import PdfReader
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 from pdf2image import convert_from_bytes
@@ -1892,7 +1893,13 @@ def vendor_bills_sync_list(request, org_id):
         sync_data = prepare_sync_data(analyzed_bill, organization)
         bills_data.append(sync_data["data"])
 
-    return Response({"data": bills_data}, status=status.HTTP_200_OK)
+    # Tally's connector does naive text parsing and cannot decode `\"` JSON
+    # escapes inside string values — so we emit raw non-standard JSON where
+    # inner double-quotes stay as literal `"` (e.g. `1" Cello Tape` for inch
+    # measurements). Structural quotes around keys/values are left intact.
+    payload = json.dumps({"data": bills_data}, ensure_ascii=False)
+    payload = payload.replace('\\"', '"')
+    return HttpResponse(payload, content_type='application/json')
 
 
 def get_client_ip(request):
@@ -1904,13 +1911,13 @@ def get_client_ip(request):
 
 
 def _clean_tally_text(value):
-    """Sanitize text for Tally sync: replace straight double-quotes with the
-    Unicode double-prime (″, U+2033, the proper inch symbol) so the JSON payload
-    doesn't need backslash escaping (which breaks Tally's parser), and collapse
-    newlines/tabs/carriage-returns to spaces."""
+    """Sanitize text for Tally sync: collapse newlines/tabs/carriage-returns
+    to spaces. Straight double-quotes are preserved in the DB value — the raw
+    response emitter (see vendor_bills_sync_list) strips the JSON backslash
+    escapes before sending so Tally receives literal `"` characters."""
     if value is None:
         return None
-    text = str(value).replace('"', '″').replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
+    text = str(value).replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
     return ' '.join(text.split())
 
 
