@@ -532,7 +532,7 @@ class StockItemAdmin(BaseOrgAdmin):
             'fields': ('name', 'item_code', 'alias', 'parent', 'category')
         }),
         ('Unit & GST', {
-            'fields': ('unit', 'gst_applicable', 'gst_rate')
+            'fields': ('unit', 'gst_applicable')
         }),
         ('Metadata', {
             'fields': ('organization', 'created_at', 'updated_at'),
