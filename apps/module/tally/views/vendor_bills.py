@@ -11,6 +11,7 @@ from PyPDF2 import PdfReader
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 from pdf2image import convert_from_bytes
@@ -1892,7 +1893,12 @@ def vendor_bills_sync_list(request, org_id):
         sync_data = prepare_sync_data(analyzed_bill, organization)
         bills_data.append(sync_data["data"])
 
-    return Response({"data": bills_data}, status=status.HTTP_200_OK)
+    # Tally's TDL/TCP connector consumes XML natively and its text parser
+    # choked on JSON (the `\"` escape for `"` inside item names broke ingestion).
+    # XML sidesteps the issue: `"` is a normal character inside element
+    # content, no escaping needed.
+    xml_payload = _sync_data_to_xml(bills_data)
+    return HttpResponse(xml_payload, content_type='application/xml; charset=utf-8')
 
 
 def get_client_ip(request):
@@ -1904,14 +1910,69 @@ def get_client_ip(request):
 
 
 def _clean_tally_text(value):
-    """Sanitize text for Tally sync: replace straight double-quotes with the
-    Unicode double-prime (″, U+2033, the proper inch symbol) so the JSON payload
-    doesn't need backslash escaping (which breaks Tally's parser), and collapse
-    newlines/tabs/carriage-returns to spaces."""
+    """Sanitize text for Tally XML sync: collapse newlines/tabs/carriage-returns
+    to single spaces. Double-quotes pass through unchanged — inside XML element
+    content `"` is a normal character and does not need escaping, so Tally will
+    receive values like `1" Cello Tape` as-is. The XML serializer handles
+    `<`, `>`, and `&` escaping automatically."""
     if value is None:
         return None
-    text = str(value).replace('"', '″').replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
+    text = str(value).replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
     return ' '.join(text.split())
+
+
+def _sync_data_to_xml(bills_data):
+    """Convert the list of sync-bill dicts built by `prepare_sync_data` into a
+    Tally-compatible XML payload. Structure mirrors the JSON response:
+
+        <data>
+          <bill>
+            <id>…</id>
+            …
+            <taxes>
+              <igst><amount>…</amount><ledger>…</ledger></igst>
+              …
+            </taxes>
+            <products>
+              <product>
+                <item_name>1" Cello Tape</item_name>
+                …
+              </product>
+            </products>
+          </bill>
+        </data>
+
+    ElementTree's `.text` assignment handles XML escaping of `<`, `>`, `&`.
+    Inner double-quotes stay literal inside element content (XML spec)."""
+    from xml.etree import ElementTree as ET
+
+    def _set_scalar(parent_elem, key, value):
+        child = ET.SubElement(parent_elem, key)
+        child.text = '' if value is None else str(value)
+
+    root = ET.Element('data')
+    for bill in bills_data:
+        bill_elem = ET.SubElement(root, 'bill')
+        for key, value in bill.items():
+            if key == 'taxes' and isinstance(value, dict):
+                taxes_elem = ET.SubElement(bill_elem, 'taxes')
+                for tax_key, tax_value in value.items():
+                    tax_elem = ET.SubElement(taxes_elem, tax_key)
+                    if isinstance(tax_value, dict):
+                        for sub_k, sub_v in tax_value.items():
+                            _set_scalar(tax_elem, sub_k, sub_v)
+                    else:
+                        tax_elem.text = '' if tax_value is None else str(tax_value)
+            elif key == 'products' and isinstance(value, list):
+                products_elem = ET.SubElement(bill_elem, 'products')
+                for product in value:
+                    product_elem = ET.SubElement(products_elem, 'product')
+                    for pk, pv in product.items():
+                        _set_scalar(product_elem, pk, pv)
+            else:
+                _set_scalar(bill_elem, key, value)
+
+    return ET.tostring(root, encoding='utf-8', xml_declaration=True).decode('utf-8')
 
 
 def prepare_sync_data(analyzed_bill, organization):
