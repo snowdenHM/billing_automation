@@ -832,6 +832,15 @@ def expense_bill_verify(request, org_id):
         # Update the analyzed bill with user modifications
         verified_bill = update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization)
 
+        # Recompute round-off after products & tax fields are persisted so the
+        # journal entry can balance in Tally.
+        try:
+            verified_bill.compute_round_off()
+        except Exception as round_off_err:
+            logger.warning(
+                f"Round-off computation failed for expense bill {verified_bill.id}: {round_off_err}"
+            )
+
         # Update bill status to verified
         bill.status = TallyExpenseBill.BillStatus.VERIFIED
         bill.save(update_fields=['status'])
@@ -1263,6 +1272,11 @@ def get_structured_expense_bill_data(analyzed_bill, organization):
                 "amount": float(analyzed_bill.other_adjustment or 0),
                 "ledger": str(analyzed_bill.other_adjustment_taxes) if analyzed_bill.other_adjustment_taxes else "No Tax Ledger",
                 "debit_or_credit": analyzed_bill.other_adjustment_debit_or_credit or "debit",
+            },
+            "round_off": {
+                "amount": float(analyzed_bill.round_off or 0),
+                "ledger": str(analyzed_bill.round_off_taxes) if analyzed_bill.round_off_taxes else "No Tax Ledger",
+                "debit_or_credit": analyzed_bill.round_off_debit_or_credit or "debit",
             }
         },
         "expense_items": [
@@ -1574,6 +1588,17 @@ def prepare_expense_sync_data(analyzed_bill, organization):
             dr_ledger.append(other_adjustment_entry)
         elif analyzed_bill.other_adjustment_debit_or_credit == 'credit':
             cr_ledger.append(other_adjustment_entry)
+
+    # Process Round Off — placed on whichever side balances DR vs CR.
+    if analyzed_bill.round_off and analyzed_bill.round_off > 0 and analyzed_bill.round_off_taxes:
+        round_off_entry = {
+            "LEDGERNAME": str(analyzed_bill.round_off_taxes),
+            "AMOUNT": float(analyzed_bill.round_off)
+        }
+        if analyzed_bill.round_off_debit_or_credit == 'debit':
+            dr_ledger.append(round_off_entry)
+        elif analyzed_bill.round_off_debit_or_credit == 'credit':
+            cr_ledger.append(round_off_entry)
 
     # Process vendor based on vendor_debit_or_credit field using vendor_amount
     if vendor_ledger and analyzed_bill.vendor_amount and analyzed_bill.vendor_amount > 0:

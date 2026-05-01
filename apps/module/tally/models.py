@@ -31,6 +31,40 @@ class BaseOrgModel(models.Model):
         abstract = True
 
 
+def _pick_round_off_ledger(organization):
+    """Return a Ledger to use as the Round Off ledger for the given org.
+
+    Strategy:
+      1. Use any ledger whose parent is in `TallyConfig.round_off_parents`.
+      2. If TallyConfig has none configured, fall back to a ledger whose name
+         contains 'round' (case-insensitive) under any Indirect Expenses parent.
+      3. Otherwise return None — the caller leaves round_off_taxes blank.
+    """
+    if organization is None:
+        return None
+    try:
+        config = TallyConfig.objects.filter(organization=organization).first()
+        if config:
+            parents = config.round_off_parents.all()
+            if parents.exists():
+                ledger = (
+                    Ledger.objects
+                    .filter(organization=organization, parent__in=parents)
+                    .order_by('name')
+                    .first()
+                )
+                if ledger:
+                    return ledger
+        return (
+            Ledger.objects
+            .filter(organization=organization, name__icontains='round')
+            .order_by('name')
+            .first()
+        )
+    except Exception:
+        return None
+
+
 # -----------------------------
 # Masters
 # -----------------------------
@@ -173,6 +207,14 @@ class TallyConfig(BaseOrgModel):
         related_name="payment_tally_configs",
         verbose_name="Payment Parent Ledgers",
         db_table='tally_config_payment_parents'
+    )
+    round_off_parents = models.ManyToManyField(
+        'ParentLedger',
+        blank=True,
+        related_name="round_off_tally_configs",
+        verbose_name="Round Off Parent Ledgers",
+        help_text="Parent ledgers (typically 'Indirect Expenses') used to source the Round Off ledger.",
+        db_table='tally_config_round_off_parents'
     )
 
     class Meta:
@@ -331,6 +373,11 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="freight_tally_vendor_analysed_bills"
     )
 
+    round_off = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    round_off_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="round_off_tally_vendor_analysed_bills"
+    )
+
     gst_type = models.CharField(max_length=20, choices=GSTType.choices, default=GSTType.UNKNOWN)
     note = models.TextField(blank=True, null=True, default="Enter Your Description")
 
@@ -387,6 +434,52 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
         if not skip_validation:
             self.full_clean()
         super().save(*args, **kwargs)
+
+    # Threshold below which a residual is treated as a rounding artefact rather
+    # than a data-entry error. Beyond this we leave round_off at zero so the
+    # mismatch surfaces during review.
+    ROUND_OFF_THRESHOLD = Decimal("1.00")
+
+    def compute_round_off(self, save=True):
+        """Recompute the round_off amount for this vendor bill.
+
+        Formula: subtotal(items) + igst + cgst + sgst + cess + freight - discount
+                 + round_off  ==  total
+        ⇒ round_off = total - (subtotal + igst + cgst + sgst + cess + freight - discount)
+
+        Only applied when |round_off| < ROUND_OFF_THRESHOLD (≤ ₹1). Beyond that
+        the residual indicates an OCR or entry mismatch and round_off stays 0.
+
+        Auto-picks `round_off_taxes` from the first ledger under any parent
+        in `TallyConfig.round_off_parents` if not already set.
+        """
+        from decimal import Decimal as _D
+        subtotal = sum(
+            (p.amount or _D("0")) for p in self.products.all()
+        ) if self.pk else _D("0")
+        igst = self.igst or _D("0")
+        cgst = self.cgst or _D("0")
+        sgst = self.sgst or _D("0")
+        cess = self.cess or _D("0")
+        freight = self.freight or _D("0")
+        discount = self.discount or _D("0")
+        total = self.total or _D("0")
+
+        expected = subtotal + igst + cgst + sgst + cess + freight - discount
+        diff = (total - expected).quantize(_D("0.01"))
+
+        if abs(diff) < self.ROUND_OFF_THRESHOLD:
+            self.round_off = diff
+        else:
+            self.round_off = _D("0")
+
+        if self.round_off and self.round_off != _D("0") and not self.round_off_taxes_id:
+            org = getattr(self, 'organization', None) if self.organization_id else None
+            self.round_off_taxes = _pick_round_off_ledger(org)
+
+        if save:
+            self.save(skip_validation=True, update_fields=['round_off', 'round_off_taxes'])
+        return self.round_off
 
 
 class TallyVendorAnalyzedProduct(BaseOrgModel):
@@ -596,6 +689,15 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
         choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT
     )
 
+    # Round Off Fields
+    round_off = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    round_off_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="round_off_tally_expense_analysed_bills"
+    )
+    round_off_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT
+    )
+
     note = models.CharField(max_length=100, blank=True, null=True, default="Enter Your Description")
 
     # Line Items Consolidation Setting
@@ -619,6 +721,66 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
         if not skip_validation:
             self.full_clean()
         super().save(*args, **kwargs)
+
+    ROUND_OFF_THRESHOLD = Decimal("1.00")
+
+    def compute_round_off(self, save=True):
+        """Recompute round_off for an expense (journal) bill.
+
+        Formula (DR == CR rule):
+            DR = sum(debit-side line items) + sum(debit-side tax & adjustment amounts)
+            CR = sum(credit-side line items) + sum(credit-side tax & adjustment amounts)
+                 + (vendor_amount when vendor_debit_or_credit == 'credit')
+            (vendor_amount on the debit side is added to DR analogously.)
+
+        Residual = DR - CR. Only applied when |Residual| < ROUND_OFF_THRESHOLD.
+        Sign decides which side the round_off entry sits on:
+          • Residual > 0  → CR side gains the round_off (to balance)
+          • Residual < 0  → DR side gains the round_off
+        round_off is always stored as a positive magnitude;
+        round_off_debit_or_credit indicates the side.
+        """
+        from decimal import Decimal as _D
+
+        def _sum_side(side):
+            total = _D("0")
+            if self.pk:
+                for product in self.products.all():
+                    if product.debit_or_credit == side:
+                        total += product.amount or _D("0")
+            for amount, dc in (
+                (self.igst, self.igst_debit_or_credit),
+                (self.cgst, self.cgst_debit_or_credit),
+                (self.sgst, self.sgst_debit_or_credit),
+                (self.tds, self.tds_debit_or_credit),
+                (self.other_adjustment, self.other_adjustment_debit_or_credit),
+                (self.vendor_amount, self.vendor_debit_or_credit),
+            ):
+                if dc == side and amount:
+                    total += amount
+            return total
+
+        dr_total = _sum_side(self.DebitCredit.DEBIT)
+        cr_total = _sum_side(self.DebitCredit.CREDIT)
+        residual = (dr_total - cr_total).quantize(_D("0.01"))
+
+        if abs(residual) >= self.ROUND_OFF_THRESHOLD or residual == _D("0"):
+            self.round_off = _D("0")
+        else:
+            self.round_off = abs(residual)
+            self.round_off_debit_or_credit = (
+                self.DebitCredit.CREDIT if residual > 0 else self.DebitCredit.DEBIT
+            )
+            if not self.round_off_taxes_id:
+                org = getattr(self, 'organization', None) if self.organization_id else None
+                self.round_off_taxes = _pick_round_off_ledger(org)
+
+        if save:
+            self.save(
+                skip_validation=True,
+                update_fields=['round_off', 'round_off_debit_or_credit', 'round_off_taxes'],
+            )
+        return self.round_off
 
 
 class TallyExpenseAnalyzedProduct(BaseOrgModel):

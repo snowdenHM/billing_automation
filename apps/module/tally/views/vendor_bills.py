@@ -1108,6 +1108,15 @@ def vendor_bill_verify(request, org_id):
 
         verified_bill = update_analyzed_bill_data(analyzed_bill, analyzed_data, organization)
 
+        # Recompute round-off after products & tax fields are persisted so the
+        # XML sync payload can carry an accurate Round Off entry.
+        try:
+            verified_bill.compute_round_off()
+        except Exception as round_off_err:
+            logger.warning(
+                f"Round-off computation failed for bill {verified_bill.id}: {round_off_err}"
+            )
+
         bill.status = TallyVendorBill.BillStatus.VERIFIED
         bill.save(update_fields=['status'])
 
@@ -1661,6 +1670,10 @@ def get_structured_bill_data(analyzed_bill, organization):
             "freight": {
                 "amount": float(analyzed_bill.freight or 0),
                 "ledger": str(analyzed_bill.freight_taxes) if analyzed_bill.freight_taxes else "No Tax Ledger",
+            },
+            "round_off": {
+                "amount": float(analyzed_bill.round_off or 0),
+                "ledger": str(analyzed_bill.round_off_taxes) if analyzed_bill.round_off_taxes else "No Tax Ledger",
             }
         },
         "products": [
@@ -2032,6 +2045,10 @@ def prepare_sync_data(analyzed_bill, organization):
             "freight": {
                 "amount": float(analyzed_bill.freight or 0),
                 "ledger": str(analyzed_bill.freight_taxes) if analyzed_bill.freight_taxes else "No Tax Ledger",
+            },
+            "round_off": {
+                "amount": float(analyzed_bill.round_off or 0),
+                "ledger": str(analyzed_bill.round_off_taxes) if analyzed_bill.round_off_taxes else "No Tax Ledger",
             }
         },
         "products": []

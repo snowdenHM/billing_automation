@@ -109,6 +109,10 @@ class TallyConfigAdmin(BaseOrgAdmin):
             'fields': ('tds_parents', 'payment_parents'),
             'description': 'Map parent ledgers for TDS and payment transactions.'
         }),
+        ('Round Off Mappings', {
+            'fields': ('round_off_parents',),
+            'description': 'Map parent ledgers (e.g. Indirect Expenses) used to source the Round Off ledger applied during Tally sync.'
+        }),
     )
 
     def get_queryset(self, request):
@@ -122,7 +126,8 @@ class TallyConfigAdmin(BaseOrgAdmin):
             'chart_of_accounts_parents',
             'chart_of_accounts_expense_parents',
             'tds_parents',
-            'payment_parents'
+            'payment_parents',
+            'round_off_parents',
         )
 
     def get_urls(self):
@@ -274,12 +279,16 @@ class TallyVendorAnalyzedBillAdmin(BaseOrgAdmin):
             'fields': ('discount', 'discount_taxes'),
             'description': 'Discount amount and associated ledger mapping.'
         }),
+        ('Round Off', {
+            'fields': ('round_off', 'round_off_taxes'),
+            'description': 'Auto-computed during verify when |total − (subtotal + GST + cess + freight − discount)| < ₹1.'
+        }),
         ('Metadata', {
             'fields': ('organization', 'created_at'),
             'classes': ('collapse',)
         }),
     )
-    
+
     def get_queryset(self, request):
         """Optimize queryset with select_related."""
         qs = super().get_queryset(request)
@@ -386,12 +395,16 @@ class TallyExpenseAnalyzedBillAdmin(BaseOrgAdmin):
         ('TDS & Other Adjustments', {
             'fields': ('tds', 'tds_taxes', 'other_adjustment', 'other_adjustment_taxes')
         }),
+        ('Round Off', {
+            'fields': ('round_off', 'round_off_taxes', 'round_off_debit_or_credit'),
+            'description': 'Auto-computed during verify when |DR − CR| < ₹1. Side is set automatically to balance the journal entry.'
+        }),
         ('Metadata', {
             'fields': ('organization', 'created_at'),
             'classes': ('collapse',)
         }),
     )
-    
+
     def get_queryset(self, request):
         """Optimize queryset with select_related."""
         qs = super().get_queryset(request)
