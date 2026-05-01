@@ -1,5 +1,6 @@
 from .ledger_serializers import LedgerSerializer, ParentLedgerSerializer, LedgerBulkCreateSerializer, StockItemSerializer, StockItemBulkCreateSerializer
 from .config_serializers import TallyConfigSerializer
+from .setup_guide_serializers import TallySetupStepSerializer
 from .bill_base import (
     SafeDecimalField,
     BaseTallyBillSerializer,
@@ -44,6 +45,7 @@ __all__ = [
     'StockItemSerializer',
     'StockItemBulkCreateSerializer',
     'TallyConfigSerializer',
+    'TallySetupStepSerializer',
     # Vendor
     'TallyVendorBillSerializer',
     'TallyVendorBillDetailSerializer',

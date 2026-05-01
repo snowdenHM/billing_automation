@@ -552,3 +552,139 @@ class StockItemAdmin(BaseOrgAdmin):
             'classes': ('collapse',)
         }),
     )
+
+
+# ============================================================================
+# Tally Setup Step Admin (admin-managed setup guide shown on /tally/account-info)
+# ============================================================================
+
+from .models import TallySetupStep
+
+
+@admin.register(TallySetupStep)
+class TallySetupStepAdmin(admin.ModelAdmin):
+    """
+    Manage the Tally setup walkthrough that appears on the Account Info page.
+    """
+
+    list_display = (
+        "step_number",
+        "title",
+        "image_thumb",
+        "is_active",
+        "order",
+        "updated_at",
+    )
+    list_display_links = ("step_number", "title")
+    list_filter = ("is_active",)
+    search_fields = ("title", "description", "image_alt")
+    list_editable = ("is_active", "order")
+    ordering = ("step_number", "order")
+    list_per_page = 50
+    readonly_fields = ("id", "created_at", "updated_at", "image_thumb_large")
+
+    fieldsets = (
+        ("Step content", {
+            "fields": ("step_number", "title", "description"),
+        }),
+        ("Image", {
+            "fields": ("image", "image_alt", "image_thumb_large"),
+        }),
+        ("Display options", {
+            "fields": ("order", "is_active"),
+        }),
+        ("Metadata", {
+            "fields": ("id", "created_at", "updated_at"),
+            "classes": ("collapse",),
+        }),
+    )
+
+    def image_thumb(self, obj):
+        if obj.image:
+            return format_html(
+                '<img src="{}" style="height:36px;width:auto;border-radius:4px;'
+                'box-shadow:0 0 0 1px rgba(15,23,42,.08);" alt="" />',
+                obj.image.url,
+            )
+        return "—"
+    image_thumb.short_description = "Preview"
+
+    def image_thumb_large(self, obj):
+        if obj.image:
+            return format_html(
+                '<img src="{}" style="max-height:240px;max-width:100%;border-radius:8px;'
+                'box-shadow:0 1px 4px rgba(15,23,42,.12);" alt="" />',
+                obj.image.url,
+            )
+        return mark_safe("<em>No image uploaded.</em>")
+    image_thumb_large.short_description = "Image preview"
+
+
+# ============================================================================
+# Tally TCP Release Admin (admin-managed TCP file served to users)
+# ============================================================================
+
+from .models import TallyTcpRelease
+
+
+@admin.register(TallyTcpRelease)
+class TallyTcpReleaseAdmin(admin.ModelAdmin):
+    """
+    Manage Tally TCP releases. Whichever release is marked 'is_active'
+    is served to users on the Tally Account Info page.
+    """
+
+    list_display = (
+        "version",
+        "is_active",
+        "file_link",
+        "uploaded_by",
+        "created_at",
+        "updated_at",
+    )
+    list_display_links = ("version",)
+    list_filter = ("is_active",)
+    search_fields = ("version", "notes", "uploaded_by__email", "uploaded_by__full_name")
+    list_editable = ("is_active",)
+    ordering = ("-created_at",)
+    readonly_fields = ("id", "uploaded_by", "created_at", "updated_at", "file_link")
+    list_per_page = 50
+
+    fieldsets = (
+        ("Release", {
+            "fields": ("version", "file", "file_link", "notes"),
+        }),
+        ("Status", {
+            "fields": ("is_active",),
+            "description": (
+                "Only one TCP release should be active at any time. "
+                "Saving a release with this box checked will automatically deactivate the others."
+            ),
+        }),
+        ("Metadata", {
+            "fields": ("id", "uploaded_by", "created_at", "updated_at"),
+            "classes": ("collapse",),
+        }),
+    )
+
+    def save_model(self, request, obj, form, change):
+        # Track who uploaded a release (only on first save)
+        if not change and not obj.uploaded_by_id:
+            obj.uploaded_by = request.user
+        super().save_model(request, obj, form, change)
+
+    def file_link(self, obj):
+        if obj.file:
+            return format_html(
+                '<a href="{}" target="_blank" rel="noopener" '
+                'style="display:inline-flex;align-items:center;gap:.4rem;'
+                'padding:.25rem .6rem;border-radius:6px;'
+                'background:#eff6ff;color:#1d4ed8;'
+                'font-weight:600;font-size:.8rem;text-decoration:none;'
+                'border:1px solid #dbeafe;">'
+                '↓ Download {}</a>',
+                obj.file.url,
+                obj.version,
+            )
+        return "—"
+    file_link.short_description = "TCP file"

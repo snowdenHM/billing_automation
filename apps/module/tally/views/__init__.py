@@ -62,6 +62,9 @@ from .bill_move import move_tally_bills_between_modules_view
 # Organization data
 from .organization_data import organization_tally_data
 
+# Setup guide
+from .setup_guide import tally_setup_guide
+
 __all__ = [
     # Helpers
     "NoPagination",
@@ -103,4 +106,6 @@ __all__ = [
     "move_tally_bills_between_modules_view",
     # Organization data
     "organization_tally_data",
+    # Setup guide
+    "tally_setup_guide",
 ]

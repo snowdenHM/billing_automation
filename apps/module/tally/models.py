@@ -997,3 +997,109 @@ class TallyExpenseConsolidatedProduct(BaseOrgModel):
     def __str__(self):
         return f"Consolidated Expense: {self.item_details[:50] if self.item_details else 'Multiple Entries'} ({self.original_entries_count} entries)"
 
+
+
+# -----------------------------
+# Tally Setup Guide (admin-managed walkthrough shown on the Tally Account Info page)
+# -----------------------------
+
+
+class TallySetupStep(models.Model):
+    """
+    A single step in the Tally setup guide. Edited from Django admin so the
+    integration walkthrough can be updated without a frontend deploy.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    step_number = models.PositiveSmallIntegerField(
+        help_text="Step number shown to the user (1, 2, 3, ...)"
+    )
+    title = models.CharField(max_length=200)
+    description = models.TextField(
+        help_text="Plain text or markdown — supports newlines."
+    )
+    image = models.ImageField(
+        upload_to="tally/setup-guide/",
+        blank=True,
+        null=True,
+        help_text="Optional screenshot for this step.",
+    )
+    image_alt = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Alt text for accessibility — describe the screenshot.",
+    )
+    order = models.PositiveSmallIntegerField(
+        default=0,
+        help_text="Tiebreaker when two steps share a step_number (lower comes first).",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Hide a step without deleting it.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["step_number", "order"]
+        verbose_name = "Tally Setup Step"
+        verbose_name_plural = "Tally Setup Steps"
+        indexes = [
+            models.Index(fields=["is_active", "step_number"]),
+        ]
+
+    def __str__(self):
+        return f"Step {self.step_number}: {self.title}"
+
+
+class TallyTcpRelease(models.Model):
+    """
+    Versioned Tally TCP file. The file marked is_active=True is what users get
+    when they click 'Download TCP' on the Account Info page. Older versions
+    are kept for audit / rollback.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    version = models.CharField(
+        max_length=50,
+        unique=True,
+        help_text="Semantic version, e.g. '1.2.3'.",
+    )
+    file = models.FileField(
+        upload_to="tally/tcp/",
+        help_text="Upload the .tcp file here. The latest active release will be served to users.",
+    )
+    notes = models.TextField(
+        blank=True,
+        help_text="Optional release notes (visible only in admin).",
+    )
+    is_active = models.BooleanField(
+        default=False,
+        help_text="Only one release should be active at a time. "
+                  "Saving a release with this checked will deactivate all others.",
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tally_tcp_releases",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Tally TCP Release"
+        verbose_name_plural = "Tally TCP Releases"
+        indexes = [
+            models.Index(fields=["is_active", "-created_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        # If this release is being marked active, deactivate every other one.
+        super().save(*args, **kwargs)
+        if self.is_active:
+            type(self).objects.filter(is_active=True).exclude(pk=self.pk).update(is_active=False)
+
+    def __str__(self):
+        marker = " (active)" if self.is_active else ""
+        return f"Tally TCP v{self.version}{marker}"

@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from rest_framework_api_key.models import APIKey
 
 from apps.organizations.models import Organization, OrganizationAPIKey
+from apps.module.tally.models import TallyTcpRelease
 
 
 class OrganizationTallyDataResponseSerializer(serializers.Serializer):
@@ -19,6 +20,7 @@ class OrganizationTallyDataResponseSerializer(serializers.Serializer):
         name = serializers.CharField(help_text="Organization name")
 
     organization = OrganizationSerializer(help_text="Organization details")
+    base_url = serializers.URLField(help_text="Canonical Tally API base URL for this organization")
     ledgers = serializers.URLField(help_text="URL to access organization's ledgers endpoint")
     masters = serializers.URLField(help_text="URL to access organization's masters endpoint")
     vendor_bills_sync_external = serializers.URLField(
@@ -28,6 +30,14 @@ class OrganizationTallyDataResponseSerializer(serializers.Serializer):
         help_text="URL to access organization's expense bills sync external endpoint"
     )
     api_key = serializers.CharField(help_text="Organization's API key for external integrations")
+    tcp_download_url = serializers.URLField(
+        allow_null=True,
+        help_text="Direct download URL of the currently active Tally TCP release (admin-managed). null if no active release."
+    )
+    tcp_version = serializers.CharField(
+        allow_null=True,
+        help_text="Version string of the active Tally TCP release. null if no active release."
+    )
 
 
 @extend_schema(
@@ -209,17 +219,33 @@ def organization_tally_data(request, org_id):
             if not base_url.endswith('/'):
                 base_url += '/'
 
+            # Resolve the currently active Tally TCP release (admin-managed)
+            tcp_download_url = None
+            tcp_version = None
+            active_tcp = (
+                TallyTcpRelease.objects
+                .filter(is_active=True)
+                .order_by("-created_at")
+                .first()
+            )
+            if active_tcp and active_tcp.file:
+                tcp_download_url = request.build_absolute_uri(active_tcp.file.url)
+                tcp_version = active_tcp.version
+
             # Return URLs for each endpoint
             response_data = {
                 "organization": {
                     "id": str(organization.id),
                     "name": organization.name
                 },
+                "base_url": base_url,
                 "ledgers": f"{base_url}ledgers/",
                 "masters": f"{base_url}masters/",
                 "vendor_bills_sync_external": f"{base_url}vendor-bills/sync_bills/",
                 "expense_bills_sync_external": f"{base_url}expense-bills/sync_bills/",
-                "api_key": f"Authorization:Api-Key {api_key_value}"
+                "api_key": f"Authorization:Api-Key {api_key_value}",
+                "tcp_download_url": tcp_download_url,
+                "tcp_version": tcp_version,
             }
 
             return Response(response_data, status=status.HTTP_200_OK)
