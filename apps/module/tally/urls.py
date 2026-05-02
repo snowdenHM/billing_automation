@@ -6,6 +6,9 @@ from .views import (
     get_tally_config,
     create_or_update_tally_config,
     TallyConfigViewSet,
+    list_gst_rate_ledger_mappings,
+    upsert_gst_rate_ledger_mappings,
+    delete_gst_rate_ledger_mapping,
     # Ledger / Parent Ledger / Master
     LedgerViewSet,
     ParentLedgerViewSet,
@@ -56,6 +59,11 @@ urlpatterns = [
         # New function-based Tally Config endpoints
         path('config/', get_tally_config, name='get-tally-config'),
         path('config/save/', create_or_update_tally_config, name='create-update-tally-config'),
+
+        # GST Rate → Ledger mapping endpoints (used for per-line tax assignment)
+        path('config/gst-rate-mappings/', list_gst_rate_ledger_mappings, name='gst-rate-mappings-list'),
+        path('config/gst-rate-mappings/save/', upsert_gst_rate_ledger_mappings, name='gst-rate-mappings-upsert'),
+        path('config/gst-rate-mappings/<uuid:mapping_id>/delete/', delete_gst_rate_ledger_mapping, name='gst-rate-mappings-delete'),
         
         # Other router URLs
         path('', include(router.urls)),

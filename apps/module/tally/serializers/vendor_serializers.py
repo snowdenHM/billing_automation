@@ -35,14 +35,25 @@ class TallyVendorAnalyzedProductSerializer(serializers.ModelSerializer):
     cgst = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
     sgst = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
 
+    cgst_ledger_name = serializers.CharField(source='cgst_ledger.name', read_only=True)
+    sgst_ledger_name = serializers.CharField(source='sgst_ledger.name', read_only=True)
+    igst_ledger_name = serializers.CharField(source='igst_ledger.name', read_only=True)
+
     class Meta:
         model = TallyVendorAnalyzedProduct
         fields = [
             'id', 'item_name', 'item_details', 'taxes', 'taxes_name',
             'price', 'quantity', 'amount', 'product_gst',
-            'igst', 'cgst', 'sgst', 'created_at'
+            'igst', 'cgst', 'sgst',
+            'cgst_ledger', 'cgst_ledger_name',
+            'sgst_ledger', 'sgst_ledger_name',
+            'igst_ledger', 'igst_ledger_name',
+            'created_at',
         ]
-        read_only_fields = ['id', 'created_at', 'taxes_name']
+        read_only_fields = [
+            'id', 'created_at', 'taxes_name',
+            'cgst_ledger_name', 'sgst_ledger_name', 'igst_ledger_name',
+        ]
 
 
 class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):

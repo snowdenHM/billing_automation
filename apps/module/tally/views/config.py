@@ -16,10 +16,13 @@ from apps.common.permissions import IsOrgAdmin
 from apps.common.utils import get_organization_from_request
 from apps.organizations.models import Organization
 
-from ..models import Ledger, ParentLedger, TallyConfig
+from decimal import Decimal, InvalidOperation
+
+from ..models import Ledger, ParentLedger, TallyConfig, GstRateLedgerMapping
 from ..serializers import (
     LedgerSerializer,
     TallyConfigSerializer,
+    GstRateLedgerMappingSerializer,
 )
 from .helpers import OrganizationAPIKeyOrBearerToken
 
@@ -344,3 +347,88 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         return super().destroy(request, *args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# GST Rate → Ledger Mapping endpoints
+# ---------------------------------------------------------------------------
+
+
+@extend_schema(tags=["Tally Config"])
+@api_view(["GET"])
+@permission_classes([OrganizationAPIKeyOrBearerToken])
+def list_gst_rate_ledger_mappings(request, org_id):
+    """List per-rate CGST/SGST/IGST ledger mappings for an organization."""
+    organization = get_object_or_404(Organization, id=org_id)
+    mappings = GstRateLedgerMapping.objects.filter(organization=organization).order_by("rate")
+    serializer = GstRateLedgerMappingSerializer(mappings, many=True)
+    return Response(
+        {"success": True, "data": serializer.data},
+        status=status.HTTP_200_OK,
+    )
+
+
+@extend_schema(tags=["Tally Config"])
+@api_view(["POST"])
+@permission_classes([OrganizationAPIKeyOrBearerToken])
+def upsert_gst_rate_ledger_mappings(request, org_id):
+    """
+    Bulk upsert GST rate → ledger mappings.
+
+    Payload: {"mappings": [
+        {"rate": "5.00", "cgst_ledger": "<uuid>", "sgst_ledger": "<uuid>", "igst_ledger": "<uuid>"},
+        ...
+    ]}
+
+    Each rate is unique per organization. Existing rows are updated; new rows are created.
+    """
+    organization = get_object_or_404(Organization, id=org_id)
+    payload = request.data.get("mappings", [])
+    if not isinstance(payload, list):
+        return Response(
+            {"success": False, "message": "`mappings` must be a list"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    saved, errors = [], []
+    for entry in payload:
+        try:
+            rate_raw = entry.get("rate")
+            try:
+                rate = Decimal(str(rate_raw))
+            except (InvalidOperation, TypeError):
+                errors.append({"rate": rate_raw, "error": "Invalid rate"})
+                continue
+
+            cgst_id = entry.get("cgst_ledger") or None
+            sgst_id = entry.get("sgst_ledger") or None
+            igst_id = entry.get("igst_ledger") or None
+
+            obj, _ = GstRateLedgerMapping.objects.update_or_create(
+                organization=organization,
+                rate=rate,
+                defaults={
+                    "cgst_ledger_id": cgst_id,
+                    "sgst_ledger_id": sgst_id,
+                    "igst_ledger_id": igst_id,
+                },
+            )
+            saved.append(GstRateLedgerMappingSerializer(obj).data)
+        except Exception as e:
+            errors.append({"entry": entry, "error": str(e)})
+
+    return Response(
+        {"success": not errors, "saved": saved, "errors": errors},
+        status=status.HTTP_200_OK if not errors else status.HTTP_207_MULTI_STATUS,
+    )
+
+
+@extend_schema(tags=["Tally Config"])
+@api_view(["DELETE"])
+@permission_classes([OrganizationAPIKeyOrBearerToken])
+def delete_gst_rate_ledger_mapping(request, org_id, mapping_id):
+    """Delete a single GST rate ledger mapping."""
+    organization = get_object_or_404(Organization, id=org_id)
+    mapping = get_object_or_404(GstRateLedgerMapping, id=mapping_id, organization=organization)
+    mapping.delete()
+    return Response({"success": True}, status=status.HTTP_200_OK)

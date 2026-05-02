@@ -1108,6 +1108,43 @@ def vendor_bill_verify(request, org_id):
 
         verified_bill = update_analyzed_bill_data(analyzed_bill, analyzed_data, organization)
 
+        # Tax reconciliation: Σ(per-line tax) must equal bill-level tax (within ±₹1).
+        # This guards against mixed-GST bills where line-level totals diverge from
+        # the OCR/user-entered unified bill-level CGST/SGST/IGST.
+        TOL = TallyVendorAnalyzedBill.ROUND_OFF_THRESHOLD  # Decimal('1.00')
+        line_cgst = sum((p.cgst or Decimal('0')) for p in verified_bill.products.all())
+        line_sgst = sum((p.sgst or Decimal('0')) for p in verified_bill.products.all())
+        line_igst = sum((p.igst or Decimal('0')) for p in verified_bill.products.all())
+        bill_cgst = verified_bill.cgst or Decimal('0')
+        bill_sgst = verified_bill.sgst or Decimal('0')
+        bill_igst = verified_bill.igst or Decimal('0')
+        diffs = {
+            'cgst': abs(line_cgst - bill_cgst),
+            'sgst': abs(line_sgst - bill_sgst),
+            'igst': abs(line_igst - bill_igst),
+        }
+        breaches = {k: float(v) for k, v in diffs.items() if v >= TOL}
+        if breaches:
+            return Response({
+                'error': 'Tax Reconciliation Failed',
+                'message': (
+                    'Sum of per-line GST does not match bill-level GST within tolerance '
+                    f'(±₹{TOL}). Reconcile line items and bill totals before verifying.'
+                ),
+                'differences': breaches,
+                'line_totals': {
+                    'cgst': float(line_cgst),
+                    'sgst': float(line_sgst),
+                    'igst': float(line_igst),
+                },
+                'bill_totals': {
+                    'cgst': float(bill_cgst),
+                    'sgst': float(bill_sgst),
+                    'igst': float(bill_igst),
+                },
+                'error_code': 'TAX_RECONCILIATION_FAILED',
+            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
         # Recompute round-off after products & tax fields are persisted so the
         # XML sync payload can carry an accurate Round Off entry.
         try:
@@ -1560,6 +1597,16 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                     if tax_ledger:
                         product.taxes = tax_ledger
                         needs_update = True
+
+            # Per-line CGST / SGST / IGST tax ledger FKs (used for mixed-rate bills)
+            for fk_field in ('cgst_ledger', 'sgst_ledger', 'igst_ledger'):
+                if fk_field in item:
+                    raw_id = item.get(fk_field)
+                    new_id = str(raw_id) if raw_id else None
+                    current_id = str(getattr(product, f'{fk_field}_id') or '') or None
+                    if current_id != new_id:
+                        setattr(product, f'{fk_field}_id', new_id)
+                        needs_update = True
             if needs_update:
                 product.save()
                 logger.info(f"Updated product {item_id} with GST type: {analyzed_bill.gst_type}")
@@ -1594,6 +1641,11 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 tax_ledger = find_or_create_tax_ledger(item['tax_ledger'], 'Product Tax', organization)
                 if tax_ledger:
                     product.taxes = tax_ledger
+
+            for fk_field in ('cgst_ledger', 'sgst_ledger', 'igst_ledger'):
+                raw_id = item.get(fk_field)
+                if raw_id:
+                    setattr(product, f'{fk_field}_id', str(raw_id))
             product.save()
             logger.info(
                 f"Created new product (client item_id: {item.get('item_id')}) name={item.get('item_name') or 'Unknown'} "
@@ -1894,7 +1946,12 @@ def vendor_bills_sync_list(request, org_id):
             selected_bill__tally_synced=False
         )
         .select_related('selected_bill', 'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes')
-        .prefetch_related('products__taxes')
+        .prefetch_related(
+            'products__taxes',
+            'products__cgst_ledger',
+            'products__sgst_ledger',
+            'products__igst_ledger',
+        )
         .order_by('-created_at')
     )
 
@@ -2012,47 +2069,49 @@ def prepare_sync_data(analyzed_bill, organization):
     bill_url = f"https://billmunshi.com/tally/vendor-bill/{analyzed_bill.selected_bill.id}"
     notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
 
+    # Build bill-level taxes dict — only include entries whose amount is non-zero.
+    # Per client requirement: zero-value tax entries must NOT appear in the XML
+    # payload (Tally treats their presence as a real ledger line).
+    tax_entries = (
+        ("igst", analyzed_bill.igst, analyzed_bill.igst_taxes),
+        ("cgst", analyzed_bill.cgst, analyzed_bill.cgst_taxes),
+        ("sgst", analyzed_bill.sgst, analyzed_bill.sgst_taxes),
+        ("discount", analyzed_bill.discount, analyzed_bill.discount_taxes),
+        ("cess", analyzed_bill.cess, analyzed_bill.cess_taxes),
+        ("freight", analyzed_bill.freight, analyzed_bill.freight_taxes),
+        ("round_off", analyzed_bill.round_off, analyzed_bill.round_off_taxes),
+    )
+    bill_taxes = {}
+    for key, amount, ledger in tax_entries:
+        amt = float(amount or 0)
+        if amt == 0:
+            continue
+        bill_taxes[key] = {
+            "amount": amt,
+            "ledger": str(ledger) if ledger else "No Tax Ledger",
+        }
+
     bill_data = {
         "id": str(analyzed_bill.selected_bill.id),
-        "voucher_type":"Purchase",
+        "voucher_type": "Purchase",
         "vendor_name": vendor_name,
         "bill_no": analyzed_bill.bill_no,
         "bill_date": bill_date_str,
         "total_amount": float(analyzed_bill.total or 0),
         "company_id": team_slug,
         "notes": notes_message,
-        "taxes": {
-            "igst": {
-                "amount": float(analyzed_bill.igst or 0),
-                "ledger": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "No Tax Ledger",
-            },
-            "cgst": {
-                "amount": float(analyzed_bill.cgst or 0),
-                "ledger": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "No Tax Ledger",
-            },
-            "sgst": {
-                "amount": float(analyzed_bill.sgst or 0),
-                "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
-            },
-            "discount": {
-                "amount": float(analyzed_bill.discount or 0),
-                "ledger": str(analyzed_bill.discount_taxes) if analyzed_bill.discount_taxes else "No Tax Ledger",
-            },
-            "cess": {
-                "amount": float(analyzed_bill.cess or 0),
-                "ledger": str(analyzed_bill.cess_taxes) if analyzed_bill.cess_taxes else "No Tax Ledger",
-            },
-            "freight": {
-                "amount": float(analyzed_bill.freight or 0),
-                "ledger": str(analyzed_bill.freight_taxes) if analyzed_bill.freight_taxes else "No Tax Ledger",
-            },
-            "round_off": {
-                "amount": float(analyzed_bill.round_off or 0),
-                "ledger": str(analyzed_bill.round_off_taxes) if analyzed_bill.round_off_taxes else "No Tax Ledger",
-            }
-        },
-        "products": []
+        "taxes": bill_taxes,
+        "products": [],
     }
+
+    def _add_nonzero_tax(product_data, key, amount, ledger=None):
+        """Attach per-line tax amount + ledger only if the amount is non-zero."""
+        amt = float(amount or 0)
+        if amt == 0:
+            return
+        product_data[key] = amt
+        if ledger:
+            product_data[f"{key}_ledger"] = str(ledger)
 
     # 🔄 SIMPLE CONSOLIDATION CHECK: Use consolidate flag to decide which data to use
     if hasattr(analyzed_bill, 'consolidate') and analyzed_bill.consolidate:
@@ -2108,28 +2167,40 @@ def prepare_sync_data(analyzed_bill, organization):
                 if allow_product_sync:
                     product_data = {
                         "id": str(consolidated_product.id),
-                        "item_name": _clean_tally_text(consolidated_product.item_name),  # ✅ Direct field
-                        "item_details": _clean_tally_text(consolidated_product.item_details),  # ✅ Direct field
+                        "item_name": _clean_tally_text(consolidated_product.item_name),
+                        "item_details": _clean_tally_text(consolidated_product.item_details),
                         "tax_ledger": str(consolidated_product.taxes) if consolidated_product.taxes else "PURCHAGE GST",
-                        "price": float(consolidated_product.price or 0),  # ✅ Direct field
-                        "quantity": int(consolidated_product.quantity or 1),  # ✅ Direct field
-                        "amount": float(consolidated_product.amount or 0),  # ✅ Direct field
-                        "product_gst": consolidated_product.product_gst or product_gst_rate,  # ✅ Direct field with fallback
-                        "igst": float(consolidated_product.igst or 0),  # ✅ Direct field
-                        "cgst": float(consolidated_product.cgst or 0),  # ✅ Direct field
-                        "sgst": float(consolidated_product.sgst or 0),  # ✅ Direct field
+                        "price": float(consolidated_product.price or 0),
+                        "quantity": int(consolidated_product.quantity or 1),
+                        "amount": float(consolidated_product.amount or 0),
+                        "product_gst": consolidated_product.product_gst or product_gst_rate,
                         "uom": stock_unit_map.get(consolidated_product.item_name, ""),
                     }
                 else:
                     product_data = {
                         "id": str(consolidated_product.id),
                         "tax_ledger": str(consolidated_product.taxes) if consolidated_product.taxes else "PURCHAGE GST",
-                        "product_gst": consolidated_product.product_gst or product_gst_rate,  # ✅ Direct field with fallback
-                        "amount": float(consolidated_product.amount or 0),  # ✅ Direct field
-                        "igst": float(consolidated_product.igst or 0),  # ✅ Direct field
-                        "cgst": float(consolidated_product.cgst or 0),  # ✅ Direct field
-                        "sgst": float(consolidated_product.sgst or 0),  # ✅ Direct field
+                        "product_gst": consolidated_product.product_gst or product_gst_rate,
+                        "amount": float(consolidated_product.amount or 0),
                     }
+                # Consolidated products do not (currently) carry per-line tax
+                # ledger FKs — fall back to bill-level ledgers when emitting
+                # non-zero tax entries.
+                _add_nonzero_tax(
+                    product_data, "igst",
+                    consolidated_product.igst,
+                    analyzed_bill.igst_taxes,
+                )
+                _add_nonzero_tax(
+                    product_data, "cgst",
+                    consolidated_product.cgst,
+                    analyzed_bill.cgst_taxes,
+                )
+                _add_nonzero_tax(
+                    product_data, "sgst",
+                    consolidated_product.sgst,
+                    analyzed_bill.sgst_taxes,
+                )
 
                 bill_data["products"].append(product_data)
 
@@ -2154,9 +2225,6 @@ def prepare_sync_data(analyzed_bill, organization):
                     "quantity": int(item.quantity or 0),
                     "amount": float(item.amount or 0),
                     "product_gst": item.product_gst,
-                    "igst": float(item.igst or 0),
-                    "cgst": float(item.cgst or 0),
-                    "sgst": float(item.sgst or 0),
                     "uom": stock_unit_map.get(item.item_name, ""),
                 }
             else:
@@ -2165,10 +2233,27 @@ def prepare_sync_data(analyzed_bill, organization):
                     "tax_ledger": str(item.taxes) if item.taxes else "No Tax Ledger",
                     "product_gst": item.product_gst,
                     "amount": float(item.amount or 0),
-                    "igst": float(item.igst or 0),
-                    "cgst": float(item.cgst or 0),
-                    "sgst": float(item.sgst or 0),
                 }
+
+            # Per-line tax ledger preference order:
+            #   1. Per-product CGST/SGST/IGST FK (set when bill has mixed rates)
+            #   2. Bill-level CGST/SGST/IGST ledger fallback
+            # Zero amounts are skipped entirely.
+            _add_nonzero_tax(
+                product_data, "igst",
+                item.igst,
+                getattr(item, "igst_ledger", None) or analyzed_bill.igst_taxes,
+            )
+            _add_nonzero_tax(
+                product_data, "cgst",
+                item.cgst,
+                getattr(item, "cgst_ledger", None) or analyzed_bill.cgst_taxes,
+            )
+            _add_nonzero_tax(
+                product_data, "sgst",
+                item.sgst,
+                getattr(item, "sgst_ledger", None) or analyzed_bill.sgst_taxes,
+            )
 
             bill_data["products"].append(product_data)
 

@@ -251,8 +251,15 @@ class TallyVendorAnalyzedProductInline(admin.TabularInline):
     
     model = TallyVendorAnalyzedProduct
     extra = 0
-    fields = ('item_name', 'item_details', 'taxes', 'price', 'quantity', 'amount', 'product_gst', 'igst', 'cgst', 'sgst')
+    fields = (
+        'item_name', 'item_details', 'taxes', 'price', 'quantity', 'amount',
+        'product_gst',
+        'cgst', 'cgst_ledger',
+        'sgst', 'sgst_ledger',
+        'igst', 'igst_ledger',
+    )
     readonly_fields = ('created_at', 'igst', 'cgst', 'sgst')
+    autocomplete_fields = ('taxes', 'cgst_ledger', 'sgst_ledger', 'igst_ledger')
 
 
 @admin.register(TallyVendorAnalyzedBill)
@@ -688,3 +695,26 @@ class TallyTcpReleaseAdmin(admin.ModelAdmin):
             )
         return "—"
     file_link.short_description = "TCP file"
+
+
+# ============================================================================
+# GST Rate → Ledger Mapping Admin
+# ============================================================================
+
+from .models import GstRateLedgerMapping
+
+
+@admin.register(GstRateLedgerMapping)
+class GstRateLedgerMappingAdmin(BaseOrgAdmin):
+    """Per-organization GST rate → CGST/SGST/IGST ledger mapping."""
+
+    list_display = ("organization", "rate", "cgst_ledger", "sgst_ledger", "igst_ledger", "updated_at")
+    list_filter = ("organization", "rate")
+    search_fields = (
+        "organization__name",
+        "cgst_ledger__name",
+        "sgst_ledger__name",
+        "igst_ledger__name",
+    )
+    autocomplete_fields = ("cgst_ledger", "sgst_ledger", "igst_ledger")
+    ordering = ("organization", "rate")

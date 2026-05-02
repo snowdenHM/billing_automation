@@ -1,7 +1,28 @@
 from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_field
 from typing import List
-from ..models import TallyConfig, ParentLedger
+from ..models import TallyConfig, ParentLedger, GstRateLedgerMapping, Ledger
+
+
+class GstRateLedgerMappingSerializer(serializers.ModelSerializer):
+    """Per-org GST rate → CGST/SGST/IGST ledger mapping."""
+    cgst_ledger_name = serializers.CharField(source='cgst_ledger.name', read_only=True)
+    sgst_ledger_name = serializers.CharField(source='sgst_ledger.name', read_only=True)
+    igst_ledger_name = serializers.CharField(source='igst_ledger.name', read_only=True)
+
+    class Meta:
+        model = GstRateLedgerMapping
+        fields = [
+            'id', 'rate',
+            'cgst_ledger', 'cgst_ledger_name',
+            'sgst_ledger', 'sgst_ledger_name',
+            'igst_ledger', 'igst_ledger_name',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'created_at', 'updated_at',
+            'cgst_ledger_name', 'sgst_ledger_name', 'igst_ledger_name',
+        ]
 
 
 class TallyConfigSerializer(serializers.ModelSerializer):

@@ -225,6 +225,62 @@ class TallyConfig(BaseOrgModel):
         return f"TallyConfig · {self.organization.name}"
 
 
+class GstRateLedgerMapping(BaseOrgModel):
+    """
+    Per-organization mapping of GST rate → CGST / SGST / IGST ledgers.
+
+    Used for line-item level tax assignment on vendor bills with mixed GST rates.
+    One row per (organization, rate). Standard rates: 0, 5, 12, 18, 28.
+    """
+
+    RATE_CHOICES = [
+        (Decimal("0.00"), "0%"),
+        (Decimal("5.00"), "5%"),
+        (Decimal("12.00"), "12%"),
+        (Decimal("18.00"), "18%"),
+        (Decimal("28.00"), "28%"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        help_text="GST rate as a percentage (e.g. 18.00 means 18%).",
+    )
+    cgst_ledger = models.ForeignKey(
+        Ledger,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cgst_rate_mappings",
+    )
+    sgst_ledger = models.ForeignKey(
+        Ledger,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sgst_rate_mappings",
+    )
+    igst_ledger = models.ForeignKey(
+        Ledger,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="igst_rate_mappings",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "GST Rate Ledger Mapping"
+        verbose_name_plural = "GST Rate Ledger Mappings"
+        unique_together = (("organization", "rate"),)
+        ordering = ["rate"]
+
+    def __str__(self) -> str:
+        return f"{self.organization.name} · {self.rate}%"
+
+
 # ---------------------------------
 # Vendor Bills (Upload + Analysed)
 # ---------------------------------
@@ -514,6 +570,31 @@ class TallyVendorAnalyzedProduct(BaseOrgModel):
     cgst = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     sgst = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True, default=Decimal("0"))
 
+    cgst_ledger = models.ForeignKey(
+        Ledger,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="cgst_tally_vendor_products",
+        help_text="Per-line CGST tax ledger (resolved from rate mapping or chosen manually).",
+    )
+    sgst_ledger = models.ForeignKey(
+        Ledger,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="sgst_tally_vendor_products",
+        help_text="Per-line SGST tax ledger.",
+    )
+    igst_ledger = models.ForeignKey(
+        Ledger,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="igst_tally_vendor_products",
+        help_text="Per-line IGST tax ledger.",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -522,6 +603,21 @@ class TallyVendorAnalyzedProduct(BaseOrgModel):
 
     def __str__(self) -> str:
         return self.item_name or f"VendorProduct:{self.id}"
+
+    @property
+    def gst_rate_decimal(self):
+        """Parse `product_gst` text ('18%', '5%', 'Exempted', 'N/A') to a Decimal rate.
+        Returns Decimal('0') for Exempted / N/A / unparseable values.
+        """
+        if not self.product_gst:
+            return Decimal("0")
+        m = re.match(r"^\s*([\d.]+)\s*%?\s*$", str(self.product_gst))
+        if not m:
+            return Decimal("0")
+        try:
+            return Decimal(m.group(1))
+        except Exception:
+            return Decimal("0")
 
 
 # ---------------------------------
