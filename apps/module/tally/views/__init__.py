@@ -68,6 +68,9 @@ from .organization_data import organization_tally_data
 # Setup guide
 from .setup_guide import tally_setup_guide
 
+# Bill image scanner (CamScanner-style preprocessing before OCR)
+from .scan import scan_process
+
 __all__ = [
     # Helpers
     "NoPagination",
@@ -114,4 +117,5 @@ __all__ = [
     "organization_tally_data",
     # Setup guide
     "tally_setup_guide",
+    "scan_process",
 ]

@@ -41,6 +41,8 @@ from .views import (
     organization_tally_data,
     # Setup guide
     tally_setup_guide,
+    # Bill image scanner
+    scan_process,
 )
 
 # Create router for the remaining viewsets
@@ -59,6 +61,9 @@ urlpatterns = [
         # New function-based Tally Config endpoints
         path('config/', get_tally_config, name='get-tally-config'),
         path('config/save/', create_or_update_tally_config, name='create-update-tally-config'),
+
+        # CamScanner-style bill image enhancement (used by upload modal)
+        path('scan/process/', scan_process, name='scan-process'),
 
         # GST Rate → Ledger mapping endpoints (used for per-line tax assignment)
         path('config/gst-rate-mappings/', list_gst_rate_ledger_mappings, name='gst-rate-mappings-list'),

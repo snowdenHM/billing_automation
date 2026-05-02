@@ -1,5 +1,9 @@
 from django.urls import path, include
 
+# Bill image scanner is shared between Tally and Zoho — both upload flows use
+# the same CamScanner-style preprocessing helper before OCR runs.
+from apps.module.tally.views.scan import scan_process as bill_scan_process
+
 from .views import (
     # Journal bills
     journal_bills_list_view,
@@ -48,6 +52,11 @@ app_name = "zoho"
 urlpatterns = [
     # All endpoints are now organization-scoped
     path('org/<uuid:org_id>/', include([
+
+        # ============================================================================
+        # Bill image scanner (shared with Tally module)
+        # ============================================================================
+        path('scan/process/', bill_scan_process, name='zoho-scan-process'),
 
         # ============================================================================
         # Zoho Settings/Credentials Management
