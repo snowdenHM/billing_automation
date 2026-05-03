@@ -1465,7 +1465,8 @@ def expense_bills_sync_list(request, org_id):
     ).select_related(
         'selected_bill', 'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes'
     ).prefetch_related(
-        'products__chart_of_accounts'
+        'products__chart_of_accounts',
+        'consolidated_products__chart_of_accounts',
     ).order_by('-created_at')
 
     # Convert each analyzed bill to the new sync format and extract just the data portion

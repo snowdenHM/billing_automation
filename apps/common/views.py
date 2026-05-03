@@ -1,39 +1,27 @@
 """
 Common views for the application.
 """
+import logging
 
-import os
-from django.http import FileResponse, Http404
 from django.conf import settings
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.views.decorators.csrf import csrf_exempt
 from django.views.static import serve as django_serve
+
+logger = logging.getLogger(__name__)
 
 
 @xframe_options_exempt
 @csrf_exempt
 def serve_bill_file(request, path):
     """
-    Serve media files (PDF/images) with headers that allow iframe embedding.
-    This view explicitly allows files to be displayed in an iframe.
+    Serve media files (PDF/images) and allow iframe embedding from the
+    configured frontend origins. ``django_serve`` validates the path and
+    raises Http404 on traversal attempts.
     """
-    print(f"🔵 Serving file: {path}")  # Debug log
-    
-    # Use Django's built-in serve function which handles everything properly
+    logger.debug("Serving bill file: %s", path)
+
     response = django_serve(request, path, document_root=settings.MEDIA_ROOT)
-    
-    # Add headers to allow iframe embedding
-    # Don't set X-Frame-Options (xframe_options_exempt decorator handles this)
-    # Don't set CSP to allow embedding from any origin in development
-    
-    # Allow CORS
-    response['Access-Control-Allow-Origin'] = '*'
     response['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
-    response['Access-Control-Allow-Headers'] = '*'
-    
-    # Set cache control
     response['Cache-Control'] = 'public, max-age=3600'
-    
-    print(f"✅ File served successfully: {path}")  # Debug log
-    
     return response

@@ -46,9 +46,13 @@ def _get_openai_client():
         try:
             from openai import OpenAI
             api_key = getattr(settings, "OPENAI_API_KEY", None)
-            if not api_key:
+            if not api_key or api_key == "your_openai_api_key_here":
                 raise ValueError("OpenAI API key not configured in settings")
-            _openai_client = OpenAI(api_key=api_key)
+            _openai_client = OpenAI(
+                api_key=api_key,
+                timeout=getattr(settings, "OPENAI_REQUEST_TIMEOUT", 60.0),
+                max_retries=getattr(settings, "OPENAI_MAX_RETRIES", 2),
+            )
         except ImportError:
             raise RuntimeError("openai package is not installed")
     return _openai_client

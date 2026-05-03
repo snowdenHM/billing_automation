@@ -9,7 +9,7 @@ from django.conf import settings
 from django.db import models
 
 from apps.organizations.models import Organization
-from apps.common.validators import validate_file_extension
+from apps.common.validators import validate_bill_file_size, validate_file_extension
 
 
 # -----------------------------
@@ -298,7 +298,7 @@ class TallyVendorBill(BaseOrgModel):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
     bill_munshi_name = models.CharField(max_length=100, blank=True, null=True)  # Fixed: was billmunshiName
-    file = models.FileField(upload_to="bills/", validators=[validate_file_extension])
+    file = models.FileField(upload_to="bills/", validators=[validate_file_extension, validate_bill_file_size])
     file_type = models.CharField(
         choices=BillType.choices, max_length=100, blank=True, null=True, default=BillType.SINGLE
     )
@@ -637,7 +637,7 @@ class TallyExpenseBill(BaseOrgModel):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
     bill_munshi_name = models.CharField(max_length=100, blank=True, null=True)  # Fixed: was billmunshiName
-    file = models.FileField(upload_to="bills/", validators=[validate_file_extension])
+    file = models.FileField(upload_to="bills/", validators=[validate_file_extension, validate_bill_file_size])
     file_type = models.CharField(  # Fixed: was fileType
         choices=BillType.choices, max_length=100, blank=True, null=True, default=BillType.SINGLE
     )

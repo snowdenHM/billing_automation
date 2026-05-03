@@ -1951,6 +1951,10 @@ def vendor_bills_sync_list(request, org_id):
             'products__cgst_ledger',
             'products__sgst_ledger',
             'products__igst_ledger',
+            'consolidated_products__taxes',
+            'consolidated_products__cgst_ledger',
+            'consolidated_products__sgst_ledger',
+            'consolidated_products__igst_ledger',
         )
         .order_by('-created_at')
     )

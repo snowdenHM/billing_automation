@@ -6,10 +6,11 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied
 from rest_framework_api_key.models import APIKey
 from drf_spectacular.utils import extend_schema
+from django.shortcuts import get_object_or_404
 
+from apps.common.permissions import assert_org_access
 from apps.organizations.models import Organization, OrganizationAPIKey
 from apps.organizations.serializers import APIKeyIssueSerializer, APIKeySerializer
 
@@ -24,16 +25,8 @@ from apps.organizations.serializers import APIKeyIssueSerializer, APIKeySerializ
 @permission_classes([IsAuthenticated])
 def organization_issue_api_key_view(request, org_id):
     """Issue a new API key for the organization."""
-    try:
-        organization = Organization.objects.get(pk=org_id)
-    except Organization.DoesNotExist:
-        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
-
-    if not (
-        request.user.is_staff
-        or organization.memberships.filter(user=request.user, role="ADMIN", is_active=True).exists()
-    ):
-        raise PermissionDenied("You don't have permission to issue API keys for this organization")
+    organization = get_object_or_404(Organization, pk=org_id)
+    assert_org_access(request.user, organization, admin_only=True)
 
     serializer = APIKeyIssueSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
@@ -66,16 +59,8 @@ def organization_issue_api_key_view(request, org_id):
 @permission_classes([IsAuthenticated])
 def organization_list_api_keys_view(request, org_id):
     """List API keys for the organization."""
-    try:
-        organization = Organization.objects.get(pk=org_id)
-    except Organization.DoesNotExist:
-        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
-
-    if not (
-        request.user.is_staff
-        or organization.memberships.filter(user=request.user, role="ADMIN", is_active=True).exists()
-    ):
-        raise PermissionDenied("You don't have permission to view API keys for this organization")
+    organization = get_object_or_404(Organization, pk=org_id)
+    assert_org_access(request.user, organization, admin_only=True)
 
     queryset = OrganizationAPIKey.objects.filter(organization=organization).select_related(
         "created_by", "organization", "organization__owner", "organization__created_by"
@@ -93,22 +78,10 @@ def organization_list_api_keys_view(request, org_id):
 @permission_classes([IsAuthenticated])
 def organization_revoke_api_key_view(request, org_id, key_id):
     """Revoke an API key for the organization."""
-    try:
-        organization = Organization.objects.get(pk=org_id)
-    except Organization.DoesNotExist:
-        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+    organization = get_object_or_404(Organization, pk=org_id)
+    assert_org_access(request.user, organization, admin_only=True)
 
-    if not (
-        request.user.is_staff
-        or organization.memberships.filter(user=request.user, role="ADMIN", is_active=True).exists()
-    ):
-        raise PermissionDenied("You don't have permission to revoke API keys for this organization")
-
-    try:
-        api_key = OrganizationAPIKey.objects.get(organization=organization, id=key_id)
-    except OrganizationAPIKey.DoesNotExist:
-        return Response({"detail": "API key not found."}, status=status.HTTP_404_NOT_FOUND)
-
+    api_key = get_object_or_404(OrganizationAPIKey, organization=organization, id=key_id)
     api_key.api_key.revoked = True
     api_key.api_key.save()
     return Response({"data": APIKeySerializer(api_key, context={"request": request}).data})

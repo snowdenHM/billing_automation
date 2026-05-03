@@ -10,7 +10,7 @@ from django.db import models
 from django.utils import timezone
 
 from apps.organizations.models import Organization
-from apps.common.validators import validate_file_extension
+from apps.common.validators import validate_bill_file_size, validate_file_extension
 
 
 # -----------------------------
@@ -294,7 +294,7 @@ class VendorBill(BaseTeamModel):
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     billmunshiName = models.CharField(max_length=100, null=True, blank=True)
-    file = models.FileField(upload_to="bills/", validators=[validate_file_extension])
+    file = models.FileField(upload_to="bills/", validators=[validate_file_extension, validate_bill_file_size])
     fileType = models.CharField(choices=BILL_TYPE_CHOICES, max_length=100, null=True, blank=True,
                                 default="Single Invoice/File")
     analysed_data = models.JSONField(default=dict, null=True, blank=True)
@@ -585,7 +585,7 @@ class JournalBill(BaseTeamModel):
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     billmunshiName = models.CharField(max_length=100, null=True, blank=True)
-    file = models.FileField(upload_to="bills/", validators=[validate_file_extension])
+    file = models.FileField(upload_to="bills/", validators=[validate_file_extension, validate_bill_file_size])
     fileType = models.CharField(choices=BILL_TYPE_CHOICES, max_length=100, null=True, blank=True,
                                 default="Single Invoice/File")
     analysed_data = models.JSONField(default=dict, null=True, blank=True)
@@ -858,7 +858,7 @@ class ExpenseBill(BaseTeamModel):
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     billmunshiName = models.CharField(max_length=100, null=True, blank=True)
-    file = models.FileField(upload_to="bills/", validators=[validate_file_extension])
+    file = models.FileField(upload_to="bills/", validators=[validate_file_extension, validate_bill_file_size])
     fileType = models.CharField(choices=BILL_TYPE_CHOICES, max_length=100, null=True, blank=True,
                                 default="Single Invoice/File")
     analysed_data = models.JSONField(default=dict, null=True, blank=True)

@@ -46,6 +46,7 @@ DJANGO_APPS = [
 
 THIRD_PARTY_APPS = [
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
     "django_filters",
     "drf_spectacular",
     "corsheaders",
@@ -284,10 +285,10 @@ CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=False)
 from datetime import timedelta
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(days=1),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
-    "ROTATE_REFRESH_TOKENS": False,
-    "BLACKLIST_AFTER_ROTATION": False,
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=env.int("JWT_ACCESS_MINUTES", default=30)),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=env.int("JWT_REFRESH_DAYS", default=7)),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
     "ALGORITHM": "HS256",
     "SIGNING_KEY": SECRET_KEY,
     "AUTH_HEADER_TYPES": ("Bearer",),
@@ -300,5 +301,21 @@ WAFFLE_FLAG_DEFAULT = False
 WAFFLE_SWITCH_DEFAULT = False
 WAFFLE_SAMPLE_DEFAULT = False
 
-# Allow iframe embedding for file viewer
-X_FRAME_OPTIONS = 'ALLOWALL'
+# Default: deny framing. The bill-file viewer route opts out per-view via
+# @xframe_options_exempt in apps.common.views.serve_bill_file.
+X_FRAME_OPTIONS = 'DENY'
+
+# ------------------------------------------------------------
+# Upload limits (applies to multipart parsing and request body)
+# ------------------------------------------------------------
+# Override via env: BILL_MAX_UPLOAD_MB (defaults to 25 MB)
+_MAX_UPLOAD_MB = env.int("BILL_MAX_UPLOAD_MB", default=25)
+DATA_UPLOAD_MAX_MEMORY_SIZE = _MAX_UPLOAD_MB * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = _MAX_UPLOAD_MB * 1024 * 1024
+BILL_MAX_UPLOAD_BYTES = DATA_UPLOAD_MAX_MEMORY_SIZE
+
+# ------------------------------------------------------------
+# OpenAI client
+# ------------------------------------------------------------
+OPENAI_REQUEST_TIMEOUT = env.float("OPENAI_REQUEST_TIMEOUT", default=60.0)
+OPENAI_MAX_RETRIES = env.int("OPENAI_MAX_RETRIES", default=2)

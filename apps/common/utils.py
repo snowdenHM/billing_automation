@@ -32,19 +32,34 @@ def get_organization_from_request(request, org_id=None, **kwargs):
     Resolve the Organization from the current request.
 
     Resolution order:
-      1. Explicit *org_id* (positional or from **kwargs['org_id']).
+      1. Explicit *org_id* — REQUIRES that the requesting user has an active
+         membership (or is staff/superuser). Raises ``PermissionDenied``
+         when the user is not authorized for that organization.
       2. ``request.organization`` set by an API-key permission class.
       3. ``request.auth`` linked to an OrganizationAPIKey.
       4. First active OrgMembership of the authenticated user.
 
     Returns ``None`` when no organisation can be determined.
     """
-    from apps.organizations.models import Organization
+    from rest_framework.exceptions import PermissionDenied
 
-    # 1. From explicit org_id
+    from apps.organizations.models import Organization, OrganizationAPIKey
+
+    user = getattr(request, "user", None)
+
+    # 1. From explicit org_id — MUST verify membership.
     _org_id = org_id or kwargs.get("org_id")
     if _org_id:
-        return get_object_or_404(Organization, id=_org_id)
+        organization = get_object_or_404(Organization, id=_org_id)
+        is_staff = bool(user and user.is_authenticated and (user.is_staff or user.is_superuser))
+        if not is_staff:
+            if not (
+                user
+                and user.is_authenticated
+                and organization.memberships.filter(user=user, is_active=True).exists()
+            ):
+                raise PermissionDenied("You do not have access to this organization.")
+        return organization
 
     # 2. Injected by permission class (e.g. OrganizationAPIKeyOrBearerToken)
     if hasattr(request, "organization") and request.organization:
@@ -52,16 +67,13 @@ def get_organization_from_request(request, org_id=None, **kwargs):
 
     # 3. Via DRF API-key auth object
     if hasattr(request, "auth") and request.auth:
-        from apps.organizations.models import OrganizationAPIKey
         try:
-            org_api_key = OrganizationAPIKey.objects.get(api_key=request.auth)
-            return org_api_key.organization
-        except Exception:
-            pass
+            return OrganizationAPIKey.objects.get(api_key=request.auth).organization
+        except OrganizationAPIKey.DoesNotExist:
+            logger.warning("request.auth is not linked to any OrganizationAPIKey")
 
     # 4. Fallback to user membership
-    user = getattr(request, "user", None)
-    if user and hasattr(user, "memberships"):
+    if user and user.is_authenticated and hasattr(user, "memberships"):
         membership = user.memberships.filter(is_active=True).first()
         if membership:
             return membership.organization

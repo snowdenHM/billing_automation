@@ -192,7 +192,7 @@ def journal_bill_detail_view(request, org_id, bill_id):
         detail_serializer=ZohoJournalBillDetailSerializer,
         label='Journal',
         select_related=['vendor'],
-        prefetch_related=['products__chart_of_accounts', 'consolidated_products'],
+        prefetch_related=['products__chart_of_accounts', 'consolidated_products__chart_of_accounts'],
     )
 
 

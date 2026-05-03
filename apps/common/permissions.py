@@ -3,11 +3,37 @@ Shared permission classes used across the project.
 """
 import logging
 
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission, SAFE_METHODS, IsAuthenticated
 
 from apps.organizations.models import OrgMembership
 
 logger = logging.getLogger(__name__)
+
+
+def assert_org_access(user, organization, *, admin_only: bool = False) -> None:
+    """Raise PermissionDenied unless *user* may access *organization*.
+
+    Centralizes the previously-duplicated `is_staff OR membership.exists()`
+    pattern that lived in every organizations view.
+
+    - Superusers and staff always pass.
+    - Otherwise the user must have an active OrgMembership.
+    - When ``admin_only`` is set, the membership must have the ADMIN role.
+    """
+    if not user or not user.is_authenticated:
+        raise PermissionDenied("Authentication required.")
+    if user.is_superuser or user.is_staff:
+        return
+    qs = organization.memberships.filter(user=user, is_active=True)
+    if admin_only:
+        qs = qs.filter(role=OrgMembership.ADMIN)
+    if not qs.exists():
+        raise PermissionDenied(
+            "You don't have permission to access this organization."
+            if not admin_only
+            else "You must be an organization admin to perform this action."
+        )
 
 
 class IsSuperAdmin(BasePermission):

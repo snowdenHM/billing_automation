@@ -9,7 +9,6 @@ certifi
 cffi
 charset-normalizer
 click
-croniter
 distro
 django
 django-cors-headers
@@ -22,14 +21,11 @@ djangorestframework
 djangorestframework-api-key
 djangorestframework-simplejwt
 drf-spectacular
-faker
 h11
 httpcore
 httpx
 idna
-inflection
 jiter
-jsonschema
 jsonschema-specifications
 openai
 packaging
@@ -47,7 +43,6 @@ pypdf2
 python-dateutil
 python-dotenv
 pytz
-pyyaml
 redis
 referencing
 requests
@@ -57,7 +52,6 @@ setuptools
 six
 sniffio
 sqlparse
-tqdm
 typing-extensions
 typing-inspection
 tzdata

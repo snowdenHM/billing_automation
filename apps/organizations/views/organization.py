@@ -2,13 +2,13 @@
 """
 Organization CRUD views.
 """
-from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied
 from drf_spectacular.utils import extend_schema
+from django.shortcuts import get_object_or_404
 
+from apps.common.permissions import assert_org_access
 from apps.organizations.models import Organization
 from apps.organizations.serializers import OrganizationSerializer
 
@@ -43,14 +43,10 @@ def organization_list_view(request):
 @permission_classes([IsAuthenticated])
 def organization_detail_view(request, pk):
     """Retrieve a specific organization by ID."""
-    try:
-        organization = Organization.objects.select_related("owner", "created_by").get(pk=pk)
-    except Organization.DoesNotExist:
-        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
-
-    if not request.user.is_staff:
-        if not organization.memberships.filter(user=request.user, is_active=True).exists():
-            raise PermissionDenied("You don't have access to this organization")
+    organization = get_object_or_404(
+        Organization.objects.select_related("owner", "created_by"), pk=pk
+    )
+    assert_org_access(request.user, organization)
 
     serializer = OrganizationSerializer(organization, context={"request": request})
     return Response({"data": serializer.data})
@@ -66,16 +62,8 @@ def organization_detail_view(request, pk):
 @permission_classes([IsAuthenticated])
 def organization_update_view(request, pk):
     """Update an organization. Only org admins can update."""
-    try:
-        organization = Organization.objects.get(pk=pk)
-    except Organization.DoesNotExist:
-        return Response({"detail": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
-
-    if not (
-        request.user.is_staff
-        or organization.memberships.filter(user=request.user, role="ADMIN", is_active=True).exists()
-    ):
-        raise PermissionDenied("You don't have permission to update this organization")
+    organization = get_object_or_404(Organization, pk=pk)
+    assert_org_access(request.user, organization, admin_only=True)
 
     partial = request.method == "PATCH"
     serializer = OrganizationSerializer(
