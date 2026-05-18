@@ -1108,14 +1108,13 @@ def vendor_bill_verify(request, org_id):
 
         verified_bill = update_analyzed_bill_data(analyzed_bill, analyzed_data, organization)
 
-        # Tax reconciliation: Σ(per-line tax) must equal bill-level tax (within ±₹1).
-        # This guards against mixed-GST bills where line-level totals diverge from
-        # the OCR/user-entered unified bill-level CGST/SGST/IGST.
-        #
-        # NOTE: `update_analyzed_bill_data` may temporarily leave bill-level
-        # totals as Python floats on the in-memory instance (they only become
-        # Decimal again after a refresh_from_db). Subtracting Decimal − float
-        # raises TypeError, so coerce explicitly here.
+        # Tax reconciliation: Σ(per-line tax) vs bill-level tax. Used to be a
+        # hard 422 block, but the UI now keeps line totals and bill-level
+        # totals in lock-step (the bill-level fields are derived from the
+        # line items), so any residual gap is almost always sub-paisa
+        # floating-point noise. Per product feedback the OCR/line mismatch
+        # must be informational only — the user should always be able to
+        # verify. Downgraded to a logged warning here.
         TOL = TallyVendorAnalyzedBill.ROUND_OFF_THRESHOLD  # Decimal('1.00')
 
         def _to_decimal(value):
@@ -1142,25 +1141,14 @@ def vendor_bill_verify(request, org_id):
         }
         breaches = {k: float(v) for k, v in diffs.items() if v >= TOL}
         if breaches:
-            return Response({
-                'error': 'Tax Reconciliation Failed',
-                'message': (
-                    'Sum of per-line GST does not match bill-level GST within tolerance '
-                    f'(±₹{TOL}). Reconcile line items and bill totals before verifying.'
-                ),
-                'differences': breaches,
-                'line_totals': {
-                    'cgst': float(line_cgst),
-                    'sgst': float(line_sgst),
-                    'igst': float(line_igst),
-                },
-                'bill_totals': {
-                    'cgst': float(bill_cgst),
-                    'sgst': float(bill_sgst),
-                    'igst': float(bill_igst),
-                },
-                'error_code': 'TAX_RECONCILIATION_FAILED',
-            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+            logger.warning(
+                "Tax reconciliation drift on bill %s (>= ₹%s) — verifying anyway. "
+                "diffs=%s line_totals={cgst:%s, sgst:%s, igst:%s} "
+                "bill_totals={cgst:%s, sgst:%s, igst:%s}",
+                verified_bill.id, TOL, breaches,
+                line_cgst, line_sgst, line_igst,
+                bill_cgst, bill_sgst, bill_igst,
+            )
 
         # Recompute round-off after products & tax fields are persisted so the
         # XML sync payload can carry an accurate Round Off entry.
