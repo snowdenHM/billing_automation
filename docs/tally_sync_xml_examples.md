@@ -25,45 +25,39 @@ The endpoint always returns a `<data>` root containing zero or more
 | `<company>` | Tally company name to post into | `Spectrum Poly Pack and Packaging` |
 | `<total_amount>` | Bill grand total — always 2 decimals | `3776.00` |
 | `<notes>` | Free-text narration; includes BillMunshi back-link | `Bill from … entered via BillMunshi https://…` |
-| `<taxes>` | Tax rollup grouped by ledger (see below) | — |
+| `<ledgers>` | Flat list of ledger postings (see below) | — |
 | `<items>` | Line items (no tax fields) | — |
 
-### `<taxes>` block
+### `<ledgers>` block
 
-The block contains **one child element per `(tax_type, ledger)` bucket**.
-For mixed-rate bills there will be multiple `<cgst>`/`<sgst>`/`<igst>`
-siblings — one per ledger. **Tally TDL must iterate each tax tag.**
+A single flat collection — **every** posting that hits a ledger lives
+here, whether it's GST, discount, cess, freight, or round-off. The
+Tally TDL just iterates `<ledger>` children and posts each as its own
+voucher line; the ledger name on the Tally master classifies it.
 
-Children of every tax entry:
+Children of every `<ledger>` entry:
 
 | Child | Meaning |
 |---|---|
-| `<amount>` | 2-decimal positive amount (negative for `<round_off>` only) |
-| `<ledger>` | Ledger name to debit/credit in Tally |
-| `<rate>` | GST rate string (e.g. `18%`). **Only on `<cgst>`/`<sgst>`/`<igst>`** — informational. Not present on extras. |
+| `<amount>` | 2-decimal amount. Positive for tax / cess / freight; can be **negative** for `Round Off` and for `Discount Received` if booked as a credit. |
+| `<ledger>` | Tally ledger name to debit/credit. Must match a ledger that already exists in the Tally company. |
+| `<rate>` | GST rate string (e.g. `18%`). **Only emitted for CGST / SGST / IGST entries** — informational, helps Tally cross-check. Absent on discount / cess / freight / round-off. |
 
-Possible tax types and emit rules:
+Emit rules:
 
-| Tag | When emitted | Multiple? |
-|---|---|---|
-| `<cgst>` | Intrastate bill, line CGST > 0 | yes — one per ledger |
-| `<sgst>` | Intrastate bill, line SGST > 0 | yes — one per ledger |
-| `<igst>` | Interstate bill, line IGST > 0 | yes — one per ledger |
-| `<discount>` | `discount` > 0 at bill level | no — single |
-| `<cess>` | `cess` > 0 at bill level | no — single |
-| `<freight>` | `freight` > 0 at bill level | no — single |
-| `<round_off>` | `round_off` ≠ 0 at bill level (sign matters; can be negative) | no — single |
-
-**Zero-amount entries are dropped entirely.** A bill with no IGST will
-have no `<igst>` element — Tally must not synthesize one.
-
-`<cgst>` + `<sgst>` and `<igst>` are mutually exclusive on a single
-bill (intrastate vs interstate determined upstream from `gst_type`).
+- **Zero-amount entries are dropped entirely.** A bill with no IGST has
+  no IGST-named `<ledger>` entry — Tally must not synthesize one.
+- **GST entries are grouped per `(tax_type, ledger)` bucket.** Mixed-rate
+  bills emit multiple GST `<ledger>` entries — one per distinct ledger.
+- CGST/SGST and IGST never coexist on the same bill (intrastate vs
+  interstate, decided upstream from `gst_type`).
+- Discount / cess / freight / round-off are bill-level singletons —
+  always one entry each at most.
 
 ### `<items>` block
 
 Each `<item>` carries only what's needed to book a line in Tally —
-**no per-item tax fields**. All tax info is consolidated in `<taxes>`.
+**no per-item tax fields**. All tax info is in `<ledgers>`.
 
 | Child | Meaning |
 |---|---|
@@ -92,18 +86,18 @@ The simplest and most common case. One vendor, one item, single GST rate.
     <company>Spectrum Poly Pack and Packaging</company>
     <total_amount>3776.00</total_amount>
     <notes>Bill from AGGARWAL TRADE LINK entered via BillMunshi https://billmunshi.com/tally/vendor-bill/6a0e3db4-399f-49ec-bb95-70d2e4e975c6</notes>
-    <taxes>
-      <cgst>
+    <ledgers>
+      <ledger>
         <amount>288.00</amount>
         <ledger>CGST (ITC) @ 9%</ledger>
         <rate>18%</rate>
-      </cgst>
-      <sgst>
+      </ledger>
+      <ledger>
         <amount>288.00</amount>
         <ledger>SGST (ITC) @ 9%</ledger>
         <rate>18%</rate>
-      </sgst>
-    </taxes>
+      </ledger>
+    </ledgers>
     <items>
       <item>
         <name>1" Cello Tape</name>
@@ -122,7 +116,7 @@ The simplest and most common case. One vendor, one item, single GST rate.
 
 ## Scenario 2 — Single-rate interstate (IGST)
 
-Same vendor in another state. CGST/SGST replaced by a single IGST line.
+Same vendor in another state. CGST/SGST replaced by a single IGST entry.
 
 **Math:** 3200 base × 18% = 576 IGST; total 3776.
 
@@ -136,13 +130,13 @@ Same vendor in another state. CGST/SGST replaced by a single IGST line.
     <company>Spectrum Poly Pack and Packaging</company>
     <total_amount>3776.00</total_amount>
     <notes>Bill from AGGARWAL TRADE LINK entered via BillMunshi https://billmunshi.com/tally/vendor-bill/...</notes>
-    <taxes>
-      <igst>
+    <ledgers>
+      <ledger>
         <amount>576.00</amount>
         <ledger>IGST (ITC) @ 18%</ledger>
         <rate>18%</rate>
-      </igst>
-    </taxes>
+      </ledger>
+    </ledgers>
     <items>
       <item>
         <name>1" Cello Tape</name>
@@ -161,8 +155,8 @@ Same vendor in another state. CGST/SGST replaced by a single IGST line.
 
 ## Scenario 3 — Multiple line items, **same** GST rate (intrastate)
 
-Two items both at 18%. Tax block STILL has only one `<cgst>` + one
-`<sgst>` because they share a ledger — amounts are summed.
+Two items both at 18%. `<ledgers>` STILL has only one CGST + one SGST
+entry because they share a ledger — amounts are summed.
 
 **Math:**
 - Item 1: 3200 × 18% = 288 + 288 = 576 tax
@@ -179,18 +173,18 @@ Two items both at 18%. Tax block STILL has only one `<cgst>` + one
     <company>Spectrum Poly Pack and Packaging</company>
     <total_amount>4366.00</total_amount>
     <notes>Bill from AGGARWAL TRADE LINK entered via BillMunshi https://billmunshi.com/tally/vendor-bill/...</notes>
-    <taxes>
-      <cgst>
+    <ledgers>
+      <ledger>
         <amount>333.00</amount>
         <ledger>CGST (ITC) @ 9%</ledger>
         <rate>18%</rate>
-      </cgst>
-      <sgst>
+      </ledger>
+      <ledger>
         <amount>333.00</amount>
         <ledger>SGST (ITC) @ 9%</ledger>
         <rate>18%</rate>
-      </sgst>
-    </taxes>
+      </ledger>
+    </ledgers>
     <items>
       <item>
         <name>1" Cello Tape</name>
@@ -217,8 +211,9 @@ Two items both at 18%. Tax block STILL has only one `<cgst>` + one
 
 ## Scenario 4 — Mixed GST rates (intrastate)
 
-Two items at **different** GST rates → tax block has **two `<cgst>`
-and two `<sgst>`** entries, one per (rate, ledger). **TDL must iterate.**
+Two items at **different** GST rates → `<ledgers>` has **two CGST and
+two SGST entries**, one per (rate, ledger). TDL just iterates — no
+special branching needed.
 
 **Math:**
 - Item 1 (3200 @ 18%): CGST 288 + SGST 288
@@ -235,28 +230,28 @@ and two `<sgst>`** entries, one per (rate, ledger). **TDL must iterate.**
     <company>Spectrum Poly Pack and Packaging</company>
     <total_amount>4416.00</total_amount>
     <notes>Bill from AGGARWAL TRADE LINK entered via BillMunshi https://billmunshi.com/tally/vendor-bill/...</notes>
-    <taxes>
-      <cgst>
+    <ledgers>
+      <ledger>
         <amount>288.00</amount>
         <ledger>CGST (ITC) @ 9%</ledger>
         <rate>18%</rate>
-      </cgst>
-      <cgst>
+      </ledger>
+      <ledger>
         <amount>70.00</amount>
         <ledger>CGST (ITC) @ 14%</ledger>
         <rate>28%</rate>
-      </cgst>
-      <sgst>
+      </ledger>
+      <ledger>
         <amount>288.00</amount>
         <ledger>SGST (ITC) @ 9%</ledger>
         <rate>18%</rate>
-      </sgst>
-      <sgst>
+      </ledger>
+      <ledger>
         <amount>70.00</amount>
         <ledger>SGST (ITC) @ 14%</ledger>
         <rate>28%</rate>
-      </sgst>
-    </taxes>
+      </ledger>
+    </ledgers>
     <items>
       <item>
         <name>1" Cello Tape</name>
@@ -283,7 +278,7 @@ and two `<sgst>`** entries, one per (rate, ledger). **TDL must iterate.**
 
 ## Scenario 5 — Mixed GST rates (interstate)
 
-Same as Scenario 4 but interstate — two `<igst>` entries instead.
+Same as Scenario 4 but interstate — two `<ledger>` entries for IGST.
 
 **Math:**
 - Item 1 (3200 @ 18%): IGST 576
@@ -300,18 +295,18 @@ Same as Scenario 4 but interstate — two `<igst>` entries instead.
     <company>Spectrum Poly Pack and Packaging</company>
     <total_amount>4416.00</total_amount>
     <notes>Bill from AGGARWAL TRADE LINK entered via BillMunshi https://billmunshi.com/tally/vendor-bill/...</notes>
-    <taxes>
-      <igst>
+    <ledgers>
+      <ledger>
         <amount>576.00</amount>
         <ledger>IGST (ITC) @ 18%</ledger>
         <rate>18%</rate>
-      </igst>
-      <igst>
+      </ledger>
+      <ledger>
         <amount>140.00</amount>
         <ledger>IGST (ITC) @ 28%</ledger>
         <rate>28%</rate>
-      </igst>
-    </taxes>
+      </ledger>
+    </ledgers>
     <items>
       <item>
         <name>1" Cello Tape</name>
@@ -339,16 +334,17 @@ Same as Scenario 4 but interstate — two `<igst>` entries instead.
 ## Scenario 6 — Bill with all extras (discount + cess + freight + round-off)
 
 Interstate bill where vendor charged cess + freight, gave a discount,
-and the printed total was rounded.
+and the printed total was rounded. Mixed-rate IGST too for completeness.
 
 **Math:**
 - Item base: 3200.00
 - + IGST @ 18%: +576.00
+- + IGST @ 12%: +384.00 (different rate / ledger)
 - + Cess: +32.00
 - + Freight: +150.00
 - − Discount: −100.00
 - − Round-off: −0.50  (vendor took 50 paisa less)
-- = Bill total: **3857.50**
+- = Bill total: **4241.50**
 
 ```xml
 <?xml version='1.0' encoding='utf-8'?>
@@ -358,31 +354,36 @@ and the printed total was rounded.
     <bill_date>22-12-2025</bill_date>
     <vendor>AGGARWAL TRADE LINK</vendor>
     <company>Spectrum Poly Pack and Packaging</company>
-    <total_amount>3857.50</total_amount>
+    <total_amount>4241.50</total_amount>
     <notes>Bill from AGGARWAL TRADE LINK entered via BillMunshi https://billmunshi.com/tally/vendor-bill/...</notes>
-    <taxes>
-      <igst>
+    <ledgers>
+      <ledger>
         <amount>576.00</amount>
         <ledger>IGST (ITC) @ 18%</ledger>
         <rate>18%</rate>
-      </igst>
-      <discount>
+      </ledger>
+      <ledger>
+        <amount>384.00</amount>
+        <ledger>IGST (ITC) @ 12%</ledger>
+        <rate>12%</rate>
+      </ledger>
+      <ledger>
         <amount>100.00</amount>
         <ledger>Discount Received</ledger>
-      </discount>
-      <cess>
+      </ledger>
+      <ledger>
         <amount>32.00</amount>
         <ledger>GST Cess @ 1%</ledger>
-      </cess>
-      <freight>
+      </ledger>
+      <ledger>
         <amount>150.00</amount>
         <ledger>Freight Inward</ledger>
-      </freight>
-      <round_off>
+      </ledger>
+      <ledger>
         <amount>-0.50</amount>
         <ledger>Round Off</ledger>
-      </round_off>
-    </taxes>
+      </ledger>
+    </ledgers>
     <items>
       <item>
         <name>1" Cello Tape</name>
@@ -406,7 +407,7 @@ and the printed total was rounded.
 ## Scenario 7 — Zero-tax / exempted bill
 
 Some bills have no GST at all (composition vendor, exempted goods,
-or non-GST registration). The `<taxes>` block is **completely empty**
+or non-GST registration). The `<ledgers>` block is **completely empty**
 (but still present, so TDL parsing is consistent).
 
 ```xml
@@ -419,7 +420,7 @@ or non-GST registration). The `<taxes>` block is **completely empty**
     <company>Spectrum Poly Pack and Packaging</company>
     <total_amount>1500.00</total_amount>
     <notes>Bill from FRESH MARKET FARMS entered via BillMunshi https://billmunshi.com/tally/vendor-bill/...</notes>
-    <taxes/>
+    <ledgers/>
     <items>
       <item>
         <name>Fresh Vegetables (Exempted)</name>
@@ -453,18 +454,18 @@ consolidated from individual mode.
     <company>Spectrum Poly Pack and Packaging</company>
     <total_amount>11800.00</total_amount>
     <notes>Bill from AGGARWAL TRADE LINK entered via BillMunshi https://billmunshi.com/tally/vendor-bill/...</notes>
-    <taxes>
-      <cgst>
+    <ledgers>
+      <ledger>
         <amount>900.00</amount>
         <ledger>CGST (ITC) @ 9%</ledger>
         <rate>18%</rate>
-      </cgst>
-      <sgst>
+      </ledger>
+      <ledger>
         <amount>900.00</amount>
         <ledger>SGST (ITC) @ 9%</ledger>
         <rate>18%</rate>
-      </sgst>
-    </taxes>
+      </ledger>
+    </ledgers>
     <items>
       <item>
         <name>Packaging Material — Consolidated</name>
@@ -497,10 +498,10 @@ each as a separate Purchase voucher.
     <company>Spectrum Poly Pack and Packaging</company>
     <total_amount>3776.00</total_amount>
     <notes>Bill from AGGARWAL TRADE LINK entered via BillMunshi https://...</notes>
-    <taxes>
-      <cgst><amount>288.00</amount><ledger>CGST (ITC) @ 9%</ledger><rate>18%</rate></cgst>
-      <sgst><amount>288.00</amount><ledger>SGST (ITC) @ 9%</ledger><rate>18%</rate></sgst>
-    </taxes>
+    <ledgers>
+      <ledger><amount>288.00</amount><ledger>CGST (ITC) @ 9%</ledger><rate>18%</rate></ledger>
+      <ledger><amount>288.00</amount><ledger>SGST (ITC) @ 9%</ledger><rate>18%</rate></ledger>
+    </ledgers>
     <items>
       <item>
         <name>1" Cello Tape</name>
@@ -519,9 +520,9 @@ each as a separate Purchase voucher.
     <company>Spectrum Poly Pack and Packaging</company>
     <total_amount>5900.00</total_amount>
     <notes>Bill from RELIABLE TRADERS entered via BillMunshi https://...</notes>
-    <taxes>
-      <igst><amount>900.00</amount><ledger>IGST (ITC) @ 18%</ledger><rate>18%</rate></igst>
-    </taxes>
+    <ledgers>
+      <ledger><amount>900.00</amount><ledger>IGST (ITC) @ 18%</ledger><rate>18%</rate></ledger>
+    </ledgers>
     <items>
       <item>
         <name>Stationery Set</name>
@@ -553,32 +554,43 @@ Returned when there is nothing pending. Valid XML, just no bills inside.
 
 | Situation | Behaviour |
 |---|---|
-| Tax amount = 0 | Tag is **omitted entirely** from `<taxes>`. Don't iterate over and synthesize zero entries. |
-| Same `(tax_type, ledger)` across multiple lines | **Summed** into a single tag with combined amount. |
-| Different ledgers for same `tax_type` (mixed rates) | **Multiple sibling tags** — TDL must iterate. |
-| `<cgst>` + `<igst>` together | Will never happen — bill is either intrastate or interstate, not both. |
-| Negative `<round_off>` | Means vendor accepted a lower amount. Sign matters; treat as credit to Round Off ledger. |
+| Amount = 0 | The `<ledger>` entry is **omitted entirely** from `<ledgers>`. Do not synthesize zero entries on the Tally side. |
+| Same ledger across multiple lines (same GST rate) | **Summed** into a single `<ledger>` entry. |
+| Different ledgers for same GST type (mixed rates) | **Multiple sibling `<ledger>` entries** — TDL just iterates. |
+| CGST + SGST + IGST together | Will never happen — bill is either intrastate (CGST + SGST) or interstate (IGST). |
+| Negative `<amount>` on `Round Off` | Vendor accepted a lower amount. Treat as credit to Round Off ledger. |
 | Item `<name>` has `"` (e.g. `1" Tape`) | Allowed inside XML element content. Pass through unchanged — no escaping needed. |
 | Item `<name>` has `<`, `>`, `&` | Auto-escaped by the XML serializer. TDL's standard XML parser un-escapes them. |
 | `<price>`, `<amount>`, `<total_amount>` | Always 2 decimals (e.g. `400.00`, never `400` or `400.0`). |
 | `<quantity>` | Integer (no decimals). |
-| `<rate>` | Only on `<cgst>`/`<sgst>`/`<igst>`. Format `<int>%`, e.g. `18%`. Informational — TDL can use for cross-check or ignore. |
+| `<rate>` | Only on GST `<ledger>` entries (CGST/SGST/IGST). Format `<int>%`, e.g. `18%`. Informational. |
 | `<bill_date>` | `DD-MM-YYYY` always. Tally TDL date format. |
+| Identifying a `<ledger>` entry's type on the Tally side | Use the inner `<ledger>` text (the ledger name) — that's the master record in Tally. The `<rate>` child being present implies it's a GST line. |
 
 ---
 
-## Required Tally TDL changes (from the previous nested-per-item shape)
+## Required Tally TDL changes (from the previous per-tag-type shape)
 
-1. **Field renames:** `<vendor_name>` → `<vendor>`, `<company_id>` → `<company>`.
-2. **Items collection rename:** `<products>/<product>` → `<items>/<item>`.
-3. **Per-item tax fields are gone:** stop reading `<cgst>`/`<sgst>`/`<igst>`/
-   `<cgst_ledger>` etc. from inside each item. Read all tax info from the
-   bill-level `<taxes>` block instead.
-4. **Tax loops must iterate:** `<cgst>`, `<sgst>`, `<igst>` can now appear
-   multiple times under `<taxes>` (one per ledger). Set `Iterate=Yes` on
-   the corresponding TDL collections.
-5. **New optional `<rate>` child** under each GST tax entry — informational.
-6. **`<round_off>` may carry a negative `<amount>`** — make sure the TDL
+The previous payload split tax entries into named tags (`<cgst>`,
+`<sgst>`, `<igst>`, `<discount>`, `<cess>`, `<freight>`, `<round_off>`)
+inside a `<taxes>` wrapper. The new payload uses a flat `<ledgers>`
+collection where every entry is a generic `<ledger>` tag.
+
+1. **Rename the wrapper:** `<taxes>` → `<ledgers>`.
+2. **Replace per-type tag reads** (`<cgst>`, `<sgst>`, etc.) with a
+   single iteration over `<ledger>` children. The inner `<ledger>` text
+   (the ledger name) is the master reference that posts to Tally.
+3. **Drop the dispatch-on-tag-name logic.** Classification (CGST vs
+   discount vs freight) is now driven entirely by the Tally ledger
+   master being referenced. If you previously had `IF tag = 'cgst' …`
+   branches, replace them with a single uniform posting loop.
+4. **Optional:** the `<rate>` child only appears on GST entries — use
+   its presence as a fast "is this a GST line?" check if you want to
+   apply GST-specific TDL behaviour (e.g. tagging vouchers for GSTR
+   reports). Non-GST entries (discount, cess, freight, round-off) have
+   no `<rate>` child.
+5. **`<round_off>` may carry a negative `<amount>`** — make sure the TDL
    doesn't strip the sign.
 
-Nothing else changes in the wire protocol.
+Everything else (`<bill_no>`, `<bill_date>`, `<vendor>`, `<company>`,
+`<total_amount>`, `<notes>`, `<items>`/`<item>`) is unchanged.

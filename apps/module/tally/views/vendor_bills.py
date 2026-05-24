@@ -2019,7 +2019,8 @@ def _sync_data_to_xml(bills_data):
     """Convert the list of sync-bill dicts built by ``prepare_sync_data`` into a
     Tally-compatible XML payload.
 
-    Schema (one entry per ledger inside <taxes>; items carry no tax fields):
+    Schema (a single flat ``<ledgers>`` collection, each child a
+    ``<ledger>`` entry — Tally TDL just iterates):
 
         <data>
           <bill>
@@ -2029,19 +2030,21 @@ def _sync_data_to_xml(bills_data):
             <company>Spectrum Poly Pack and Packaging</company>
             <total_amount>3776.00</total_amount>
             <notes>...</notes>
-            <taxes>
-              <cgst>
+            <ledgers>
+              <ledger>
                 <amount>288.00</amount>
                 <ledger>CGST (ITC) @ 9%</ledger>
                 <rate>18%</rate>
-              </cgst>
-              <sgst>
+              </ledger>
+              <ledger>
                 <amount>288.00</amount>
                 <ledger>SGST (ITC) @ 9%</ledger>
                 <rate>18%</rate>
-              </sgst>
-              <!-- igst | discount | cess | freight | round_off as needed -->
-            </taxes>
+              </ledger>
+              <!-- IGST / discount / cess / freight / round_off entries
+                   share the same shape. ``<rate>`` is present only on
+                   the GST entries (CGST/SGST/IGST). -->
+            </ledgers>
             <items>
               <item>
                 <name>1" SELF ADHESIVE TAPE</name>
@@ -2055,9 +2058,9 @@ def _sync_data_to_xml(bills_data):
           </bill>
         </data>
 
-    Mixed-rate bills produce multiple ``<cgst>`` / ``<sgst>`` / ``<igst>``
-    children — one per (tax_type, ledger) bucket. Tally TDL must iterate
-    each tax tag.
+    Mixed-rate bills produce multiple ``<ledger>`` entries — one per
+    distinct ledger. Tally TDL iterates and posts each as its own voucher
+    line, classifying it by the ``<ledger>`` name.
 
     ElementTree handles XML escaping of ``<``, ``>``, ``&``. Inner
     double-quotes stay literal inside element content (XML spec) so values
@@ -2069,25 +2072,26 @@ def _sync_data_to_xml(bills_data):
         child = ET.SubElement(parent_elem, key)
         child.text = '' if value is None else str(value)
 
-    def _emit_tax_entry(parent_elem, tax_dict):
-        """Emit ONE tax row. ``tax_dict`` shape:
-            {"type": "cgst", "amount": "288.00", "ledger": "...", "rate": "18%"}
-        Rate is optional — only emitted for cgst/sgst/igst.
+    def _emit_ledger_entry(parent_elem, entry):
+        """Emit ONE ``<ledger>`` row. ``entry`` shape:
+            {"amount": "288.00", "ledger": "...", "rate": "18%"}
+        ``rate`` is optional — only present on GST (cgst/sgst/igst) entries.
+        Discount / cess / freight / round_off entries omit it.
         """
-        tax_elem = ET.SubElement(parent_elem, tax_dict["type"])
-        _set_scalar(tax_elem, "amount", tax_dict.get("amount"))
-        _set_scalar(tax_elem, "ledger", tax_dict.get("ledger"))
-        if tax_dict.get("rate"):
-            _set_scalar(tax_elem, "rate", tax_dict["rate"])
+        ledger_elem = ET.SubElement(parent_elem, "ledger")
+        _set_scalar(ledger_elem, "amount", entry.get("amount"))
+        _set_scalar(ledger_elem, "ledger", entry.get("ledger"))
+        if entry.get("rate"):
+            _set_scalar(ledger_elem, "rate", entry["rate"])
 
     root = ET.Element('data')
     for bill in bills_data:
         bill_elem = ET.SubElement(root, 'bill')
         for key, value in bill.items():
-            if key == 'taxes' and isinstance(value, list):
-                taxes_elem = ET.SubElement(bill_elem, 'taxes')
-                for tax_entry in value:
-                    _emit_tax_entry(taxes_elem, tax_entry)
+            if key == 'ledgers' and isinstance(value, list):
+                ledgers_elem = ET.SubElement(bill_elem, 'ledgers')
+                for entry in value:
+                    _emit_ledger_entry(ledgers_elem, entry)
             elif key == 'items' and isinstance(value, list):
                 items_elem = ET.SubElement(bill_elem, 'items')
                 for item in value:
@@ -2109,10 +2113,13 @@ def prepare_sync_data(analyzed_bill, organization):
           "vendor": str, "company": str,
           "total_amount": "3776.00",
           "notes": str,
-          "taxes": [   # one entry per (tax_type, ledger) bucket
-            {"type": "cgst", "amount": "288.00", "ledger": "...", "rate": "18%"},
-            {"type": "sgst", "amount": "288.00", "ledger": "...", "rate": "18%"},
-            {"type": "discount", "amount": "100.00", "ledger": "..."},
+          "ledgers": [
+            # Flat list — one entry per (tax_type, ledger) bucket for GST
+            # entries, single bill-level entry for discount/cess/freight/
+            # round_off. ``rate`` is present only on GST entries.
+            {"amount": "288.00", "ledger": "CGST (ITC) @ 9%", "rate": "18%"},
+            {"amount": "288.00", "ledger": "SGST (ITC) @ 9%", "rate": "18%"},
+            {"amount": "100.00", "ledger": "Discount Received"},
             ...
           ],
           "items": [   # NO tax fields per item
@@ -2255,24 +2262,10 @@ def prepare_sync_data(analyzed_bill, organization):
             if rec["rate"]:
                 bucket["rates"].append(rec["rate"])
 
-    taxes_payload = []
-    for entry in gst_buckets.values():
-        # Pick the dominant rate seen across grouped lines for the
-        # informational `<rate>` element. (Within one ledger bucket
-        # the rate is normally identical — multiple values would
-        # only show up in malformed data.)
-        rate_str = ''
-        if entry["rates"]:
-            rate_str = max(set(entry["rates"]), key=entry["rates"].count)
-        taxes_payload.append({
-            "type": entry["type"],
-            "amount": _fmt_money(entry["amount"]),
-            "ledger": entry["ledger"],
-            "rate": rate_str,
-        })
-
-    # Stable order: cgst → sgst → igst, sorted by rate ascending so
-    # mixed-rate bills read 18% before 28%.
+    # Sort GST buckets in a stable, predictable order before flattening:
+    # cgst → sgst → igst, ascending by rate so mixed-rate bills read
+    # "18% then 28%". The Tally side doesn't depend on the order, but a
+    # stable order keeps the payload diff-friendly for QA.
     _gst_order = {"cgst": 0, "sgst": 1, "igst": 2}
 
     def _rate_num(s):
@@ -2281,13 +2274,34 @@ def prepare_sync_data(analyzed_bill, organization):
         except (ValueError, TypeError):
             return 0.0
 
-    taxes_payload.sort(
-        key=lambda e: (_gst_order.get(e["type"], 99), _rate_num(e.get("rate", '')))
+    sorted_gst_buckets = sorted(
+        gst_buckets.values(),
+        key=lambda b: (
+            _gst_order.get(b["type"], 99),
+            _rate_num(max(set(b["rates"]), key=b["rates"].count) if b["rates"] else ""),
+        ),
     )
+
+    ledgers_payload = []
+    for entry in sorted_gst_buckets:
+        # Pick the dominant rate seen across grouped lines for the
+        # informational `<rate>` element. (Within one ledger bucket
+        # the rate is normally identical — multiple values would only
+        # show up in malformed data.)
+        rate_str = ""
+        if entry["rates"]:
+            rate_str = max(set(entry["rates"]), key=entry["rates"].count)
+        ledgers_payload.append({
+            "amount": _fmt_money(entry["amount"]),
+            "ledger": entry["ledger"],
+            "rate": rate_str,
+        })
 
     # ------------------------------------------------------------------
     # Bill-level extras: discount / cess / freight / round_off.
     # Single entry each, dropped when zero. ``round_off`` may be negative.
+    # No ``rate`` for these — they are flat values, classified by the
+    # ledger name on the Tally side.
     # ------------------------------------------------------------------
     extras = (
         ("discount", analyzed_bill.discount, analyzed_bill.discount_taxes),
@@ -2297,15 +2311,13 @@ def prepare_sync_data(analyzed_bill, organization):
          getattr(analyzed_bill, 'round_off', 0),
          getattr(analyzed_bill, 'round_off_taxes', None)),
     )
-    for tax_type, amount, ledger in extras:
+    for _tax_type, amount, ledger in extras:
         amt = _money(amount)
         if amt == 0:
             continue
-        taxes_payload.append({
-            "type": tax_type,
+        ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(ledger) if ledger else "No Tax Ledger",
-            # No `rate` for non-GST extras — they are flat values.
         })
 
     bill_data = {
@@ -2315,7 +2327,7 @@ def prepare_sync_data(analyzed_bill, organization):
         "company": company_name,
         "total_amount": _fmt_money(analyzed_bill.total),
         "notes": notes_message,
-        "taxes": taxes_payload,
+        "ledgers": ledgers_payload,
         "items": items_payload,
     }
 
