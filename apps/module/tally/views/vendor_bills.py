@@ -2074,15 +2074,20 @@ def _sync_data_to_xml(bills_data):
 
     def _emit_ledger_entry(parent_elem, entry):
         """Emit ONE ``<ledger>`` row. ``entry`` shape:
-            {"amount": "288.00", "ledger": "...", "rate": "18%"}
+            {"amount": "288.00", "ledger": "...",
+             "rate": "18%", "debit_or_credit": "debit"}
         ``rate`` is optional — only present on GST (cgst/sgst/igst) entries.
-        Discount / cess / freight / round_off entries omit it.
+        ``debit_or_credit`` is optional — only present on journal-style
+        bills (expense) where each ledger needs an explicit DR/CR.
+        Purchase-voucher bills (vendor) omit it (DR/CR is implicit).
         """
         ledger_elem = ET.SubElement(parent_elem, "ledger")
         _set_scalar(ledger_elem, "amount", entry.get("amount"))
         _set_scalar(ledger_elem, "ledger", entry.get("ledger"))
         if entry.get("rate"):
             _set_scalar(ledger_elem, "rate", entry["rate"])
+        if entry.get("debit_or_credit"):
+            _set_scalar(ledger_elem, "debit_or_credit", entry["debit_or_credit"])
 
     root = ET.Element('data')
     for bill in bills_data:

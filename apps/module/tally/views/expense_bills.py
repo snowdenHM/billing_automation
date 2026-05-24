@@ -5,13 +5,14 @@ import logging
 import os
 import random
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 
 from PyPDF2 import PdfReader
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 from pdf2image import convert_from_bytes
@@ -43,6 +44,7 @@ from ..models import (
     TallyConfig,
     TallyVendorBill
 )
+from .vendor_bills import _sync_data_to_xml, _clean_tally_text
 from ..serializers import (
     TallyExpenseBillSerializer,
     TallyExpenseAnalyzedBillSerializer,
@@ -1469,174 +1471,196 @@ def expense_bills_sync_list(request, org_id):
         'consolidated_products__chart_of_accounts',
     ).order_by('-created_at')
 
-    # Convert each analyzed bill to the new sync format and extract just the data portion
     bills_data = []
     for analyzed_bill in analyzed_bills:
         sync_data = prepare_expense_sync_data(analyzed_bill, organization)
-        # Extract the data portion (remove the wrapper)
         bills_data.append(sync_data["data"])
 
-    # Return all bills under a single "data" key
-    return Response({
-        "data": bills_data
-    }, status=status.HTTP_200_OK)
+    # Tally TCP/TDL consumes XML natively (see vendor_bills.py for the
+    # reasoning). The expense bill payload shape mirrors vendor bill but
+    # adds <voucher_type>Journal</voucher_type>, <debit_or_credit> on every
+    # <ledger>/<item>, and uses <expense_ledger> instead of <purchase_ledger>
+    # inside each <item>. ``_sync_data_to_xml`` is shared and already handles
+    # the optional ``debit_or_credit`` field.
+    xml_payload = _sync_data_to_xml(bills_data)
+    return HttpResponse(xml_payload, content_type='application/xml; charset=utf-8')
 
 
 def prepare_expense_sync_data(analyzed_bill, organization):
-    """Prepare expense bill data for Tally sync using structured format with consolidation support"""
+    """Build the simplified sync payload for Tally TCP (Journal voucher).
+
+    Top-level shape (mirrors vendor bill but for journal-style bills):
+        {
+          "bill_no": str, "bill_date": "DD-MM-YYYY",
+          "voucher_type": "Journal",
+          "vendor": str, "company": str,
+          "total_amount": "54500.00",
+          "notes": str,
+          "ledgers": [
+            # Every posting that hits a Tally ledger, flat list.
+            # Each entry: amount, ledger (name), debit_or_credit.
+            # GST entries additionally carry "rate" for cross-check.
+            {"amount": "4500.00", "ledger": "CGST (ITC) @ 9%", "rate": "18%",
+             "debit_or_credit": "debit"},
+            {"amount": "5000.00", "ledger": "TDS on Rent @ 10%",
+             "debit_or_credit": "credit"},
+            ...
+          ],
+          "items": [
+            # Pure journal-entry style — no price/quantity. Each line
+            # books an amount against a chart-of-accounts ledger with
+            # explicit DR/CR.
+            {"details": "Office rent — November",
+             "expense_ledger": "RENT EXPENSE",
+             "amount": "50000.00",
+             "debit_or_credit": "debit"},
+          ]
+        }
+
+    Zero-amount entries are dropped. ``round_off`` may be negative.
+    """
     vendor_ledger = analyzed_bill.vendor
-    bill_date_str = analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
+    bill_date_str = (
+        analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
+    )
+    company_name = organization.name if hasattr(organization, 'name') else str(organization.id)
 
-    # Initialize DR and CR ledgers for expense sync
-    dr_ledger = []
-    cr_ledger = []
-
-    # 🔄 SIMPLE CONSOLIDATION CHECK: Use consolidate flag to decide which data to use
-    if hasattr(analyzed_bill, 'consolidate') and analyzed_bill.consolidate:
-        # ✅ USE CONSOLIDATED TABLE DATA
-        try:
-            consolidated_expenses = analyzed_bill.consolidated_products.all()
-            logger.info(f"Using consolidated data for expense bill {analyzed_bill.bill_no}")
-
-            # Add consolidated expense entries
-            for consolidated_expense in consolidated_expenses:
-                if consolidated_expense.amount and consolidated_expense.amount > 0:
-                    consolidated_entry = {
-                        "LEDGERNAME": str(consolidated_expense.chart_of_accounts) if consolidated_expense.chart_of_accounts else "General Expenses",
-                        "AMOUNT": float(consolidated_expense.amount)
-                    }
-                    # Use the debit_or_credit from consolidated product
-                    if consolidated_expense.debit_or_credit == 'debit':
-                        dr_ledger.append(consolidated_entry)
-                    elif consolidated_expense.debit_or_credit == 'credit':
-                        cr_ledger.append(consolidated_entry)
-
-        except Exception as e:
-            logger.error(f"Error accessing consolidated expense for bill {analyzed_bill.bill_no}: {e}")
-            # Fallback to individual products if consolidated data fails
-            analyzed_bill.consolidate = False  # Reset flag for this request
-
-    if not hasattr(analyzed_bill, 'consolidate') or not analyzed_bill.consolidate:
-        # ✅ USE INDIVIDUAL EXPENSE PRODUCTS (Original logic)
-        analyzed_bill_products = analyzed_bill.products.all()
-        logger.info(f"Using individual expense entries for bill {analyzed_bill.bill_no} ({analyzed_bill_products.count()} entries)")
-
-        # Process expense line items based on their debit_or_credit field
-        for item in analyzed_bill_products:
-            if item.amount and item.amount > 0:
-                ledger_entry = {
-                    "LEDGERNAME": str(item.chart_of_accounts) if item.chart_of_accounts else "No COA Ledger",
-                    "AMOUNT": float(item.amount)
-                }
-
-                # Simple rule: debit goes to DR_LEDGER, credit goes to CR_LEDGER
-                if item.debit_or_credit == 'debit':
-                    dr_ledger.append(ledger_entry)
-                elif item.debit_or_credit == 'credit':
-                    cr_ledger.append(ledger_entry)
-
-    # Process IGST based on debit_or_credit field
-    if analyzed_bill.igst and analyzed_bill.igst > 0 and analyzed_bill.igst_taxes:
-        igst_entry = {
-            "LEDGERNAME": str(analyzed_bill.igst_taxes),
-            "AMOUNT": float(analyzed_bill.igst)
-        }
-        if analyzed_bill.igst_debit_or_credit == 'debit':
-            dr_ledger.append(igst_entry)
-        elif analyzed_bill.igst_debit_or_credit == 'credit':
-            cr_ledger.append(igst_entry)
-
-    # Process CGST based on debit_or_credit field
-    if analyzed_bill.cgst and analyzed_bill.cgst > 0 and analyzed_bill.cgst_taxes:
-        cgst_entry = {
-            "LEDGERNAME": str(analyzed_bill.cgst_taxes),
-            "AMOUNT": float(analyzed_bill.cgst)
-        }
-        if analyzed_bill.cgst_debit_or_credit == 'debit':
-            dr_ledger.append(cgst_entry)
-        elif analyzed_bill.cgst_debit_or_credit == 'credit':
-            cr_ledger.append(cgst_entry)
-
-    # Process SGST based on debit_or_credit field
-    if analyzed_bill.sgst and analyzed_bill.sgst > 0 and analyzed_bill.sgst_taxes:
-        sgst_entry = {
-            "LEDGERNAME": str(analyzed_bill.sgst_taxes),
-            "AMOUNT": float(analyzed_bill.sgst)
-        }
-        if analyzed_bill.sgst_debit_or_credit == 'debit':
-            dr_ledger.append(sgst_entry)
-        elif analyzed_bill.sgst_debit_or_credit == 'credit':
-            cr_ledger.append(sgst_entry)
-
-    # Process TDS based on debit_or_credit field
-    if analyzed_bill.tds and analyzed_bill.tds > 0 and analyzed_bill.tds_taxes:
-        tds_entry = {
-            "LEDGERNAME": str(analyzed_bill.tds_taxes),
-            "AMOUNT": float(analyzed_bill.tds)
-        }
-        if analyzed_bill.tds_debit_or_credit == 'debit':
-            dr_ledger.append(tds_entry)
-        elif analyzed_bill.tds_debit_or_credit == 'credit':
-            cr_ledger.append(tds_entry)
-
-    # Process Other Adjustment based on debit_or_credit field
-    if analyzed_bill.other_adjustment and analyzed_bill.other_adjustment > 0 and analyzed_bill.other_adjustment_taxes:
-        other_adjustment_entry = {
-            "LEDGERNAME": str(analyzed_bill.other_adjustment_taxes),
-            "AMOUNT": float(analyzed_bill.other_adjustment)
-        }
-        if analyzed_bill.other_adjustment_debit_or_credit == 'debit':
-            dr_ledger.append(other_adjustment_entry)
-        elif analyzed_bill.other_adjustment_debit_or_credit == 'credit':
-            cr_ledger.append(other_adjustment_entry)
-
-    # Process Round Off — placed on whichever side balances DR vs CR.
-    if analyzed_bill.round_off and analyzed_bill.round_off > 0 and analyzed_bill.round_off_taxes:
-        round_off_entry = {
-            "LEDGERNAME": str(analyzed_bill.round_off_taxes),
-            "AMOUNT": float(analyzed_bill.round_off)
-        }
-        if analyzed_bill.round_off_debit_or_credit == 'debit':
-            dr_ledger.append(round_off_entry)
-        elif analyzed_bill.round_off_debit_or_credit == 'credit':
-            cr_ledger.append(round_off_entry)
-
-    # Process vendor based on vendor_debit_or_credit field using vendor_amount
-    if vendor_ledger and analyzed_bill.vendor_amount and analyzed_bill.vendor_amount > 0:
-        vendor_entry = {
-            "LEDGERNAME": vendor_ledger.name,
-            "AMOUNT": float(analyzed_bill.vendor_amount)
-        }
-
-        # Add vendor to appropriate ledger based on vendor_debit_or_credit
-        if analyzed_bill.vendor_debit_or_credit == 'debit':
-            dr_ledger.append(vendor_entry)
-        elif analyzed_bill.vendor_debit_or_credit == 'credit':
-            cr_ledger.append(vendor_entry)
-
-    # Build expense sync payload with structured format similar to vendor bills
     vendor_name = vendor_ledger.name if vendor_ledger and vendor_ledger.name else "Unknown Vendor"
-
-    # Construct the expense bill URL
     bill_url = f"https://billmunshi.com/tally/expense-bill/{analyzed_bill.selected_bill.id}"
-
-    # Create the notes message
     notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
 
+    Q2 = Decimal('0.01')
+
+    def _money(value):
+        if value is None or value == '':
+            return Decimal('0.00')
+        try:
+            return Decimal(str(value)).quantize(Q2)
+        except (InvalidOperation, ValueError, TypeError):
+            return Decimal('0.00')
+
+    def _fmt_money(value):
+        return f"{_money(value):.2f}"
+
+    def _dc(value):
+        """Normalise DR/CR to lowercase ``debit`` or ``credit``; default debit."""
+        v = (str(value) if value else "").strip().lower()
+        return v if v in ("debit", "credit") else "debit"
+
+    # ------------------------------------------------------------------
+    # Items (journal-style line entries). Pulls from consolidated_products
+    # when consolidate=True, individual products otherwise.
+    # ------------------------------------------------------------------
+    items_payload = []
+    use_consolidated = bool(getattr(analyzed_bill, 'consolidate', False))
+    if use_consolidated:
+        try:
+            source_lines = list(analyzed_bill.consolidated_products.all())
+            if not source_lines:
+                use_consolidated = False
+        except Exception as exc:
+            logger.error(
+                f"Error reading consolidated expense products for bill "
+                f"{analyzed_bill.bill_no}: {exc}"
+            )
+            use_consolidated = False
+
+    if not use_consolidated:
+        source_lines = list(analyzed_bill.products.all())
+
+    logger.info(
+        "prepare_expense_sync_data: bill=%s, lines=%d, source=%s",
+        analyzed_bill.bill_no, len(source_lines),
+        'consolidated' if use_consolidated else 'individual',
+    )
+
+    for line in source_lines:
+        amt = _money(getattr(line, 'amount', 0))
+        if amt == 0:
+            # Skip empty lines — they'd post a zero ledger entry in Tally.
+            continue
+        expense_ledger = (
+            str(line.chart_of_accounts)
+            if getattr(line, 'chart_of_accounts', None)
+            else "No COA Ledger"
+        )
+        items_payload.append({
+            "details": _clean_tally_text(getattr(line, 'item_details', '')) or "",
+            "expense_ledger": expense_ledger,
+            "amount": _fmt_money(amt),
+            "debit_or_credit": _dc(getattr(line, 'debit_or_credit', 'debit')),
+        })
+
+    # ------------------------------------------------------------------
+    # Ledgers — flat list with DR/CR. Order keeps the payload
+    # diff-friendly: vendor → GST (cgst,sgst,igst) → tds → other adj → round-off.
+    # Each entry is dropped if its amount is zero or its ledger is missing.
+    # ------------------------------------------------------------------
+    ledgers_payload = []
+
+    # Vendor itself (the balancing party on a journal voucher).
+    if vendor_ledger and _money(analyzed_bill.vendor_amount) > 0:
+        ledgers_payload.append({
+            "amount": _fmt_money(analyzed_bill.vendor_amount),
+            "ledger": vendor_ledger.name or "Unknown Vendor",
+            "debit_or_credit": _dc(analyzed_bill.vendor_debit_or_credit or "credit"),
+        })
+
+    # GST trio. Bill-level CGST/SGST/IGST with their ledger + DR/CR.
+    # No per-rate grouping here (unlike vendor bill) because the expense
+    # bill model only stores a single bill-level value per tax type —
+    # individual products carry no tax breakdown.
+    gst_entries = (
+        ("cgst", analyzed_bill.cgst, analyzed_bill.cgst_taxes,
+         analyzed_bill.cgst_debit_or_credit),
+        ("sgst", analyzed_bill.sgst, analyzed_bill.sgst_taxes,
+         analyzed_bill.sgst_debit_or_credit),
+        ("igst", analyzed_bill.igst, analyzed_bill.igst_taxes,
+         analyzed_bill.igst_debit_or_credit),
+    )
+    for _tax_type, amount, ledger, dc in gst_entries:
+        amt = _money(amount)
+        if amt == 0 or not ledger:
+            continue
+        ledgers_payload.append({
+            "amount": _fmt_money(amt),
+            "ledger": str(ledger),
+            "debit_or_credit": _dc(dc),
+            # No <rate> emitted — expense bills don't carry a rate string
+            # on the model. (Vendor bill does because individual products
+            # have product_gst.) The ledger name itself carries the rate.
+        })
+
+    # TDS, Other Adjustment, Round Off (single bill-level entries each).
+    extras = (
+        ("tds", analyzed_bill.tds, analyzed_bill.tds_taxes,
+         analyzed_bill.tds_debit_or_credit),
+        ("other_adjustment", analyzed_bill.other_adjustment,
+         analyzed_bill.other_adjustment_taxes,
+         analyzed_bill.other_adjustment_debit_or_credit),
+        ("round_off", analyzed_bill.round_off, analyzed_bill.round_off_taxes,
+         analyzed_bill.round_off_debit_or_credit),
+    )
+    for _tax_type, amount, ledger, dc in extras:
+        amt = _money(amount)
+        if amt == 0 or not ledger:
+            continue
+        ledgers_payload.append({
+            "amount": _fmt_money(amt),
+            "ledger": str(ledger),
+            "debit_or_credit": _dc(dc),
+        })
+
     bill_data = {
-        "id": str(analyzed_bill.selected_bill.id),
-        "voucher_type":"Journal",
-        "voucher": analyzed_bill.voucher or "",
         "bill_no": analyzed_bill.bill_no or "",
         "bill_date": bill_date_str,
-        "total": float(analyzed_bill.total or 0),
-        "name": vendor_name,
-        "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "No Ledger",
-        "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
-        "DR_LEDGER": dr_ledger,
-        "CR_LEDGER": cr_ledger,
+        "voucher_type": "Journal",
+        "vendor": vendor_name,
+        "company": company_name,
+        "total_amount": _fmt_money(analyzed_bill.total),
         "notes": notes_message,
-        "created_at": analyzed_bill.created_at.isoformat() if analyzed_bill.created_at else None
+        "ledgers": ledgers_payload,
+        "items": items_payload,
     }
 
     return {"data": bill_data}
