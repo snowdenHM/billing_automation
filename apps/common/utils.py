@@ -32,9 +32,14 @@ def get_organization_from_request(request, org_id=None, **kwargs):
     Resolve the Organization from the current request.
 
     Resolution order:
-      1. Explicit *org_id* — REQUIRES that the requesting user has an active
-         membership (or is staff/superuser). Raises ``PermissionDenied``
-         when the user is not authorized for that organization.
+      1. Explicit *org_id* — the requester must be authorized for it via:
+         (a) ``request.organization`` already populated by an API-key
+             permission class for the *same* org_id, OR
+         (b) ``request.auth`` linked to an ``OrganizationAPIKey`` for the
+             same org, OR
+         (c) the authenticated user is staff/superuser, OR
+         (d) the authenticated user has an active ``OrgMembership`` for it.
+         Raises ``PermissionDenied`` otherwise.
       2. ``request.organization`` set by an API-key permission class.
       3. ``request.auth`` linked to an OrganizationAPIKey.
       4. First active OrgMembership of the authenticated user.
@@ -47,19 +52,42 @@ def get_organization_from_request(request, org_id=None, **kwargs):
 
     user = getattr(request, "user", None)
 
-    # 1. From explicit org_id — MUST verify membership.
+    # 1. From explicit org_id — verify the caller is authorized for it.
     _org_id = org_id or kwargs.get("org_id")
     if _org_id:
         organization = get_object_or_404(Organization, id=_org_id)
-        is_staff = bool(user and user.is_authenticated and (user.is_staff or user.is_superuser))
-        if not is_staff:
-            if not (
-                user
-                and user.is_authenticated
-                and organization.memberships.filter(user=user, is_active=True).exists()
-            ):
-                raise PermissionDenied("You do not have access to this organization.")
-        return organization
+
+        # (a) API-key path: the permission class already validated the key
+        # and stamped ``request.organization``. Accept it if it matches.
+        request_org = getattr(request, "organization", None)
+        if request_org and str(request_org.id) == str(organization.id):
+            return organization
+
+        # (b) DRF API-key auth path: ``request.auth`` is an APIKey instance
+        # linked to an OrganizationAPIKey. Accept if it belongs to this org.
+        if hasattr(request, "auth") and request.auth:
+            try:
+                org_api_key = OrganizationAPIKey.objects.get(api_key=request.auth)
+                if str(org_api_key.organization_id) == str(organization.id):
+                    return organization
+            except OrganizationAPIKey.DoesNotExist:
+                pass
+
+        # (c) Staff / superuser bypass.
+        if user and user.is_authenticated and (user.is_staff or user.is_superuser):
+            return organization
+
+        # (d) Bearer-token path: the authenticated user must have an active
+        # membership in the org. This is the original IDOR guard for the
+        # user-session flow.
+        if (
+            user
+            and user.is_authenticated
+            and organization.memberships.filter(user=user, is_active=True).exists()
+        ):
+            return organization
+
+        raise PermissionDenied("You do not have access to this organization.")
 
     # 2. Injected by permission class (e.g. OrganizationAPIKeyOrBearerToken)
     if hasattr(request, "organization") and request.organization:
