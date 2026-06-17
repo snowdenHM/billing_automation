@@ -2106,7 +2106,10 @@ def _sync_data_to_xml(bills_data):
             else:
                 _set_scalar(bill_elem, key, value)
 
-    return ET.tostring(root, encoding='utf-8', xml_declaration=True).decode('utf-8')
+    # ``xml_declaration=False`` drops the ``<?xml version='1.0' encoding='utf-8'?>``
+    # prolog. Tally's TDL/TCP parser doesn't need it, and the client asked for
+    # the response to start directly with ``<data>``.
+    return ET.tostring(root, encoding='utf-8', xml_declaration=False).decode('utf-8')
 
 
 def prepare_sync_data(analyzed_bill, organization):
