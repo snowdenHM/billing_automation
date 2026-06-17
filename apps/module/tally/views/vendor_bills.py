@@ -2310,6 +2310,11 @@ def prepare_sync_data(analyzed_bill, organization):
     # Single entry each, dropped when zero. ``round_off`` may be negative.
     # No ``rate`` for these — they are flat values, classified by the
     # ledger name on the Tally side.
+    #
+    # ``discount`` is emitted with a NEGATED amount (e.g. -100.00) so
+    # the Tally side can post it directly without flipping the sign in
+    # TDL. The model stores discount as a positive number representing
+    # "amount taken off the bill", so the wire format inverts it.
     # ------------------------------------------------------------------
     extras = (
         ("discount", analyzed_bill.discount, analyzed_bill.discount_taxes),
@@ -2319,10 +2324,12 @@ def prepare_sync_data(analyzed_bill, organization):
          getattr(analyzed_bill, 'round_off', 0),
          getattr(analyzed_bill, 'round_off_taxes', None)),
     )
-    for _tax_type, amount, ledger in extras:
+    for tax_type, amount, ledger in extras:
         amt = _money(amount)
         if amt == 0:
             continue
+        if tax_type == "discount":
+            amt = -amt
         ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(ledger) if ledger else "No Tax Ledger",
