@@ -4,6 +4,7 @@ Bill tally sync status update view.
 """
 import logging
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -110,13 +111,22 @@ def update_bill_tally_sync_status(request, org_id):
                 bill = model.objects.get(id=bill_id)
             except model.DoesNotExist:
                 return {"error": f"{mode.capitalize()} bill with ID {bill_id} not found"}
-            except ValueError:
+            except (ValueError, DjangoValidationError):
+                # ``ValidationError`` is what Django raises when the UUID
+                # field rejects a malformed string — ``ValueError`` covers
+                # older Django paths and other malformed-id cases.
                 return {"error": f"Invalid UUID format for bill ID {bill_id}"}
+
+            # Bill must belong to the org that's calling — otherwise an
+            # attacker with a valid API key for org A could flip the
+            # tally_synced flag on a bill belonging to org B.
+            if bill.organization_id != organization.id:
+                return {"error": f"{mode.capitalize()} bill {bill_id} does not belong to this organization"}
 
             bill.tally_synced = sync_status
             if sync_message is not None:
                 bill.tally_sync_message = sync_message
-            bill.save()
+            bill.save(update_fields=["tally_synced", "tally_sync_message"])
             return {
                 "success": True,
                 "id": str(bill.id),
@@ -164,6 +174,13 @@ def update_bill_tally_sync_status(request, org_id):
         )
 
     except Exception as e:
+        # ``logger.exception`` writes the full traceback to gunicorn logs
+        # so the actual cause shows up in journalctl instead of the bare
+        # "Internal Server Error: /api/..." line that gives no info.
+        logger.exception(
+            "update_bill_tally_sync_status failed for org=%s payload=%s",
+            org_id, request.data,
+        )
         return Response(
             {"success": False, "message": f"Error updating bill tally sync status: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
