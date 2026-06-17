@@ -1655,7 +1655,7 @@ def prepare_expense_sync_data(analyzed_bill, organization):
         "bill_no": analyzed_bill.bill_no or "",
         "bill_date": bill_date_str,
         "voucher_type": "Journal",
-        "vendor": vendor_name,
+        "vendor_name": vendor_name,
         "company": company_name,
         "total_amount": _fmt_money(analyzed_bill.total),
         "notes": notes_message,
