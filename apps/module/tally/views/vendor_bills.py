@@ -2329,6 +2329,11 @@ def prepare_sync_data(analyzed_bill, organization):
         })
 
     bill_data = {
+        # ``id`` is the BillMunshi bill UUID. The Tally TCP / TDL connector
+        # echoes it back via the ``tally_status`` callback API so the
+        # backend can flag the right bill as posted (``tally_synced=True``)
+        # without having to match on bill_no + vendor + date heuristics.
+        "id": str(analyzed_bill.selected_bill.id),
         "bill_no": analyzed_bill.bill_no,
         "bill_date": bill_date_str,
         "voucher_type": "Purchase",
