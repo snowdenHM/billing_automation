@@ -10,6 +10,7 @@ from io import BytesIO
 
 from PyPDF2 import PdfReader
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.base import ContentFile
 from django.db import transaction
 from django.http import HttpResponse
@@ -39,6 +40,7 @@ from ..models import (
     TallyExpenseAnalyzedBill,
     TallyExpenseAnalyzedProduct,
     TallyExpenseConsolidatedProduct,
+    TallyExpenseGstLine,
     Ledger,
     ParentLedger,
     TallyConfig,
@@ -968,6 +970,81 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
             if 'debit_or_credit' in other_adjustment_data:
                 analyzed_bill.other_adjustment_debit_or_credit = other_adjustment_data['debit_or_credit']
 
+        # ------------------------------------------------------------------
+        # Multi-rate GST lines — replaces the single bill-level CGST/SGST/IGST
+        # values. The frontend now sends ``analyzed_data.gst_lines`` as an
+        # array; we wipe + recreate so the UI is authoritative. Each row
+        # becomes a ``<ledger>`` entry in the sync XML.
+        #
+        # The legacy bill-level cgst/sgst/igst fields ARE still updated
+        # below as a rollup sum so the deprecated readers keep working for
+        # one release. They'll be dropped in a follow-up migration.
+        # ------------------------------------------------------------------
+        gst_lines_payload = analyzed_data.get('gst_lines')
+        if isinstance(gst_lines_payload, list):
+            # Wipe existing rows (the array is the source of truth).
+            TallyExpenseGstLine.objects.filter(expense_bill=analyzed_bill).delete()
+
+            for entry in gst_lines_payload:
+                if not isinstance(entry, dict):
+                    continue
+                amount = _to_decimal(entry.get('amount'))
+                tax_type = (entry.get('tax_type') or '').upper().strip()
+                if amount <= 0 or tax_type not in ('CGST', 'SGST', 'IGST'):
+                    continue
+                # Resolve the ledger FK from either an explicit ID or
+                # a name (the name path mirrors the existing tax-ledger
+                # helpers used above for CGST/SGST/IGST).
+                ledger = None
+                ledger_id = entry.get('ledger')
+                if ledger_id and not isinstance(ledger_id, (dict, list)):
+                    # ID-shaped — try a direct lookup first.
+                    try:
+                        ledger = Ledger.objects.get(
+                            id=ledger_id, organization=organization,
+                        )
+                    except (Ledger.DoesNotExist, ValueError, DjangoValidationError):
+                        # Fallback: treat the value as a name.
+                        ledger = find_or_create_expense_tax_ledger(
+                            str(ledger_id), tax_type, organization,
+                        )
+                dc = (entry.get('debit_or_credit') or 'debit').lower().strip()
+                if dc not in ('debit', 'credit'):
+                    dc = 'debit'
+
+                TallyExpenseGstLine.objects.create(
+                    organization=organization,
+                    expense_bill=analyzed_bill,
+                    rate=(entry.get('rate') or '').strip(),
+                    tax_type=tax_type,
+                    amount=amount,
+                    ledger=ledger,
+                    debit_or_credit=dc,
+                )
+
+            # Roll up the gst_lines into the deprecated bill-level
+            # cgst/sgst/igst fields so legacy code paths still see a
+            # consistent value during the transition window.
+            gst_lines_qs = TallyExpenseGstLine.objects.filter(expense_bill=analyzed_bill)
+            sums = {'CGST': Decimal('0'), 'SGST': Decimal('0'), 'IGST': Decimal('0')}
+            ledgers_by_type = {'CGST': None, 'SGST': None, 'IGST': None}
+            for line in gst_lines_qs:
+                sums[line.tax_type] += line.amount or Decimal('0')
+                # Stash the *first* ledger per tax_type so legacy single-FK
+                # readers get a sensible value (the new XML emitter doesn't
+                # use this — it iterates gst_lines directly).
+                if not ledgers_by_type[line.tax_type] and line.ledger_id:
+                    ledgers_by_type[line.tax_type] = line.ledger
+            analyzed_bill.cgst = sums['CGST']
+            analyzed_bill.sgst = sums['SGST']
+            analyzed_bill.igst = sums['IGST']
+            if ledgers_by_type['CGST']:
+                analyzed_bill.cgst_taxes = ledgers_by_type['CGST']
+            if ledgers_by_type['SGST']:
+                analyzed_bill.sgst_taxes = ledgers_by_type['SGST']
+            if ledgers_by_type['IGST']:
+                analyzed_bill.igst_taxes = ledgers_by_type['IGST']
+
         # Determine GST type based on updated amounts
         if analyzed_bill.igst and analyzed_bill.igst > 0:
             analyzed_bill.gst_type = TallyExpenseAnalyzedBill.GSTType.IGST
@@ -1291,6 +1368,21 @@ def get_structured_expense_bill_data(analyzed_bill, organization):
             }
             for item in analyzed_bill_products
         ],
+        # Multi-rate GST lines — the new source of truth (the ``taxes``
+        # block's cgst/sgst/igst entries above are kept for backwards
+        # compat readers, and reflect the sum of these lines).
+        "gst_lines": [
+            {
+                "id": str(line.id),
+                "rate": line.rate or "",
+                "tax_type": line.tax_type,
+                "amount": float(line.amount or 0),
+                "ledger": str(line.ledger_id) if line.ledger_id else None,
+                "ledger_name": str(line.ledger) if line.ledger else "",
+                "debit_or_credit": line.debit_or_credit or "debit",
+            }
+            for line in analyzed_bill.gst_lines.all()
+        ],
     }
 
 
@@ -1469,6 +1561,7 @@ def expense_bills_sync_list(request, org_id):
     ).prefetch_related(
         'products__chart_of_accounts',
         'consolidated_products__chart_of_accounts',
+        'gst_lines__ledger',
     ).order_by('-created_at')
 
     bills_data = []
@@ -1606,29 +1699,25 @@ def prepare_expense_sync_data(analyzed_bill, organization):
             "debit_or_credit": _dc(analyzed_bill.vendor_debit_or_credit or "credit"),
         })
 
-    # GST trio. Bill-level CGST/SGST/IGST with their ledger + DR/CR.
-    # No per-rate grouping here (unlike vendor bill) because the expense
-    # bill model only stores a single bill-level value per tax type —
-    # individual products carry no tax breakdown.
-    gst_entries = (
-        ("cgst", analyzed_bill.cgst, analyzed_bill.cgst_taxes,
-         analyzed_bill.cgst_debit_or_credit),
-        ("sgst", analyzed_bill.sgst, analyzed_bill.sgst_taxes,
-         analyzed_bill.sgst_debit_or_credit),
-        ("igst", analyzed_bill.igst, analyzed_bill.igst_taxes,
-         analyzed_bill.igst_debit_or_credit),
-    )
-    for _tax_type, amount, ledger, dc in gst_entries:
-        amt = _money(amount)
-        if amt == 0 or not ledger:
+    # GST lines — multi-rate support. Each ``TallyExpenseGstLine`` row
+    # becomes one ``<ledger>`` entry inside ``<ledgers>``. Mixed-rate
+    # bills produce multiple entries of the same tax_type (e.g. two
+    # CGST entries at 18% and 28%) — Tally TDL iterates and posts each
+    # as its own voucher line.
+    #
+    # NOTE: replaces the old bill-level cgst/sgst/igst single fields.
+    # Backfill migration converted existing data; the legacy fields
+    # remain on the model for one release as a safety net but are no
+    # longer the source of truth.
+    for gst_line in analyzed_bill.gst_lines.all():
+        amt = _money(gst_line.amount)
+        if amt == 0 or not gst_line.ledger:
             continue
         ledgers_payload.append({
             "amount": _fmt_money(amt),
-            "ledger": str(ledger),
-            "debit_or_credit": _dc(dc),
-            # No <rate> emitted — expense bills don't carry a rate string
-            # on the model. (Vendor bill does because individual products
-            # have product_gst.) The ledger name itself carries the rate.
+            "ledger": str(gst_line.ledger),
+            "rate": gst_line.rate or "",
+            "debit_or_credit": _dc(gst_line.debit_or_credit),
         })
 
     # TDS, Other Adjustment, Round Off (single bill-level entries each).

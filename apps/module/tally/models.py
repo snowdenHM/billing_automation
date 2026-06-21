@@ -1094,6 +1094,82 @@ class TallyExpenseConsolidatedProduct(BaseOrgModel):
         return f"Consolidated Expense: {self.item_details[:50] if self.item_details else 'Multiple Entries'} ({self.original_entries_count} entries)"
 
 
+# -----------------------------
+# GST Lines for Expense (Journal) bills
+# -----------------------------
+
+class TallyExpenseGstLine(BaseOrgModel):
+    """
+    Per-rate GST entry on a Tally expense (Journal) bill.
+
+    Each row maps 1:1 to a ``<ledger>`` entry inside the sync XML's
+    ``<ledgers>`` block. A bill can have N rows: one per distinct
+    (rate, tax_type, ledger) combination. This is how multi-rate GST
+    is modelled on the expense side (vendor bill achieves the same
+    via per-line product GST + a rollup; expense items don't carry
+    GST so it's stored explicitly here at bill level).
+
+    Example: an 18% intrastate bill has 2 rows (CGST 18% + SGST 18%).
+    A bill with 18% and 28% items has 4 rows.
+    """
+
+    class TaxType(models.TextChoices):
+        CGST = "CGST", "CGST"
+        SGST = "SGST", "SGST"
+        IGST = "IGST", "IGST"
+
+    class DebitCredit(models.TextChoices):
+        DEBIT = "debit", "Debit"
+        CREDIT = "credit", "Credit"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    expense_bill = models.ForeignKey(
+        TallyExpenseAnalyzedBill,
+        on_delete=models.CASCADE,
+        related_name="gst_lines",
+    )
+    rate = models.CharField(
+        max_length=10,
+        blank=True,
+        default="",
+        help_text="GST rate string like '18%', '28%'. Informational on Tally side.",
+    )
+    tax_type = models.CharField(
+        max_length=10,
+        choices=TaxType.choices,
+        help_text="CGST / SGST / IGST. Determines which ledger pool the dropdown shows.",
+    )
+    amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal("0"),
+    )
+    ledger = models.ForeignKey(
+        Ledger,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="tally_expense_gst_lines",
+        help_text="The CGST/SGST/IGST tax ledger this amount posts against in Tally.",
+    )
+    debit_or_credit = models.CharField(
+        max_length=10,
+        choices=DebitCredit.choices,
+        default=DebitCredit.DEBIT,
+        help_text="Usually debit (input credit). Flips to credit for RCM payable entries.",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Tally Expense GST Line"
+        verbose_name_plural = "Tally Expense GST Lines"
+        ordering = ["rate", "tax_type"]
+
+    def __str__(self) -> str:
+        return f"{self.tax_type} {self.rate} ₹{self.amount} ({self.debit_or_credit})"
+
 
 # -----------------------------
 # Tally Setup Guide (admin-managed walkthrough shown on the Tally Account Info page)
