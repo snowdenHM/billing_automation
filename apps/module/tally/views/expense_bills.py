@@ -1641,10 +1641,10 @@ def prepare_expense_sync_data(analyzed_bill, organization):
         return v if v in ("debit", "credit") else "debit"
 
     # ------------------------------------------------------------------
-    # Items (journal-style line entries). Pulls from consolidated_products
-    # when consolidate=True, individual products otherwise.
+    # Source lines for the expense entries. Pulls from
+    # consolidated_products when consolidate=True, individual products
+    # otherwise.
     # ------------------------------------------------------------------
-    items_payload = []
     use_consolidated = bool(getattr(analyzed_bill, 'consolidate', False))
     if use_consolidated:
         try:
@@ -1667,27 +1667,16 @@ def prepare_expense_sync_data(analyzed_bill, organization):
         'consolidated' if use_consolidated else 'individual',
     )
 
-    for line in source_lines:
-        amt = _money(getattr(line, 'amount', 0))
-        if amt == 0:
-            # Skip empty lines — they'd post a zero ledger entry in Tally.
-            continue
-        expense_ledger = (
-            str(line.chart_of_accounts)
-            if getattr(line, 'chart_of_accounts', None)
-            else "No COA Ledger"
-        )
-        items_payload.append({
-            "details": _clean_tally_text(getattr(line, 'item_details', '')) or "",
-            "expense_ledger": expense_ledger,
-            "amount": _fmt_money(amt),
-            "debit_or_credit": _dc(getattr(line, 'debit_or_credit', 'debit')),
-        })
-
     # ------------------------------------------------------------------
     # Ledgers — flat list with DR/CR. Order keeps the payload
-    # diff-friendly: vendor → GST (cgst,sgst,igst) → tds → other adj → round-off.
+    # diff-friendly: vendor → expense items → GST → TDS → other adj → round-off.
     # Each entry is dropped if its amount is zero or its ledger is missing.
+    #
+    # NOTE: Expense items are emitted INSIDE ``<ledgers>`` too — the
+    # journal voucher has no separate ``<items>`` block. Each item just
+    # becomes another ``<ledger>`` entry with amount + ledger + DR/CR.
+    # The original ``<details>`` text is folded into the bill-level
+    # ``<notes>`` (no separate per-line narration sent to Tally).
     # ------------------------------------------------------------------
     ledgers_payload = []
 
@@ -1697,6 +1686,21 @@ def prepare_expense_sync_data(analyzed_bill, organization):
             "amount": _fmt_money(analyzed_bill.vendor_amount),
             "ledger": vendor_ledger.name or "Unknown Vendor",
             "debit_or_credit": _dc(analyzed_bill.vendor_debit_or_credit or "credit"),
+        })
+
+    # Expense item lines — booked against the chart-of-accounts ledger
+    # with explicit DR/CR. Skip rows with zero amount or no ledger.
+    for line in source_lines:
+        amt = _money(getattr(line, 'amount', 0))
+        if amt == 0:
+            continue
+        coa = getattr(line, 'chart_of_accounts', None)
+        if not coa:
+            continue
+        ledgers_payload.append({
+            "amount": _fmt_money(amt),
+            "ledger": str(coa),
+            "debit_or_credit": _dc(getattr(line, 'debit_or_credit', 'debit')),
         })
 
     # GST lines — multi-rate support. Each ``TallyExpenseGstLine`` row
@@ -1754,7 +1758,9 @@ def prepare_expense_sync_data(analyzed_bill, organization):
         "total_amount": _fmt_money(analyzed_bill.total),
         "notes": notes_message,
         "ledgers": ledgers_payload,
-        "items": items_payload,
+        # NOTE: No ``items`` key — expense item lines are folded into
+        # ``ledgers`` above (see comment block). The Tally Journal voucher
+        # has only one collection to iterate.
     }
 
     return {"data": bill_data}

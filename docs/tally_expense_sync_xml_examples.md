@@ -11,16 +11,17 @@ Content-Type: application/xml; charset=utf-8
 The endpoint always returns a `<data>` root containing zero or more
 `<bill>` elements. The Tally TDL must iterate `<bill>` elements.
 
-> **Difference from vendor bill:** expense bills are posted as **Journal
-> vouchers** in Tally (not Purchase vouchers), so each `<ledger>` and
-> `<item>` carries an explicit `<debit_or_credit>` direction. There is no
-> implicit "vendor is the credit side" rule — every ledger posting,
-> including the vendor itself, is stated explicitly.
+> **Big-picture difference from vendor bill:**
 >
-> **Multi-rate GST is supported.** The `<ledgers>` block can carry
-> multiple `<ledger>` entries of the same tax type (e.g. two CGST
-> entries at 18% and 28%) — one per (rate, ledger) bucket. Each GST
-> entry now also carries an optional `<rate>` child.
+> 1. **Voucher type is `Journal`** (vendor bill is `Purchase`). Every
+>    posting needs explicit DR/CR direction.
+> 2. **There is no `<items>` block.** Every line that hits a Tally
+>    ledger — vendor, expense line, GST, TDS, adjustments — lives
+>    inside the single `<ledgers>` collection. The journal voucher
+>    needs only one collection to iterate.
+> 3. **Multi-rate GST is supported.** The same tax type (CGST / SGST /
+>    IGST) can repeat with different `<rate>` + `<ledger>` — one per
+>    rate bucket. Each GST entry also carries an optional `<rate>` child.
 
 ---
 
@@ -38,17 +39,20 @@ The endpoint always returns a `<data>` root containing zero or more
 | `<company>` | Tally company name to post into | `Spectrum Poly Pack and Packaging` |
 | `<total_amount>` | Bill grand total — always 2 decimals | `54000.00` |
 | `<notes>` | Free-text narration; includes BillMunshi back-link | `Bill from … entered via BillMunshi https://…` |
-| `<ledgers>` | Flat list of ledger postings (see below) | — |
-| `<items>` | Expense line items (journal-entry style, no qty/price) | — |
+| `<ledgers>` | **The only collection.** Flat list of every ledger posting on the journal voucher (vendor, expense lines, GST, TDS, adjustments). | — |
 
 ### `<ledgers>` block
 
 A single flat collection. **Every** posting that hits a Tally ledger
-lives here — vendor, CGST, SGST, IGST (any/all of the three, possibly
-multiple times each at different rates), TDS, other adjustment,
-round-off. The Tally TDL iterates `<ledger>` children and posts each
-as its own voucher line; the ledger name on the Tally master
-classifies it.
+lives here:
+
+- **The vendor** (the balancing party — typically `credit`)
+- **Each expense item line** (DR against the chart-of-accounts ledger)
+- **GST entries** (CGST / SGST / IGST — possibly multiple, one per rate bucket)
+- **TDS, Other Adjustment, Round Off** (single bill-level entries)
+
+The Tally TDL iterates `<ledger>` children and posts each as its own
+voucher line; the ledger name on the Tally master classifies it.
 
 Children of every `<ledger>` entry:
 
@@ -56,38 +60,33 @@ Children of every `<ledger>` entry:
 |---|---|
 | `<amount>` | 2-decimal amount. Positive normally; **negative allowed only on Round Off** when the vendor took less than computed. |
 | `<ledger>` | Tally ledger name to debit/credit. Must match a ledger that already exists in the Tally company. |
-| `<debit_or_credit>` | **Required.** Either `debit` or `credit`. Defaults to `debit` if missing (defensive only — backend always emits it). |
-| `<rate>` | GST rate string (e.g. `18%`). **Only emitted for GST entries (CGST / SGST / IGST)** — informational, helps Tally tag for GSTR reports. Absent on discount / TDS / other_adjustment / round_off. |
+| `<debit_or_credit>` | **Required.** Either `debit` or `credit`. |
+| `<rate>` | GST rate string (e.g. `18%`). **Only emitted for GST entries (CGST / SGST / IGST)** — informational, helps Tally tag for GSTR reports. Absent on vendor / expense-line / TDS / other_adjustment / round_off entries. |
 
 Emit rules:
 
 - **Zero-amount entries are dropped entirely.** A bill with no TDS has
   no TDS-named `<ledger>` entry. Tally must not synthesize one.
 - **Entries with a missing ledger FK are also dropped.** If a GST line
-  has an amount > 0 but no ledger assigned, the entry doesn't appear
-  (there's no ledger to post to).
+  has an amount > 0 but no ledger assigned, the entry doesn't appear.
 - **CGST + SGST and IGST are mutually exclusive on a single bill**
   (intrastate vs interstate). The frontend enforces this.
 - **Same tax type may repeat with different rates / ledgers.** A
   mixed-rate bill emits multiple CGST entries (or SGST or IGST), one
   per (rate, ledger) bucket. The Tally TDL must iterate.
-- The **vendor** itself is one of the `<ledger>` entries (typically
-  `<debit_or_credit>credit</debit_or_credit>`), because a journal
-  voucher needs every line stated. Vendor bill (Purchase voucher)
-  omits this since the vendor is the implicit balancing party.
+- **Vendor is always a `<ledger>` entry** (typically `credit`) because
+  a journal voucher needs every line stated explicitly. Vendor bill
+  (Purchase voucher) omits this since the vendor is the implicit
+  balancing party there.
+- **Expense lines have no narration** in the XML. The bill-level
+  `<notes>` is the only free-text field. (Item descriptions are
+  stored internally on BillMunshi for the UI but not sent to Tally,
+  since the chart-of-accounts ledger name + the bill-level notes give
+  Tally enough context.)
 
-### `<items>` block
-
-Each `<item>` is a journal-style line — books an amount against a
-chart-of-accounts ledger with explicit DR/CR. **No price / quantity** —
-expense bills are flat-amount entries (rent, fees, utilities, etc.).
-
-| Child | Meaning |
-|---|---|
-| `<details>` | Free-text description from the bill (e.g. `Office rent — November`) |
-| `<expense_ledger>` | Chart-of-accounts ledger to book the amount against (e.g. `RENT EXPENSE`). *Vendor bill uses `<purchase_ledger>` — different name to reflect the different domain.* |
-| `<amount>` | Line amount, 2 decimals |
-| `<debit_or_credit>` | `debit` or `credit` (typically `debit` for the expense, but reverse-charge scenarios can flip it). |
+> **There is no `<items>` block.** This is the key structural
+> difference from earlier versions of this contract. The journal
+> voucher only emits `<ledgers>`.
 
 ---
 
@@ -96,7 +95,7 @@ expense bills are flat-amount entries (rent, fees, utilities, etc.).
 A flat ₹5,000 stationery bill from a composition vendor.
 
 **Math:**
-- Expense line: 5000 (DR)
+- Stationery expense: 5000 (DR)
 - Vendor: 5000 (CR)
 - Net: balanced
 
@@ -117,15 +116,12 @@ A flat ₹5,000 stationery bill from a composition vendor.
         <ledger>STAR STATIONERY</ledger>
         <debit_or_credit>credit</debit_or_credit>
       </ledger>
-    </ledgers>
-    <items>
-      <item>
-        <details>Office stationery — pens, files, sticky notes</details>
-        <expense_ledger>OFFICE EXPENSES</expense_ledger>
+      <ledger>
         <amount>5000.00</amount>
+        <ledger>OFFICE EXPENSES</ledger>
         <debit_or_credit>debit</debit_or_credit>
-      </item>
-    </items>
+      </ledger>
+    </ledgers>
   </bill>
 </data>
 ```
@@ -162,6 +158,11 @@ Single rate → **2 GST entries** (one CGST + one SGST), each with `<rate>18%</r
         <debit_or_credit>credit</debit_or_credit>
       </ledger>
       <ledger>
+        <amount>2000.00</amount>
+        <ledger>INTERNET CHARGES</ledger>
+        <debit_or_credit>debit</debit_or_credit>
+      </ledger>
+      <ledger>
         <amount>180.00</amount>
         <ledger>CGST (ITC) @ 9%</ledger>
         <rate>18%</rate>
@@ -174,14 +175,6 @@ Single rate → **2 GST entries** (one CGST + one SGST), each with `<rate>18%</r
         <debit_or_credit>debit</debit_or_credit>
       </ledger>
     </ledgers>
-    <items>
-      <item>
-        <details>Office internet — December broadband</details>
-        <expense_ledger>INTERNET CHARGES</expense_ledger>
-        <amount>2000.00</amount>
-        <debit_or_credit>debit</debit_or_credit>
-      </item>
-    </items>
   </bill>
 </data>
 ```
@@ -211,20 +204,17 @@ by a single IGST entry.
         <debit_or_credit>credit</debit_or_credit>
       </ledger>
       <ledger>
+        <amount>2000.00</amount>
+        <ledger>INTERNET CHARGES</ledger>
+        <debit_or_credit>debit</debit_or_credit>
+      </ledger>
+      <ledger>
         <amount>360.00</amount>
         <ledger>IGST (ITC) @ 18%</ledger>
         <rate>18%</rate>
         <debit_or_credit>debit</debit_or_credit>
       </ledger>
     </ledgers>
-    <items>
-      <item>
-        <details>Office internet — December broadband</details>
-        <expense_ledger>INTERNET CHARGES</expense_ledger>
-        <amount>2000.00</amount>
-        <debit_or_credit>debit</debit_or_credit>
-      </item>
-    </items>
   </bill>
 </data>
 ```
@@ -234,7 +224,8 @@ by a single IGST entry.
 ## Scenario 4 — **Mixed-rate intrastate (the new capability)**
 
 AC maintenance contract: service charges at 18% + spare parts at 28%.
-Each rate produces its own CGST + SGST pair. **4 GST entries total.**
+Each rate produces its own CGST + SGST pair. **4 GST entries total**,
+plus 2 expense lines and 1 vendor line — 7 ledger postings.
 
 **Math:**
 - Service expense: 2000 (DR), Spare parts: 500 (DR) → 2500 base
@@ -259,6 +250,16 @@ Each rate produces its own CGST + SGST pair. **4 GST entries total.**
         <amount>3000.00</amount>
         <ledger>SHARMA SERVICES</ledger>
         <debit_or_credit>credit</debit_or_credit>
+      </ledger>
+      <ledger>
+        <amount>2000.00</amount>
+        <ledger>REPAIRS &amp; MAINTENANCE</ledger>
+        <debit_or_credit>debit</debit_or_credit>
+      </ledger>
+      <ledger>
+        <amount>500.00</amount>
+        <ledger>REPAIRS &amp; MAINTENANCE</ledger>
+        <debit_or_credit>debit</debit_or_credit>
       </ledger>
       <!-- 18% rate bucket -->
       <ledger>
@@ -287,20 +288,6 @@ Each rate produces its own CGST + SGST pair. **4 GST entries total.**
         <debit_or_credit>debit</debit_or_credit>
       </ledger>
     </ledgers>
-    <items>
-      <item>
-        <details>AC maintenance contract — Q3</details>
-        <expense_ledger>REPAIRS &amp; MAINTENANCE</expense_ledger>
-        <amount>2000.00</amount>
-        <debit_or_credit>debit</debit_or_credit>
-      </item>
-      <item>
-        <details>Spare parts replacement (gas, valve)</details>
-        <expense_ledger>REPAIRS &amp; MAINTENANCE</expense_ledger>
-        <amount>500.00</amount>
-        <debit_or_credit>debit</debit_or_credit>
-      </item>
-    </items>
   </bill>
 </data>
 ```
@@ -333,6 +320,16 @@ Same bill but interstate — two IGST entries at different rates.
         <debit_or_credit>credit</debit_or_credit>
       </ledger>
       <ledger>
+        <amount>2000.00</amount>
+        <ledger>REPAIRS &amp; MAINTENANCE</ledger>
+        <debit_or_credit>debit</debit_or_credit>
+      </ledger>
+      <ledger>
+        <amount>500.00</amount>
+        <ledger>REPAIRS &amp; MAINTENANCE</ledger>
+        <debit_or_credit>debit</debit_or_credit>
+      </ledger>
+      <ledger>
         <amount>360.00</amount>
         <ledger>IGST (ITC) @ 18%</ledger>
         <rate>18%</rate>
@@ -345,30 +342,16 @@ Same bill but interstate — two IGST entries at different rates.
         <debit_or_credit>debit</debit_or_credit>
       </ledger>
     </ledgers>
-    <items>
-      <item>
-        <details>AC maintenance contract — Q3</details>
-        <expense_ledger>REPAIRS &amp; MAINTENANCE</expense_ledger>
-        <amount>2000.00</amount>
-        <debit_or_credit>debit</debit_or_credit>
-      </item>
-      <item>
-        <details>Spare parts replacement</details>
-        <expense_ledger>REPAIRS &amp; MAINTENANCE</expense_ledger>
-        <amount>500.00</amount>
-        <debit_or_credit>debit</debit_or_credit>
-      </item>
-    </items>
   </bill>
 </data>
 ```
 
 ---
 
-## Scenario 6 — Rent bill with TDS (single-rate intrastate)
+## Scenario 6 — Rent bill with TDS
 
 Office rent ₹50,000 + 18% GST. TDS @ 10% on the **base** rent (₹5,000)
-is deducted at source; the actual cash paid to the landlord is
+is deducted at source; actual cash paid to the landlord is
 ₹54,000 (50000 + 9000 GST − 5000 TDS).
 
 **Math:**
@@ -397,6 +380,11 @@ is deducted at source; the actual cash paid to the landlord is
         <debit_or_credit>credit</debit_or_credit>
       </ledger>
       <ledger>
+        <amount>50000.00</amount>
+        <ledger>RENT EXPENSE</ledger>
+        <debit_or_credit>debit</debit_or_credit>
+      </ledger>
+      <ledger>
         <amount>4500.00</amount>
         <ledger>CGST (ITC) @ 9%</ledger>
         <rate>18%</rate>
@@ -414,14 +402,6 @@ is deducted at source; the actual cash paid to the landlord is
         <debit_or_credit>credit</debit_or_credit>
       </ledger>
     </ledgers>
-    <items>
-      <item>
-        <details>Office rent — November 2025</details>
-        <expense_ledger>RENT EXPENSE</expense_ledger>
-        <amount>50000.00</amount>
-        <debit_or_credit>debit</debit_or_credit>
-      </item>
-    </items>
   </bill>
 </data>
 ```
@@ -431,6 +411,7 @@ is deducted at source; the actual cash paid to the landlord is
 ## Scenario 7 — Multiple expense lines (one bill, several heads, no GST)
 
 Travel reimbursement booking flights + hotels + meals in a single voucher.
+Three expense lines, all posted to different chart-of-accounts ledgers.
 
 ```xml
 <data>
@@ -449,27 +430,22 @@ Travel reimbursement booking flights + hotels + meals in a single voucher.
         <ledger>TRAVEL DESK</ledger>
         <debit_or_credit>credit</debit_or_credit>
       </ledger>
-    </ledgers>
-    <items>
-      <item>
-        <details>Bengaluru ↔ Delhi return flight</details>
-        <expense_ledger>TRAVEL — AIRFARE</expense_ledger>
+      <ledger>
         <amount>12000.00</amount>
+        <ledger>TRAVEL — AIRFARE</ledger>
         <debit_or_credit>debit</debit_or_credit>
-      </item>
-      <item>
-        <details>3 nights hotel — Delhi</details>
-        <expense_ledger>TRAVEL — LODGING</expense_ledger>
+      </ledger>
+      <ledger>
         <amount>8000.00</amount>
+        <ledger>TRAVEL — LODGING</ledger>
         <debit_or_credit>debit</debit_or_credit>
-      </item>
-      <item>
-        <details>Meals during travel</details>
-        <expense_ledger>TRAVEL — MEALS</expense_ledger>
+      </ledger>
+      <ledger>
         <amount>1500.00</amount>
+        <ledger>TRAVEL — MEALS</ledger>
         <debit_or_credit>debit</debit_or_credit>
-      </item>
-    </items>
+      </ledger>
+    </ledgers>
   </bill>
 </data>
 ```
@@ -478,17 +454,17 @@ Travel reimbursement booking flights + hotels + meals in a single voucher.
 
 ## Scenario 8 — Bill with all adjustments (mixed GST + TDS + other adjustment + round-off)
 
-The "kitchen sink" scenario — professional-services bill at two GST
-rates plus every adjustment type.
+The "kitchen sink" — professional-services bill at two GST rates plus
+every adjustment type.
 
 **Math:**
-- Professional fee: 100000 (DR), Travel reimbursement: 5000 (DR)
+- Professional fee: 100000 (DR), Travel reimbursement: 5000 (DR) → 105000 base
 - 18% on 100000: CGST 9000 + SGST 9000 (DR)
-- 28% on 5000:   CGST  700 + SGST  700 (DR) … illustrative
+- 28% on 5000:   CGST  700 + SGST  700 (DR)
 - TDS @ 10%: 10000 (CR)
 - Late penalty: 500 (CR)
 - Round off: 0.50 (CR)
-- Vendor: balancing entry on CR side
+- Vendor: 107499.50 (CR) — balancing party
 
 ```xml
 <data>
@@ -506,6 +482,16 @@ rates plus every adjustment type.
         <amount>107499.50</amount>
         <ledger>ACME CONSULTANTS</ledger>
         <debit_or_credit>credit</debit_or_credit>
+      </ledger>
+      <ledger>
+        <amount>100000.00</amount>
+        <ledger>PROFESSIONAL FEES</ledger>
+        <debit_or_credit>debit</debit_or_credit>
+      </ledger>
+      <ledger>
+        <amount>5000.00</amount>
+        <ledger>TRAVEL EXPENSES</ledger>
+        <debit_or_credit>debit</debit_or_credit>
       </ledger>
       <!-- Multi-rate GST -->
       <ledger>
@@ -549,20 +535,6 @@ rates plus every adjustment type.
         <debit_or_credit>credit</debit_or_credit>
       </ledger>
     </ledgers>
-    <items>
-      <item>
-        <details>Consulting engagement — Q3 quarterly review</details>
-        <expense_ledger>PROFESSIONAL FEES</expense_ledger>
-        <amount>100000.00</amount>
-        <debit_or_credit>debit</debit_or_credit>
-      </item>
-      <item>
-        <details>Travel reimbursement (28% GST)</details>
-        <expense_ledger>TRAVEL EXPENSES</expense_ledger>
-        <amount>5000.00</amount>
-        <debit_or_credit>debit</debit_or_credit>
-      </item>
-    </items>
   </bill>
 </data>
 ```
@@ -599,6 +571,11 @@ but on different `<ledger>` masters.
         <debit_or_credit>credit</debit_or_credit>
       </ledger>
       <ledger>
+        <amount>50000.00</amount>
+        <ledger>SOFTWARE SUBSCRIPTIONS</ledger>
+        <debit_or_credit>debit</debit_or_credit>
+      </ledger>
+      <ledger>
         <amount>9000.00</amount>
         <ledger>IGST (ITC) @ 18%</ledger>
         <rate>18%</rate>
@@ -611,19 +588,11 @@ but on different `<ledger>` masters.
         <debit_or_credit>credit</debit_or_credit>
       </ledger>
     </ledgers>
-    <items>
-      <item>
-        <details>SaaS subscription — December</details>
-        <expense_ledger>SOFTWARE SUBSCRIPTIONS</expense_ledger>
-        <amount>50000.00</amount>
-        <debit_or_credit>debit</debit_or_credit>
-      </item>
-    </items>
   </bill>
 </data>
 ```
 
-**TDL behaviour:** same loop, two entries with the same `<rate>` but
+**TDL behaviour:** same loop, two GST entries with the same `<rate>` but
 different `<ledger>` masters and opposite directions. No special branch.
 
 ---
@@ -646,20 +615,9 @@ each as a separate Journal voucher.
     <total_amount>5000.00</total_amount>
     <notes>Bill from STAR STATIONERY entered via BillMunshi https://...</notes>
     <ledgers>
-      <ledger>
-        <amount>5000.00</amount>
-        <ledger>STAR STATIONERY</ledger>
-        <debit_or_credit>credit</debit_or_credit>
-      </ledger>
+      <ledger><amount>5000.00</amount><ledger>STAR STATIONERY</ledger><debit_or_credit>credit</debit_or_credit></ledger>
+      <ledger><amount>5000.00</amount><ledger>OFFICE EXPENSES</ledger><debit_or_credit>debit</debit_or_credit></ledger>
     </ledgers>
-    <items>
-      <item>
-        <details>Office stationery</details>
-        <expense_ledger>OFFICE EXPENSES</expense_ledger>
-        <amount>5000.00</amount>
-        <debit_or_credit>debit</debit_or_credit>
-      </item>
-    </items>
   </bill>
   <bill>
     <id>uuid-bill-2</id>
@@ -672,17 +630,10 @@ each as a separate Journal voucher.
     <notes>Bill from BHARAT TELCO LTD entered via BillMunshi https://...</notes>
     <ledgers>
       <ledger><amount>2360.00</amount><ledger>BHARAT TELCO LTD</ledger><debit_or_credit>credit</debit_or_credit></ledger>
+      <ledger><amount>2000.00</amount><ledger>INTERNET CHARGES</ledger><debit_or_credit>debit</debit_or_credit></ledger>
       <ledger><amount>180.00</amount><ledger>CGST (ITC) @ 9%</ledger><rate>18%</rate><debit_or_credit>debit</debit_or_credit></ledger>
       <ledger><amount>180.00</amount><ledger>SGST (ITC) @ 9%</ledger><rate>18%</rate><debit_or_credit>debit</debit_or_credit></ledger>
     </ledgers>
-    <items>
-      <item>
-        <details>Office internet — December</details>
-        <expense_ledger>INTERNET CHARGES</expense_ledger>
-        <amount>2000.00</amount>
-        <debit_or_credit>debit</debit_or_credit>
-      </item>
-    </items>
   </bill>
 </data>
 ```
@@ -705,19 +656,20 @@ Returned when there is nothing pending. Valid XML, just no bills inside.
 |---|---|
 | GST amount = 0 on a tax line | The `<ledger>` entry is **omitted entirely**. |
 | Missing ledger FK on a GST line | Omitted, even if amount > 0 (no ledger to post to). |
+| Expense item amount = 0 or no ledger | Omitted (no zero ledger posting). |
 | Same tax type repeats with different `<rate>` | **Each entry is a separate voucher line** — don't merge, they belong to different GSTR slabs. |
 | CGST + SGST + IGST together | Will never happen — bill is either intrastate (CGST + SGST) or interstate (IGST). |
 | Vendor line | **Always present** as a `<ledger>` entry when vendor amount > 0. Usually `credit`. |
+| Same expense ledger appears twice (e.g. two REPAIRS lines) | Each is a separate voucher line. Don't merge — they may belong to different cost centres / GSTR categories. |
 | TDS direction | Usually `credit` (deducted at source, becomes liability to govt). |
 | GST direction | Usually `debit` (input tax credit). Flipped to `credit` on the RCM payable side. |
-| Round-off sign | Amount is positive; **direction is signalled by `<debit_or_credit>`** — vendor charged more → `debit`, vendor took less → `credit`. |
-| Item `<details>` with `"` or `&` | XML serializer auto-handles escaping for `<`, `>`, `&`. Double quotes stay literal. |
+| Round-off sign | Amount is positive; **direction is signalled by `<debit_or_credit>`**. |
 | `<amount>` everywhere | Always 2 decimals (e.g. `50000.00`, never `50000` or `50000.0`). |
 | `<bill_date>` | `DD-MM-YYYY` always. |
 | `<rate>` on GST entries | Format `<int>%`, e.g. `18%`. Informational only — use for GSTR tagging if needed, else ignore. |
 | `<rate>` on non-GST entries | **Not emitted.** Presence of `<rate>` is a fast "is this a GST line?" check. |
-| Per-line tax breakdown | **Not provided.** Unlike vendor bills, expense bill items don't carry per-line GST. GST is at bill level via `<ledgers>` entries. |
 | `<id>` (bill UUID) | **Always echo back** via the `tally_status` callback so the backend can flag the right bill. |
+| `<items>` block | **Does not exist.** Expense lines are inside `<ledgers>`. |
 
 ---
 
@@ -728,11 +680,10 @@ Returned when there is nothing pending. Valid XML, just no bills inside.
 | `<voucher_type>` | `Purchase` | **`Journal`** |
 | `<vendor_name>` inside `<ledgers>` | **no** — implicit credit on Purchase voucher | **yes** — every Journal line stated explicitly |
 | `<debit_or_credit>` per `<ledger>` | not emitted | **emitted on every entry** |
-| `<rate>` on GST `<ledger>` entries | emitted (`18%`, etc.) | **emitted (NEW)** |
-| Multi-rate GST | yes (mixed-rate bills produce multiple GST entries) | **yes (NEW — multi-row GST Lines)** |
+| `<rate>` on GST `<ledger>` entries | emitted (`18%`, etc.) | **emitted** |
+| Multi-rate GST | yes | **yes** |
+| `<items>` block | **yes** — separate from `<ledgers>` (carries `<price>` + `<quantity>` + `<purchase_ledger>` + `<details>`) | **no** — expense lines are folded into `<ledgers>` as plain ledger entries |
 | Adjustment fields | `discount`, `cess`, `freight`, `round_off` | `tds`, `other_adjustment`, `round_off` |
-| `<items>` inner tag | `<purchase_ledger>` + `<price>` + `<quantity>` | `<expense_ledger>` + `<debit_or_credit>` (no qty/price) |
-| `<debit_or_credit>` per `<item>` | not emitted | **emitted on every item** |
 
 ---
 
@@ -740,32 +691,32 @@ Returned when there is nothing pending. Valid XML, just no bills inside.
 
 The vendor-bill (Purchase voucher) side is already on this contract and
 shipping. The Journal voucher side needs **only one structural change**:
-support multiple `<ledger>` entries of the same tax type.
+iterate `<ledger>` entries inside `<ledgers>` — that's the only
+collection on the voucher.
 
 1. **Switch the response parser from JSON to XML** (already done for
    vendor bills — if shared, no work). The Content-Type header on the
    sync endpoint is `application/xml; charset=utf-8`.
-2. **Replace any branch that read named CGST/SGST/IGST tags** with a
-   uniform iteration over `<ledger>` children of `<ledgers>`. Each entry
-   carries its own direction via `<debit_or_credit>` — no need to
-   classify by tag name.
-3. **Mixed-rate support:** the loop must not assume "one CGST" or
+2. **Iterate `<ledger>` children of `<ledgers>`** and post each as a
+   voucher line. Each entry carries its own direction via
+   `<debit_or_credit>` — no need to classify by tag name.
+3. **There is no `<items>` block on expense bills.** Don't look for
+   one. Expense lines are inside `<ledgers>` (no `<rate>` on them, so
+   they're trivially distinguishable from GST entries if needed).
+4. **Mixed-rate support:** the loop must not assume "one CGST" or
    "one SGST". A single bill can emit N entries per tax type, one per
    (rate, ledger) bucket. Same loop pattern the vendor-side TDL
    already uses.
-4. **Optional:** read `<rate>` on GST entries if you want them tagged
+5. **Optional:** read `<rate>` on GST entries if you want them tagged
    for GSTR-2A/2B reports. Skip otherwise — safe to ignore.
-5. **`<voucher_type>Journal</voucher_type>`** at the top of each bill
+6. **`<voucher_type>Journal</voucher_type>`** at the top of each bill
    tells the TDL to use the Journal voucher template (vs the implicit
    `Purchase` on vendor bills).
-6. **`<id>`** (bill UUID) at the top of each bill — **echo this back**
+7. **`<id>`** (bill UUID) at the top of each bill — **echo this back**
    via the `tally_status` callback after posting. This is how the
    backend flags the right bill as posted without fuzzy matching.
 
-That's the full scope. If your TDL already iterates `<ledger>` children
-for vendor bills, the same loop handles expense bills correctly —
-including all the multi-rate / RCM / TDS / mixed-adjustment scenarios
-above.
+That's the full scope.
 
 ---
 
