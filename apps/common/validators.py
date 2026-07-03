@@ -31,3 +31,40 @@ def validate_bill_file_size(value):
     if size > max_bytes:
         mb_limit = max_bytes // (1024 * 1024)
         raise ValidationError(f"File too large. Maximum allowed is {mb_limit} MB.")
+
+
+# ---------------------------------------------------------------------------
+# Per-org media path — replaces the flat ``upload_to="bills/"`` so files
+# from different organisations end up under ``media/bills/<org_id>/``.
+# Combined with the auth-guarded /media/bills/ serve view (#1), this gives
+# multi-tenant hygiene: even if the media root is misconfigured, files
+# from Org A can't collide with or be confused for files from Org B.
+# ---------------------------------------------------------------------------
+
+def _get_org_id_from_instance(instance):
+    """Best-effort resolution of the owning org UUID at upload time."""
+    if instance is None:
+        return None
+    # Direct FK column — set before ``.save()`` in the upload views.
+    org_id = getattr(instance, "organization_id", None)
+    if org_id:
+        return org_id
+    org = getattr(instance, "organization", None)
+    if org is not None:
+        return getattr(org, "id", None)
+    return None
+
+
+def bill_upload_path(instance, filename):
+    """Return ``bills/<org_id>/<filename>`` for a bill FileField.
+
+    Django calls this with (model instance, uploaded filename). We stamp
+    the org id in the path so ``ls media/bills/`` returns one directory
+    per tenant. Legacy files under ``bills/foo.pdf`` continue to work —
+    only new uploads land in the org-scoped subdirectory.
+    """
+    org_id = _get_org_id_from_instance(instance)
+    safe_name = filename.replace("/", "_").replace("\\", "_")
+    if org_id:
+        return f"bills/{org_id}/{safe_name}"
+    return f"bills/{safe_name}"

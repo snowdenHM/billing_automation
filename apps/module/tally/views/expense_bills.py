@@ -231,30 +231,50 @@ def process_expense_analysis_data(bill, json_data, organization):
         if expense_coa_ledger:
             logger.info(f"✅ Automatically selected Expense COA ledger: {expense_coa_ledger.name}")
 
-        # Create analyzed bill with automatic selections
+        # Create analyzed bill with automatic selections.
+        # ``get_or_create`` is idempotent under the double-analysis race
+        # (see #4 audit) — if a row already exists we update the header
+        # fields with the newer values (last-write-wins).
         with transaction.atomic():
-            analyzed_bill = TallyExpenseAnalyzedBill.objects.create(
+            analyzed_bill, _created = TallyExpenseAnalyzedBill.objects.get_or_create(
                 selected_bill=bill,
-                vendor=vendor_ledger,  # Automatically selected
-                bill_no=bill_number,
-                bill_date=bill_date,
-                due_date=due_date,
-                igst=igst_val,
-                cgst=cgst_val,
-                sgst=sgst_val,
-                tds=tds_val,
-                total=total_val,
-                igst_taxes=igst_tax_ledger,  # Automatically selected
-                cgst_taxes=cgst_tax_ledger,  # Automatically selected
-                sgst_taxes=sgst_tax_ledger,  # Automatically selected
-                note="AI Analyzed Expense Bill with Automation",
-                organization=organization,
-                gst_type=gst_type,
-                igst_debit_or_credit='debit',
-                cgst_debit_or_credit='debit', 
-                sgst_debit_or_credit='debit',
-                tds_debit_or_credit='credit'
+                defaults={
+                    "vendor": vendor_ledger,
+                    "bill_no": bill_number,
+                    "bill_date": bill_date,
+                    "due_date": due_date,
+                    "igst": igst_val,
+                    "cgst": cgst_val,
+                    "sgst": sgst_val,
+                    "tds": tds_val,
+                    "total": total_val,
+                    "igst_taxes": igst_tax_ledger,
+                    "cgst_taxes": cgst_tax_ledger,
+                    "sgst_taxes": sgst_tax_ledger,
+                    "note": "AI Analyzed Expense Bill with Automation",
+                    "organization": organization,
+                    "gst_type": gst_type,
+                    "igst_debit_or_credit": "debit",
+                    "cgst_debit_or_credit": "debit",
+                    "sgst_debit_or_credit": "debit",
+                    "tds_debit_or_credit": "credit",
+                },
             )
+            if not _created:
+                analyzed_bill.vendor = vendor_ledger
+                analyzed_bill.bill_no = bill_number
+                analyzed_bill.bill_date = bill_date
+                analyzed_bill.due_date = due_date
+                analyzed_bill.igst = igst_val
+                analyzed_bill.cgst = cgst_val
+                analyzed_bill.sgst = sgst_val
+                analyzed_bill.tds = tds_val
+                analyzed_bill.total = total_val
+                analyzed_bill.igst_taxes = igst_tax_ledger
+                analyzed_bill.cgst_taxes = cgst_tax_ledger
+                analyzed_bill.sgst_taxes = sgst_tax_ledger
+                analyzed_bill.gst_type = gst_type
+                analyzed_bill.save()
 
             logger.info(f"✅ Created TallyExpenseAnalyzedBill with ID: {analyzed_bill.id} (with automatic vendor/tax selections)")
 
@@ -440,8 +460,8 @@ def expense_bills_list(request, org_id):
 def expense_bills_upload(request, org_id):
     """Handle single or multiple expense bill file uploads with PDF splitting support"""
     from .bill_helpers import bills_upload_base
-    from ..tasks import enqueue_expense_bill_processing
-    
+    from ..tasks import enqueue_expense_bill_processing, split_pdf_bill_expense
+
     return bills_upload_base(
         request=request,
         org_id=org_id,
@@ -450,7 +470,8 @@ def expense_bills_upload(request, org_id):
         response_serializer_class=TallyExpenseBillSerializer,
         pdf_split_func=process_pdf_splitting_expense,
         enqueue_func=enqueue_expense_bill_processing,
-        bill_type_label="expense"
+        bill_type_label="expense",
+        pdf_split_task_fn=split_pdf_bill_expense,
     )
 
 
@@ -542,15 +563,19 @@ def expense_bill_analyze(request, org_id):
         # Add duplicate warnings if found
         if is_duplicate:
             duplicate_warnings = []
+            from apps.common.views import generate_signed_bill_file_url
             for dup in duplicate_bills:
                 duplicate_bill = dup['bill']
-                # Build bill URL
+                # Build bill URL — signed so the frontend viewer can load
+                # it even though the media endpoint requires auth.
                 bill_url = None
                 if duplicate_bill.file:
                     try:
-                        bill_url = request.build_absolute_uri(duplicate_bill.file.url)
+                        bill_url = generate_signed_bill_file_url(
+                            duplicate_bill.file, request=request,
+                        )
                     except Exception:
-                        bill_url = duplicate_bill.file.url
+                        bill_url = None
 
                 duplicate_warnings.append({
                     "duplicate_bill_id": str(duplicate_bill.id),

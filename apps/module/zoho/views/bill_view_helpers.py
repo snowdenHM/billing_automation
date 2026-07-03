@@ -8,6 +8,8 @@ import logging
 import os
 
 from django.conf import settings
+from django.core.files.storage import default_storage
+from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -66,8 +68,14 @@ def zoho_bills_upload_base(
     request, org_id, *,
     bill_model, list_serializer, upload_serializer,
     label,
-    check_duplicate_fn, split_pdf_fn, analyze_fn, create_objects_fn,
-    enqueue_analysis_fn=None,  # New parameter for background processing
+    split_pdf_fn,
+    # Legacy sync-mode-only args — pass ``None`` (default) when using the
+    # async ``enqueue_analysis_fn`` path (recommended for new callers).
+    check_duplicate_fn=None,
+    analyze_fn=None,
+    create_objects_fn=None,
+    enqueue_analysis_fn=None,
+    pdf_split_task_fn=None,
 ):
     """
     Generic upload view for Zoho bills (handles single + multi upload, PDF split,
@@ -116,7 +124,13 @@ def zoho_bills_upload_base(
 
     serializer_data = {
         'files': files_data,
-        'fileType': request.data.get('fileType', 'Single Invoice/File'),
+        # Accept both ``fileType`` (canonical for Zoho) and ``file_type``
+        # (backend-canonical / Tally naming). Same fix pattern as #5.
+        'fileType': (
+            request.data.get('fileType')
+            or request.data.get('file_type')
+            or 'Single Invoice/File'
+        ),
     }
 
     serializer = upload_serializer(data=serializer_data)
@@ -134,138 +148,242 @@ def zoho_bills_upload_base(
     if not files:
         return Response({'error': 'No files provided for upload'}, status=status.HTTP_400_BAD_REQUEST)
 
+    # Track file paths so we can delete orphans if the atomic block
+    # rolls back — Django's FileField writes to disk before commit.
+    uploaded_file_paths = []
+    async_pdf_bill_ids = set()
+
     try:
-        upload_warnings = []
+        with transaction.atomic():
+            upload_warnings = []
 
-        for i, uploaded_file in enumerate(files):
-            logger.debug(f"[{tag} DEBUG] Processing file {i + 1}/{len(files)}: {uploaded_file.name}")
-            file_extension = uploaded_file.name.lower().split('.')[-1]
+            from apps.common.services.content_hash import (
+                compute_file_hash, find_hash_duplicate,
+            )
 
-            # Check for potential file-level duplicates (same name / similar size)
-            similar_files = bill_model.objects.filter(
-                organization=organization, file__isnull=False
-            ).exclude(status='Draft')
-
-            potential_duplicate_files = []
-            for existing_bill in similar_files:
-                if not (existing_bill.file and existing_bill.file.name):
-                    continue
-                existing_filename = os.path.basename(existing_bill.file.name)
-                uploaded_filename = uploaded_file.name
-
-                if existing_filename.lower() == uploaded_filename.lower():
-                    potential_duplicate_files.append({
-                        'bill': existing_bill, 'match_type': 'exact_filename',
-                        'reason': 'Same filename detected',
-                    })
-                elif (
-                    existing_filename.lower().replace('.pdf', '').replace('.jpg', '').replace('.png', '')
-                    == uploaded_filename.lower().replace('.pdf', '').replace('.jpg', '').replace('.png', '')
-                ):
-                    potential_duplicate_files.append({
-                        'bill': existing_bill, 'match_type': 'similar_filename',
-                        'reason': 'Similar filename detected',
-                    })
-                elif (
-                    existing_bill.file
-                    and hasattr(existing_bill.file.storage, 'exists')
-                    and existing_bill.file.storage.exists(existing_bill.file.name)
-                    and hasattr(existing_bill.file, 'size')
-                    and hasattr(uploaded_file, 'size')
-                ):
-                    try:
-                        existing_size = existing_bill.file.size
-                        uploaded_size = uploaded_file.size
-                        if (
-                            existing_size > 0
-                            and uploaded_size > 0
-                            and abs(existing_size - uploaded_size) / max(existing_size, uploaded_size) < 0.05
-                        ):
-                            potential_duplicate_files.append({
-                                'bill': existing_bill, 'match_type': 'similar_size',
-                                'reason': 'Similar file size detected',
-                            })
-                    except (FileNotFoundError, OSError) as e:
-                        logger.error(f"[{tag} DEBUG] Error accessing file for bill {existing_bill.billmunshiName}: {e}")
-                        continue
-
-            if potential_duplicate_files:
-                upload_warnings.append({
-                    'uploaded_file': uploaded_file.name,
-                    'potential_duplicates': len(potential_duplicate_files),
-                    'warning': f'File "{uploaded_file.name}" may be a duplicate of existing bills',
-                    'existing_bills': [
-                        {
-                            'bill_name': dup['bill'].billmunshiName,
-                            'bill_id': str(dup['bill'].id),
-                            'match_type': dup['match_type'],
-                            'reason': dup['reason'],
-                        }
-                        for dup in potential_duplicate_files[:3]
-                    ],
-                })
-
-            # Handle PDF splitting for multiple invoice files
-            if file_type == 'Multiple Invoice/File' and file_extension == 'pdf':
-                pdf_bills = split_pdf_fn(uploaded_file, organization, file_type, request.user)
-                created_bills.extend(pdf_bills)
-            else:
-                bill = bill_model.objects.create(
-                    file=uploaded_file,
-                    fileType=file_type,
-                    status='Draft',
-                    organization=organization,
-                    uploaded_by=request.user,
+            for i, uploaded_file in enumerate(files):
+                logger.debug(
+                    f"[{tag} DEBUG] Processing file {i + 1}/{len(files)}: "
+                    f"{uploaded_file.name}"
                 )
-                created_bills.append(bill)
+                file_extension = uploaded_file.name.lower().split('.')[-1]
 
-        # Background processing or synchronous analysis
+                # Exact-duplicate short-circuit via SHA-256 content hash
+                # (see #8 in the upload audit).
+                content_hash = compute_file_hash(uploaded_file)
+                existing_hash_dup = find_hash_duplicate(
+                    bill_model, organization, content_hash,
+                )
+                if existing_hash_dup:
+                    upload_warnings.append({
+                        'uploaded_file': uploaded_file.name,
+                        'warning_type': 'exact_duplicate',
+                        'existing_bills': [{
+                            'bill_name': existing_hash_dup.billmunshiName,
+                            'bill_id': str(existing_hash_dup.id),
+                            'match_type': 'sha256_content_hash',
+                            'reason': 'Byte-for-byte identical file already uploaded',
+                        }],
+                        'warning': (
+                            f'"{uploaded_file.name}" is byte-for-byte identical to '
+                            f'"{existing_hash_dup.billmunshiName}" — skipped.'
+                        ),
+                    })
+                    logger.info(
+                        "Exact-duplicate detected for %s (hash=%s) — skipping",
+                        uploaded_file.name, content_hash[:12],
+                    )
+                    continue
+
+                # Check for potential file-level duplicates (same name /
+                # similar size). Advisory only; AI-based dedup runs later.
+                similar_files = bill_model.objects.filter(
+                    organization=organization, file__isnull=False
+                ).exclude(status='Draft')
+
+                potential_duplicate_files = []
+                for existing_bill in similar_files:
+                    if not (existing_bill.file and existing_bill.file.name):
+                        continue
+                    existing_filename = os.path.basename(existing_bill.file.name)
+                    uploaded_filename = uploaded_file.name
+
+                    if existing_filename.lower() == uploaded_filename.lower():
+                        potential_duplicate_files.append({
+                            'bill': existing_bill,
+                            'match_type': 'exact_filename',
+                            'reason': 'Same filename detected',
+                        })
+                    elif (
+                        existing_filename.lower().replace('.pdf', '').replace('.jpg', '').replace('.png', '')
+                        == uploaded_filename.lower().replace('.pdf', '').replace('.jpg', '').replace('.png', '')
+                    ):
+                        potential_duplicate_files.append({
+                            'bill': existing_bill,
+                            'match_type': 'similar_filename',
+                            'reason': 'Similar filename detected',
+                        })
+                    elif (
+                        existing_bill.file
+                        and hasattr(existing_bill.file.storage, 'exists')
+                        and existing_bill.file.storage.exists(existing_bill.file.name)
+                        and hasattr(existing_bill.file, 'size')
+                        and hasattr(uploaded_file, 'size')
+                    ):
+                        try:
+                            existing_size = existing_bill.file.size
+                            uploaded_size = uploaded_file.size
+                            if (
+                                existing_size > 0
+                                and uploaded_size > 0
+                                and abs(existing_size - uploaded_size) / max(existing_size, uploaded_size) < 0.05
+                            ):
+                                potential_duplicate_files.append({
+                                    'bill': existing_bill,
+                                    'match_type': 'similar_size',
+                                    'reason': 'Similar file size detected',
+                                })
+                        except (FileNotFoundError, OSError) as e:
+                            logger.error(
+                                f"[{tag} DEBUG] Error accessing file for bill "
+                                f"{existing_bill.billmunshiName}: {e}"
+                            )
+                            continue
+
+                if potential_duplicate_files:
+                    upload_warnings.append({
+                        'uploaded_file': uploaded_file.name,
+                        'potential_duplicates': len(potential_duplicate_files),
+                        'warning': (
+                            f'File "{uploaded_file.name}" may be a duplicate of existing bills'
+                        ),
+                        'existing_bills': [
+                            {
+                                'bill_name': dup['bill'].billmunshiName,
+                                'bill_id': str(dup['bill'].id),
+                                'match_type': dup['match_type'],
+                                'reason': dup['reason'],
+                            }
+                            for dup in potential_duplicate_files[:3]
+                        ],
+                    })
+
+                # Handle PDF splitting for multiple invoice files
+                if file_type == 'Multiple Invoice/File' and file_extension == 'pdf':
+                    if pdf_split_task_fn is not None:
+                        from apps.common.services.pdf_processing import (
+                            enqueue_pdf_split_async,
+                        )
+                        pdf_bills = enqueue_pdf_split_async(
+                            uploaded_file,
+                            organization,
+                            file_type,
+                            request.user,
+                            bill_model,
+                            pdf_split_task_fn,
+                        )
+                    else:
+                        pdf_bills = split_pdf_fn(
+                            uploaded_file, organization, file_type, request.user,
+                        )
+                    for b in pdf_bills:
+                        if b.file:
+                            uploaded_file_paths.append(b.file.name)
+                        if pdf_split_task_fn is not None:
+                            async_pdf_bill_ids.add(str(b.id))
+                        b.content_hash = content_hash
+                        b.save(update_fields=["content_hash"])
+                    created_bills.extend(pdf_bills)
+                else:
+                    bill = bill_model.objects.create(
+                        file=uploaded_file,
+                        fileType=file_type,
+                        status='Draft',
+                        organization=organization,
+                        uploaded_by=request.user,
+                        content_hash=content_hash,
+                    )
+                    if bill.file:
+                        uploaded_file_paths.append(bill.file.name)
+                    created_bills.append(bill)
+
+            # Defer enqueue to ``transaction.on_commit`` so jobs only fire
+            # after the DB row is truly durable. Prevents ghost jobs on
+            # rollback (#9 in the upload audit).
+            if enqueue_analysis_fn:
+                bill_ids_to_enqueue = [
+                    str(b.id) for b in created_bills
+                    if str(b.id) not in async_pdf_bill_ids
+                ]
+                org_id_str = str(organization.id)
+
+                def _enqueue_after_commit():
+                    for bid in bill_ids_to_enqueue:
+                        try:
+                            job = enqueue_analysis_fn(bid, org_id_str)
+                            bill_model.objects.filter(id=bid).update(
+                                job_id=job.id, is_processing=True,
+                            )
+                            logger.info(
+                                "Queued %s bill %s (job=%s) after commit",
+                                label, bid, job.id,
+                            )
+                        except Exception as enqueue_err:
+                            logger.error(
+                                "Failed to enqueue %s bill %s: %s",
+                                label, bid, enqueue_err,
+                            )
+
+                transaction.on_commit(_enqueue_after_commit)
+
+        # -------- outside the atomic block --------
+        # Response building for the async path. Actual enqueue already
+        # scheduled via ``transaction.on_commit`` above so job IDs are
+        # not yet populated at response time; the frontend polls for them.
         if enqueue_analysis_fn:
-            # Background processing mode (like vendor bills)
-            processing_jobs = []
-            
-            for bill in created_bills:
-                try:
-                    job = enqueue_analysis_fn(str(bill.id), str(organization.id))
-                    bill.job_id = job.id
-                    bill.is_processing = True
-                    bill.save(update_fields=['job_id', 'is_processing'])
-                    
-                    processing_jobs.append({
-                        'bill_id': str(bill.id),
-                        'bill_name': bill.billmunshiName,
-                        'job_id': job.id,
-                        'status': 'queued_for_processing'
-                    })
-                    logger.info(f"Queued {label} bill {bill.billmunshiName} for background processing")
-                except Exception as e:
-                    logger.error(f"Failed to queue {label} bill {bill.billmunshiName}: {str(e)}")
-                    processing_jobs.append({
-                        'bill_id': str(bill.id),
-                        'bill_name': bill.billmunshiName,
-                        'job_id': None,
-                        'status': 'failed_to_queue',
-                        'error': str(e)
-                    })
-            
-            response_serializer = list_serializer(created_bills, many=True, context={'request': request})
-            logger.info(f"Successfully processed {len(files)} files and created {len(created_bills)} {label} bills")
-            
+            processing_jobs = [
+                {
+                    'bill_id': str(bill.id),
+                    'bill_name': bill.billmunshiName,
+                    'job_id': None,
+                    'status': 'queued_for_processing',
+                }
+                for bill in created_bills
+            ]
+
+            response_serializer = list_serializer(
+                created_bills, many=True, context={'request': request},
+            )
+            logger.info(
+                f"Successfully processed {len(files)} files and created "
+                f"{len(created_bills)} {label} bills"
+            )
+
             response_data = {
-                'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} {label} bill(s). Processing started in background.',
+                'message': (
+                    f'Successfully uploaded {len(files)} file(s) and created '
+                    f'{len(created_bills)} {label} bill(s). '
+                    'Processing started in background.'
+                ),
                 'files_uploaded': len(files),
                 'bills_created': len(created_bills),
                 'bills': response_serializer.data,
                 'processing_jobs': processing_jobs,
-                'note': 'Bills are being processed in the background. The page will automatically refresh to show results.'
+                'note': (
+                    'Bills are being processed in the background. '
+                    'The page will automatically refresh to show results.'
+                ),
             }
-            
+
             if upload_warnings:
                 response_data['upload_warnings'] = upload_warnings
-                response_data['warning_message'] = f"📁 FILE WARNING: {len(upload_warnings)} file(s) may be duplicates based on filename/size"
-            
+                response_data['warning_message'] = (
+                    f"📁 FILE WARNING: {len(upload_warnings)} file(s) "
+                    "may be duplicates based on filename/size"
+                )
+
             return Response(response_data, status=status.HTTP_201_CREATED)
-        
+
         # Synchronous processing mode (legacy)
         # Auto-analyze uploaded bills and check for duplicates
         analysis_results = []
@@ -332,6 +450,19 @@ def zoho_bills_upload_base(
         logger.error(f"Error uploading {label} bills: {e}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
+        # Atomic block rolled back — clean up orphan files on disk (#10).
+        for path in uploaded_file_paths:
+            try:
+                if default_storage.exists(path):
+                    default_storage.delete(path)
+                    logger.info(
+                        "Cleaned up orphan Zoho upload after rollback: %s", path,
+                    )
+            except Exception as cleanup_err:
+                logger.warning(
+                    "Failed to delete orphan Zoho upload %s: %s",
+                    path, cleanup_err,
+                )
         return Response({'detail': f'Error processing files: {e}'}, status=status.HTTP_400_BAD_REQUEST)
 
 

@@ -270,25 +270,49 @@ def process_analysis_data(bill, json_data, organization):
 
             logger.warning(f"💵 Bill amounts - Total: {total_rounded}, IGST: {igst_rounded}, CGST: {cgst_rounded}, SGST: {sgst_rounded}")
 
-            analyzed_bill = TallyVendorAnalyzedBill.objects.create(
+            # ``get_or_create`` is idempotent under the double-analysis
+            # race (sync analyze button + async RQ job). ``defaults`` are
+            # only used when creating; if a row already exists we take
+            # the existing one and update the tax fields below so the
+            # newer analysis wins on the values that matter.
+            analyzed_bill, _created = TallyVendorAnalyzedBill.objects.get_or_create(
                 selected_bill=bill,
-                vendor=vendor,
-                bill_no=invoice_number,
-                bill_date=bill_date,
-                due_date=due_date,
-                igst=igst_rounded,
-                cgst=cgst_rounded,
-                sgst=sgst_rounded,
-                igst_taxes=igst_tax_ledger,  # 🎯 Assign IGST tax ledger
-                cgst_taxes=cgst_tax_ledger,  # 🎯 Assign CGST tax ledger
-                sgst_taxes=sgst_tax_ledger,  # 🎯 Assign SGST tax ledger
-                discount=discount_rounded,
-                total=total_rounded,
-                note="AI Analyzed Bill",
-                organization=organization,
-                gst_type=gst_type
+                defaults={
+                    "vendor": vendor,
+                    "bill_no": invoice_number,
+                    "bill_date": bill_date,
+                    "due_date": due_date,
+                    "igst": igst_rounded,
+                    "cgst": cgst_rounded,
+                    "sgst": sgst_rounded,
+                    "igst_taxes": igst_tax_ledger,
+                    "cgst_taxes": cgst_tax_ledger,
+                    "sgst_taxes": sgst_tax_ledger,
+                    "discount": discount_rounded,
+                    "total": total_rounded,
+                    "note": "AI Analyzed Bill",
+                    "organization": organization,
+                    "gst_type": gst_type,
+                },
             )
-            
+            if not _created:
+                # Second analyzer arrived after the first — overwrite the
+                # header fields with the new values (last-write-wins).
+                analyzed_bill.vendor = vendor
+                analyzed_bill.bill_no = invoice_number
+                analyzed_bill.bill_date = bill_date
+                analyzed_bill.due_date = due_date
+                analyzed_bill.igst = igst_rounded
+                analyzed_bill.cgst = cgst_rounded
+                analyzed_bill.sgst = sgst_rounded
+                analyzed_bill.igst_taxes = igst_tax_ledger
+                analyzed_bill.cgst_taxes = cgst_tax_ledger
+                analyzed_bill.sgst_taxes = sgst_tax_ledger
+                analyzed_bill.discount = discount_rounded
+                analyzed_bill.total = total_rounded
+                analyzed_bill.gst_type = gst_type
+                analyzed_bill.save()
+
             logger.warning(f"✅ Created TallyVendorAnalyzedBill with ID: {analyzed_bill.id}")
             logger.warning(f"✅ [NEW BILL] Saved analyzed bill with tax ledgers - IGST: {analyzed_bill.igst_taxes}, CGST: {analyzed_bill.cgst_taxes}, SGST: {analyzed_bill.sgst_taxes}")
 
@@ -525,8 +549,8 @@ def vendor_bills_list(request, org_id):
 def vendor_bills_upload(request, org_id):
     """Handle single or multiple vendor bill file uploads with PDF splitting support"""
     from .bill_helpers import bills_upload_base
-    from ..tasks import enqueue_vendor_bill_processing
-    
+    from ..tasks import enqueue_vendor_bill_processing, split_pdf_bill_vendor
+
     return bills_upload_base(
         request=request,
         org_id=org_id,
@@ -535,7 +559,8 @@ def vendor_bills_upload(request, org_id):
         response_serializer_class=TallyVendorBillSerializer,
         pdf_split_func=process_pdf_splitting,
         enqueue_func=enqueue_vendor_bill_processing,
-        bill_type_label="vendor"
+        bill_type_label="vendor",
+        pdf_split_task_fn=split_pdf_bill_vendor,
     )
 
 

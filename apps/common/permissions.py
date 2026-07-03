@@ -55,22 +55,62 @@ class IsSelfOrAdmin(BasePermission):
 
 class IsOrgAdmin(BasePermission):
     """
-    Permission class to check if the user is an admin of any organization.
-    For object-level organization checks, use IsOrgAdminForObject from organizations.permissions instead.
+    Permission class to check that the user is an admin of the SPECIFIC
+    organization referenced in the URL (``org_id`` view kwarg).
+
+    Previously this checked "is admin of any organization" — an admin of
+    Org A could pass this permission even on Org B's endpoints, defeating
+    per-org isolation. The IDOR guard in
+    ``get_organization_from_request`` closes the read hole, but for
+    write endpoints (upload, verify, sync, etc.) this permission is the
+    first line of defence and must be scoped to the URL org.
+
+    Fallback: if no ``org_id`` kwarg is present (endpoints not scoped by
+    URL), keep the old "any-org admin" behaviour so shared
+    account-wide endpoints don't accidentally break.
     """
     def has_permission(self, request, view):
         user = request.user
         if not user or not user.is_authenticated:
             return False
-        if user.is_superuser:
+        if user.is_superuser or user.is_staff:
             return True
-        return OrgMembership.objects.filter(
+
+        org_id = None
+        if hasattr(view, "kwargs") and isinstance(view.kwargs, dict):
+            org_id = view.kwargs.get("org_id")
+
+        base_qs = OrgMembership.objects.filter(
             user=user,
             role=OrgMembership.ADMIN,
-            is_active=True
-        ).exists()
+            is_active=True,
+        )
+        if org_id:
+            return base_qs.filter(organization_id=org_id).exists()
+        # No org_id in the URL — retain the wider "admin of any org"
+        # semantic. Views that need per-org enforcement without an
+        # ``org_id`` kwarg should call ``assert_org_access(admin_only=True)``
+        # directly.
+        return base_qs.exists()
 
     def has_object_permission(self, request, view, obj):
+        # ``obj`` may be a bill or nested resource carrying ``.organization``.
+        # When it does, verify the admin role against THAT org — this is
+        # the strictest form and closes the IDOR loop on detail views too.
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_superuser or user.is_staff:
+            return True
+        org = getattr(obj, "organization", None) or getattr(obj, "organization_id", None)
+        if org:
+            org_id = getattr(org, "id", org)
+            return OrgMembership.objects.filter(
+                user=user,
+                role=OrgMembership.ADMIN,
+                is_active=True,
+                organization_id=org_id,
+            ).exists()
         return self.has_permission(request, view)
 
 

@@ -282,6 +282,7 @@ def bills_upload_base(
     pdf_split_func,
     enqueue_func,
     bill_type_label="",
+    pdf_split_task_fn=None,
 ):
     """
     Generic upload handler for bills.
@@ -311,9 +312,18 @@ def bills_upload_base(
         if single_file:
             files_data = [single_file]
 
+    # Accept BOTH ``file_type`` (backend canonical) and ``fileType``
+    # (what the current React modal sends). Without the camelCase
+    # fallback, the Tally upload path silently defaulted every request
+    # to SINGLE — see #5 in the upload audit.
+    incoming_file_type = (
+        request.data.get('file_type')
+        or request.data.get('fileType')
+        or bill_model.BillType.SINGLE
+    )
     serializer_data = {
         'files': files_data,
-        'file_type': request.data.get('file_type', bill_model.BillType.SINGLE)
+        'file_type': incoming_file_type,
     }
 
     serializer = upload_serializer_class(data=serializer_data)
@@ -340,11 +350,27 @@ def bills_upload_base(
             'error_code': 'NO_FILES_PROVIDED'
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
+    # Track file paths written to storage inside the atomic block so we
+    # can delete them if the transaction rolls back. Django's ``FileField``
+    # writes the file to disk during ``.save()`` — BEFORE the atomic
+    # commits — so a rollback leaves orphan files on the filesystem.
+    # This list is consulted only in the ``except`` branch below.
+    uploaded_file_paths = []
+    # Bill ids created via the async PDF path — these are placeholders
+    # whose analysis is triggered by the split task after per-page
+    # rendering, so the after-commit callback must SKIP them.
+    async_pdf_bill_ids = set()
+
     try:
+        from django.core.files.storage import default_storage
         from django.db import transaction
-        
+
         with transaction.atomic():
             upload_warnings = []
+
+            from apps.common.services.content_hash import (
+                compute_file_hash, find_hash_duplicate,
+            )
 
             for uploaded_file in files:
                 file_extension = uploaded_file.name.lower().split('.')[-1]
@@ -354,44 +380,124 @@ def bills_upload_base(
                     _check_file_duplicates(uploaded_file, organization, bill_model, bill_type_label)
                 )
 
-                # Handle PDF splitting for MULTI type
+                # Exact-duplicate short-circuit via SHA-256 content hash
+                # (see #8 in the upload audit). If a bill with the same
+                # bytes already exists in this org, mark the incoming file
+                # as duplicate warning and skip re-analysis.
+                content_hash = compute_file_hash(uploaded_file)
+                existing_hash_dup = find_hash_duplicate(
+                    bill_model, organization, content_hash,
+                )
+                if existing_hash_dup:
+                    upload_warnings.append({
+                        'file_name': uploaded_file.name,
+                        'warning_type': 'exact_duplicate',
+                        'existing_bill_id': str(existing_hash_dup.id),
+                        'existing_bill_name': getattr(
+                            existing_hash_dup, 'bill_munshi_name', None,
+                        ) or getattr(existing_hash_dup, 'billmunshiName', None),
+                        'message': (
+                            f"'{uploaded_file.name}' is byte-for-byte "
+                            f"identical to a previously uploaded bill; "
+                            f"skipping re-analysis."
+                        ),
+                    })
+                    logger.info(
+                        "Exact-duplicate detected for %s (hash=%s) — skipping upload",
+                        uploaded_file.name, content_hash[:12],
+                    )
+                    continue
+
+                # Handle PDF splitting for MULTI type. When an async task
+                # function is supplied (#14 in the upload audit), persist
+                # the PDF as a placeholder bill and let RQ do the page
+                # rendering — otherwise fall back to the sync splitter.
                 if file_type == bill_model.BillType.MULTI and file_extension == 'pdf':
-                    pdf_bills = pdf_split_func(uploaded_file, organization, file_type, request.user)
+                    if pdf_split_task_fn is not None:
+                        from apps.common.services.pdf_processing import (
+                            enqueue_pdf_split_async,
+                        )
+                        pdf_bills = enqueue_pdf_split_async(
+                            uploaded_file,
+                            organization,
+                            file_type,
+                            request.user,
+                            bill_model,
+                            pdf_split_task_fn,
+                        )
+                    else:
+                        pdf_bills = pdf_split_func(
+                            uploaded_file, organization, file_type, request.user,
+                        )
+                    for pdf_bill in pdf_bills:
+                        if pdf_bill.file:
+                            uploaded_file_paths.append(pdf_bill.file.name)
+                        if pdf_split_task_fn is not None:
+                            async_pdf_bill_ids.add(str(pdf_bill.id))
+                            # Placeholder carries the container-PDF hash;
+                            # per-page bills get their own hash from the
+                            # split task.
+                            pdf_bill.content_hash = content_hash
+                            pdf_bill.save(update_fields=["content_hash"])
                     created_bills.extend(pdf_bills)
                 else:
                     bill = bill_model.objects.create(
                         file=uploaded_file,
                         file_type=file_type,
                         organization=organization,
-                        uploaded_by=request.user
+                        uploaded_by=request.user,
+                        content_hash=content_hash,
                     )
+                    if bill.file:
+                        uploaded_file_paths.append(bill.file.name)
                     created_bills.append(bill)
 
-        # Start background processing
-        job_results = []
-        for bill in created_bills:
-            try:
-                job = enqueue_func(str(bill.id))
-                bill.job_id = job.id
-                bill.is_processing = True
-                bill.save(update_fields=['job_id', 'is_processing'])
+            # Enqueue RQ jobs via ``transaction.on_commit`` so they fire
+            # ONLY if the surrounding transaction actually commits — a
+            # rollback silently discards the pending callbacks and no
+            # ghost jobs are queued for non-existent bill rows (#9 in
+            # the upload audit).
+            bill_ids_to_enqueue = [
+                str(b.id) for b in created_bills
+                if str(b.id) not in async_pdf_bill_ids
+            ]
 
-                job_results.append({
-                    'bill_id': str(bill.id),
-                    'bill_name': bill.bill_munshi_name,
-                    'job_id': job.id,
-                    'status': 'queued_for_processing'
-                })
-                logger.info(f"Queued {bill_type_label} bill {bill.bill_munshi_name} for background processing")
-            except Exception as e:
-                logger.error(f"Failed to queue {bill_type_label} bill {bill.bill_munshi_name}: {str(e)}")
-                job_results.append({
-                    'bill_id': str(bill.id),
-                    'bill_name': bill.bill_munshi_name,
-                    'job_id': None,
-                    'status': 'failed_to_queue',
-                    'error': str(e)
-                })
+            def _enqueue_after_commit():
+                for bill_id in bill_ids_to_enqueue:
+                    try:
+                        job = enqueue_func(bill_id)
+                        bill_model.objects.filter(id=bill_id).update(
+                            job_id=job.id,
+                            is_processing=True,
+                        )
+                        logger.info(
+                            "Queued %s bill %s (job=%s) after commit",
+                            bill_type_label, bill_id, job.id,
+                        )
+                    except Exception as enqueue_err:
+                        # Redis down / RQ crash mid-enqueue: log and
+                        # move on. Bill row stays in Draft with
+                        # ``is_processing=False`` and can be manually
+                        # analysed by the user.
+                        logger.error(
+                            "Failed to enqueue %s bill %s: %s",
+                            bill_type_label, bill_id, enqueue_err,
+                        )
+
+            transaction.on_commit(_enqueue_after_commit)
+
+        # Response reports the bills as ``queued`` — actual job_ids are
+        # populated post-commit; the frontend polls the status endpoint
+        # to see when the analysis is done.
+        job_results = [
+            {
+                'bill_id': str(bill.id),
+                'bill_name': bill.bill_munshi_name,
+                'job_id': None,          # set post-commit by the callback
+                'status': 'queued_for_processing',
+            }
+            for bill in created_bills
+        ]
 
         response_serializer = response_serializer_class(created_bills, many=True, context={'request': request})
 
@@ -412,6 +518,24 @@ def bills_upload_base(
 
     except Exception as e:
         logger.error(f"Error uploading {bill_type_label} bills: {str(e)}")
+        # The atomic block rolled back — DB rows are gone but the
+        # FileField already wrote the underlying files to storage.
+        # Delete any orphans so /media/bills/ doesn't accumulate
+        # unowned uploads (see #10 in the audit).
+        try:
+            from django.core.files.storage import default_storage
+            for path in uploaded_file_paths:
+                try:
+                    if default_storage.exists(path):
+                        default_storage.delete(path)
+                        logger.info("Cleaned up orphan upload after rollback: %s", path)
+                except Exception as cleanup_err:
+                    logger.warning(
+                        "Failed to delete orphan upload %s: %s", path, cleanup_err,
+                    )
+        except Exception:
+            pass
+
         return Response({
             'error': f'{bill_type_label.title()} File Upload Processing Failed',
             'message': 'There was an error processing the uploaded files.',

@@ -552,9 +552,34 @@ def vendor_bills_list_view(request, org_id):
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
 def vendor_bill_upload_view(request, org_id):
-    """Handle single or multiple vendor bill file uploads with PDF splitting support"""
+    """Handle single or multiple vendor bill file uploads.
 
-    # Handle both single file and multiple files seamlessly
+    Delegates to the shared ``zoho_bills_upload_base`` helper — same
+    pattern the expense + journal upload views use. Consolidation
+    removed ~250 lines of copy-paste (see #13 in the upload audit).
+    """
+    from ..tasks import enqueue_vendor_bill_analysis, split_pdf_bill_vendor
+    from .bill_view_helpers import zoho_bills_upload_base
+
+    return zoho_bills_upload_base(
+        request, org_id,
+        bill_model=VendorBill,
+        list_serializer=ZohoVendorBillSerializer,
+        upload_serializer=ZohoVendorBillMultipleUploadSerializer,
+        label='vendor',
+        split_pdf_fn=process_pdf_splitting_vendor,
+        enqueue_analysis_fn=enqueue_vendor_bill_analysis,
+        pdf_split_task_fn=split_pdf_bill_vendor,
+    )
+
+
+# ------------------------------------------------------------------
+# Legacy inline implementation kept as ``_vendor_bill_upload_legacy``
+# purely for git history / reference. Delete once the shared helper
+# has soaked in production for a release.
+# ------------------------------------------------------------------
+def _vendor_bill_upload_legacy(request, org_id):
+    """DEPRECATED — kept for reference only. Do not call."""
     files_data = []
 
     # Debug logging with prints (will show in gunicorn logs)
@@ -618,14 +643,17 @@ def vendor_bill_upload_view(request, org_id):
         }, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        # Temporarily removing atomic transaction to debug
-        # with transaction.atomic():
-        logger.debug(f"[VENDOR DEBUG] Starting to process {len(files)} files")
+        # atomic() restored — earlier code had this commented out with
+        # a "Temporarily removing atomic transaction to debug" note.
+        # Without atomic, a mid-loop failure leaves partial bill rows +
+        # orphan files on disk (see #3 in the upload audit).
+        with transaction.atomic():
+            logger.debug(f"[VENDOR DEBUG] Starting to process {len(files)} files")
 
-        # Check for potential duplicates based on file characteristics
-        upload_warnings = []
+            # Check for potential duplicates based on file characteristics
+            upload_warnings = []
 
-        for i, uploaded_file in enumerate(files):
+            for i, uploaded_file in enumerate(files):
                 logger.debug(f"[VENDOR DEBUG] Processing file {i+1}/{len(files)}: {uploaded_file.name}")
                 file_extension = uploaded_file.name.lower().split('.')[-1]
 

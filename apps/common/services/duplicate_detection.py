@@ -188,13 +188,16 @@ def update_bill_duplicate_metadata(bill, duplicate_bills, max_similarity):
         duplicate_bills = duplicate_bills or []
         max_similarity = max_similarity or 0.0
 
+        # Signed URLs so the file viewer can load these matches even
+        # though ``/media/bills/…`` refuses unsigned requests.
+        from apps.common.views import generate_signed_bill_file_url
         formatted_matches = []
         for dup in duplicate_bills[:5]:
             dup_bill = dup.get("bill")
             file_url = None
             try:
                 if dup_bill and dup_bill.file:
-                    file_url = dup_bill.file.url
+                    file_url = generate_signed_bill_file_url(dup_bill.file)
             except Exception:
                 file_url = None
 

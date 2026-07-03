@@ -48,6 +48,99 @@ def enqueue_expense_bill_processing(bill_id):
     return enqueue_bill_processing(process_expense_bill_analysis, bill_id)
 
 
+def enqueue_pdf_split_vendor(bill_id):
+    """Enqueue the page-by-page splitting of a placeholder vendor PDF."""
+    return enqueue_bill_processing(split_pdf_bill_vendor, bill_id)
+
+
+def enqueue_pdf_split_expense(bill_id):
+    """Enqueue the page-by-page splitting of a placeholder expense PDF."""
+    return enqueue_bill_processing(split_pdf_bill_expense, bill_id)
+
+
+# ---------------------------------------------------------------------------
+# PDF split task processors (async — see #14 in the upload audit)
+# ---------------------------------------------------------------------------
+
+def _split_pdf_placeholder(bill_id, *, model_class, enqueue_analysis_fn):
+    """Render the placeholder's PDF into per-page bills.
+
+    Called by ``django-rq`` from ``enqueue_pdf_split_*``. On success the
+    placeholder bill is deleted and one new bill is created per page,
+    each individually enqueued for AI analysis (mirrors what the
+    inline path used to do — just off the request thread).
+    """
+    from io import BytesIO
+
+    from apps.common.services.pdf_processing import split_pdf_to_bills
+
+    try:
+        placeholder = model_class.objects.get(id=bill_id)
+    except model_class.DoesNotExist:
+        logger.warning("PDF placeholder %s not found — skipping split", bill_id)
+        return
+
+    try:
+        placeholder.file.seek(0)
+        pdf_bytes = placeholder.file.read()
+        # Wrap so ``split_pdf_to_bills`` can call ``.seek(0)`` / ``.read()``.
+        buf = BytesIO(pdf_bytes)
+        buf.name = placeholder.file.name
+        page_bills = split_pdf_to_bills(
+            buf,
+            placeholder.organization,
+            placeholder.file_type,
+            placeholder.uploaded_by,
+            model_class,
+        )
+        # Kick off analysis for each new per-page bill.
+        for page_bill in page_bills:
+            try:
+                job = enqueue_analysis_fn(str(page_bill.id))
+                page_bill.job_id = job.id
+                page_bill.is_processing = True
+                page_bill.save(update_fields=["job_id", "is_processing"])
+            except Exception as enqueue_err:
+                logger.error(
+                    "Failed to enqueue analysis for split-page bill %s: %s",
+                    page_bill.id, enqueue_err,
+                )
+
+        # Placeholder no longer needed — the per-page bills carry the data.
+        try:
+            placeholder.file.delete(save=False)
+        except Exception:
+            pass
+        placeholder.delete()
+        logger.info(
+            "PDF split complete for placeholder %s: %d page-bills created",
+            bill_id, len(page_bills),
+        )
+    except Exception as exc:
+        logger.exception("PDF split failed for placeholder %s: %s", bill_id, exc)
+        placeholder.is_processing = False
+        placeholder.processing_error = f"PDF split failed: {exc}"
+        placeholder.save(update_fields=["is_processing", "processing_error"])
+
+
+def split_pdf_bill_vendor(bill_id, **kwargs):
+    """RQ entry point: split a placeholder vendor PDF into per-page bills."""
+    return _split_pdf_placeholder(
+        bill_id,
+        model_class=TallyVendorBill,
+        enqueue_analysis_fn=enqueue_vendor_bill_processing,
+    )
+
+
+def split_pdf_bill_expense(bill_id, **kwargs):
+    """RQ entry point: split a placeholder expense PDF into per-page bills."""
+    return _split_pdf_placeholder(
+        bill_id,
+        model_class=TallyExpenseBill,
+        enqueue_analysis_fn=enqueue_expense_bill_processing,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Task processors
 # ---------------------------------------------------------------------------

@@ -160,8 +160,8 @@ def journal_bills_list_view(request, org_id):
 @parser_classes([MultiPartParser, FormParser])
 def journal_bill_upload_view(request, org_id):
     """Handle single or multiple journal bill file uploads with PDF splitting support."""
-    from ..tasks import enqueue_journal_bill_analysis
-    
+    from ..tasks import enqueue_journal_bill_analysis, split_pdf_bill_journal
+
     return zoho_bills_upload_base(
         request, org_id,
         bill_model=JournalBill,
@@ -173,6 +173,7 @@ def journal_bill_upload_view(request, org_id):
         analyze_fn=analyze_bill_with_openai,
         create_objects_fn=create_journal_zoho_objects_from_analysis,
         enqueue_analysis_fn=enqueue_journal_bill_analysis,  # Enable background processing
+        pdf_split_task_fn=split_pdf_bill_journal,
     )
 
 

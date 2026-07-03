@@ -46,6 +46,103 @@ def enqueue_journal_bill_analysis(bill_id, organization_id):
 
 
 # ---------------------------------------------------------------------------
+# Async PDF-split task (see #14 in the upload audit)
+# ---------------------------------------------------------------------------
+
+def _split_zoho_pdf_placeholder(bill_id, *, model_class, enqueue_analysis_fn):
+    from io import BytesIO
+
+    from apps.common.services.pdf_processing import split_pdf_to_bills
+
+    try:
+        placeholder = model_class.objects.get(id=bill_id)
+    except model_class.DoesNotExist:
+        logger.warning("Zoho PDF placeholder %s not found", bill_id)
+        return
+
+    try:
+        placeholder.file.seek(0)
+        pdf_bytes = placeholder.file.read()
+        buf = BytesIO(pdf_bytes)
+        buf.name = placeholder.file.name
+        page_bills = split_pdf_to_bills(
+            buf,
+            placeholder.organization,
+            placeholder.fileType,
+            placeholder.uploaded_by,
+            model_class,
+        )
+        org_id_str = str(placeholder.organization.id)
+        for page_bill in page_bills:
+            try:
+                job = enqueue_analysis_fn(str(page_bill.id), org_id_str)
+                page_bill.job_id = job.id
+                page_bill.is_processing = True
+                page_bill.save(update_fields=["job_id", "is_processing"])
+            except Exception as enqueue_err:
+                logger.error(
+                    "Failed to enqueue analysis for zoho page-bill %s: %s",
+                    page_bill.id, enqueue_err,
+                )
+        try:
+            placeholder.file.delete(save=False)
+        except Exception:
+            pass
+        placeholder.delete()
+        logger.info(
+            "Zoho PDF split complete for %s: %d page-bills",
+            bill_id, len(page_bills),
+        )
+    except Exception as exc:
+        logger.exception("Zoho PDF split failed for %s: %s", bill_id, exc)
+        placeholder.is_processing = False
+        if hasattr(placeholder, "processing_error"):
+            placeholder.processing_error = f"PDF split failed: {exc}"
+            placeholder.save(update_fields=["is_processing", "processing_error"])
+        else:
+            placeholder.save(update_fields=["is_processing"])
+
+
+def split_pdf_bill_vendor(bill_id, **kwargs):
+    from .models import VendorBill
+    return _split_zoho_pdf_placeholder(
+        bill_id,
+        model_class=VendorBill,
+        enqueue_analysis_fn=enqueue_vendor_bill_analysis,
+    )
+
+
+def split_pdf_bill_expense(bill_id, **kwargs):
+    from .models import ExpenseBill
+    return _split_zoho_pdf_placeholder(
+        bill_id,
+        model_class=ExpenseBill,
+        enqueue_analysis_fn=enqueue_expense_bill_analysis,
+    )
+
+
+def split_pdf_bill_journal(bill_id, **kwargs):
+    from .models import JournalBill
+    return _split_zoho_pdf_placeholder(
+        bill_id,
+        model_class=JournalBill,
+        enqueue_analysis_fn=enqueue_journal_bill_analysis,
+    )
+
+
+def enqueue_pdf_split_vendor(bill_id):
+    return enqueue_bill_processing(split_pdf_bill_vendor, bill_id)
+
+
+def enqueue_pdf_split_expense(bill_id):
+    return enqueue_bill_processing(split_pdf_bill_expense, bill_id)
+
+
+def enqueue_pdf_split_journal(bill_id):
+    return enqueue_bill_processing(split_pdf_bill_journal, bill_id)
+
+
+# ---------------------------------------------------------------------------
 # Internal: shared Zoho-specific task skeleton
 # ---------------------------------------------------------------------------
 

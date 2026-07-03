@@ -12,6 +12,7 @@ import logging
 from rest_framework import serializers
 
 from apps.common.serializers import FileUploadField, UploadedByUserSerializer  # noqa: F401
+from apps.common.views import generate_signed_bill_file_url
 
 logger = logging.getLogger(__name__)
 
@@ -52,17 +53,24 @@ class BaseZohoBillListSerializer(serializers.ModelSerializer):
     file = serializers.SerializerMethodField()
     uploaded_by = UploadedByUserSerializer(read_only=True)
     uploaded_by_name = serializers.SerializerMethodField()
+    # Snake-case aliases (#12 in the upload audit). Emit both keys so
+    # legacy consumers still receive ``billmunshiName``/``fileType``
+    # while new callers can move to the canonical snake_case names.
+    bill_munshi_name = serializers.CharField(source="billmunshiName", read_only=True)
+    file_type = serializers.CharField(source="fileType", read_only=True)
 
     class Meta:
         fields = [
-            "id", "billmunshiName", "file", "fileType", "analysed_data", "status",
+            "id", "billmunshiName", "bill_munshi_name",
+            "file", "fileType", "file_type", "analysed_data", "status",
             "process", "uploaded_by", "uploaded_by_name", "created_at", "update_at",
             "is_duplicate", "duplicate_description", "duplicate_score", "duplicate_matched_bills",
             "is_processing", "processing_error", "job_id",
             "bill_belong_your_org", "description",
         ]
         read_only_fields = [
-            "id", "billmunshiName", "file", "uploaded_by", "uploaded_by_name",
+            "id", "billmunshiName", "bill_munshi_name",
+            "file", "file_type", "uploaded_by", "uploaded_by_name",
             "analysed_data", "created_at", "update_at",
             "is_duplicate", "duplicate_description", "duplicate_score", "duplicate_matched_bills",
             "is_processing", "processing_error", "job_id",
@@ -70,10 +78,16 @@ class BaseZohoBillListSerializer(serializers.ModelSerializer):
         ]
 
     def get_file(self, obj):
-        if obj.file:
-            request = self.context.get("request")
-            return request.build_absolute_uri(obj.file.url) if request else obj.file.url
-        return None
+        """Return a short-lived, HMAC-signed URL for the bill file.
+
+        ``/media/bills/…`` refuses unsigned requests — see
+        ``apps.common.views.serve_bill_file``.
+        """
+        if not obj.file:
+            return None
+        return generate_signed_bill_file_url(
+            obj.file, request=self.context.get("request")
+        )
 
     def get_uploaded_by_name(self, obj):
         if obj.uploaded_by:
@@ -96,8 +110,10 @@ class BaseZohoBillDetailSerializer(serializers.Serializer):
 
     id = serializers.UUIDField(read_only=True)
     billmunshiName = serializers.CharField(read_only=True)
+    bill_munshi_name = serializers.CharField(source="billmunshiName", read_only=True)
     file = serializers.FileField(read_only=True)
     fileType = serializers.CharField(read_only=True)
+    file_type = serializers.CharField(source="fileType", read_only=True)
     status = serializers.CharField(read_only=True)
     process = serializers.BooleanField(read_only=True)
     created_at = serializers.DateTimeField(read_only=True)

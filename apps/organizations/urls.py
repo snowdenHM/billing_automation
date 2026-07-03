@@ -1,4 +1,5 @@
 from django.urls import path
+from apps.common.views_notifications import poll_notifications
 from .views import (
     organization_list_view,
     organization_detail_view,
@@ -60,4 +61,7 @@ urlpatterns = [
     path("org/create-with-module/", organization_create_with_module_view, name="org-create-with-module"),
     path("org/onboarding/create/", organization_onboarding_create_view, name="org-onboarding-create"),
     path("org/onboarding/<uuid:org_id>/enable-module/", organization_onboarding_enable_module_view, name="org-onboarding-enable-module"),
+
+    # Polling notifications (see #16 in the upload audit)
+    path("org/<uuid:org_id>/notifications/", poll_notifications, name="org-notifications-poll"),
 ]

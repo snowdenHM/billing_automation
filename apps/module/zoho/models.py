@@ -10,7 +10,11 @@ from django.db import models
 from django.utils import timezone
 
 from apps.organizations.models import Organization
-from apps.common.validators import validate_bill_file_size, validate_file_extension
+from apps.common.validators import (
+    bill_upload_path,
+    validate_bill_file_size,
+    validate_file_extension,
+)
 
 
 # -----------------------------
@@ -294,12 +298,12 @@ class VendorBill(BaseTeamModel):
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     billmunshiName = models.CharField(max_length=100, null=True, blank=True)
-    file = models.FileField(upload_to="bills/", validators=[validate_file_extension, validate_bill_file_size])
+    file = models.FileField(upload_to=bill_upload_path, validators=[validate_file_extension, validate_bill_file_size])
     fileType = models.CharField(choices=BILL_TYPE_CHOICES, max_length=100, null=True, blank=True,
                                 default="Single Invoice/File")
     analysed_data = models.JSONField(default=dict, null=True, blank=True)
     status = models.CharField(max_length=10, choices=BILL_STATUS_CHOICES, default="Draft", blank=True)
-    process = models.BooleanField(default=False)
+    process = models.BooleanField(default=False, help_text=("HAS-been-analysed flag: True once AI analysis has produced ``analysed_data`` and an ``analysed_headers`` row. Semantically means \"analysis done\", not \"currently processing\". For the in-progress state see ``is_processing``. Historical name — keep for backwards compat."))
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -318,6 +322,10 @@ class VendorBill(BaseTeamModel):
     is_processing = models.BooleanField(default=False, help_text="Whether this bill is currently being processed in background")
     processing_error = models.TextField(blank=True, null=True, help_text="Error message if processing failed")
     job_id = models.CharField(max_length=100, blank=True, null=True, help_text="Background job ID for tracking")
+    content_hash = models.CharField(
+        max_length=64, blank=True, null=True, db_index=True,
+        help_text="SHA-256 hex digest of the uploaded file for exact-duplicate detection",
+    )
 
     # Bill ownership and description
     bill_belong_your_org = models.BooleanField(default=False, help_text="Whether this bill belongs to your organization")
@@ -585,12 +593,12 @@ class JournalBill(BaseTeamModel):
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     billmunshiName = models.CharField(max_length=100, null=True, blank=True)
-    file = models.FileField(upload_to="bills/", validators=[validate_file_extension, validate_bill_file_size])
+    file = models.FileField(upload_to=bill_upload_path, validators=[validate_file_extension, validate_bill_file_size])
     fileType = models.CharField(choices=BILL_TYPE_CHOICES, max_length=100, null=True, blank=True,
                                 default="Single Invoice/File")
     analysed_data = models.JSONField(default=dict, null=True, blank=True)
     status = models.CharField(max_length=10, choices=BILL_STATUS_CHOICES, default="Draft", blank=True)
-    process = models.BooleanField(default=False)
+    process = models.BooleanField(default=False, help_text=("HAS-been-analysed flag: True once AI analysis has produced ``analysed_data`` and an ``analysed_headers`` row. Semantically means \"analysis done\", not \"currently processing\". For the in-progress state see ``is_processing``. Historical name — keep for backwards compat."))
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -609,6 +617,10 @@ class JournalBill(BaseTeamModel):
     is_processing = models.BooleanField(default=False, help_text="Whether this bill is currently being processed in background")
     processing_error = models.TextField(blank=True, null=True, help_text="Error message if processing failed")
     job_id = models.CharField(max_length=100, blank=True, null=True, help_text="Background job ID for tracking")
+    content_hash = models.CharField(
+        max_length=64, blank=True, null=True, db_index=True,
+        help_text="SHA-256 hex digest of the uploaded file for exact-duplicate detection",
+    )
 
     # Bill ownership and description
     bill_belong_your_org = models.BooleanField(default=False, help_text="Whether this bill belongs to your organization")
@@ -858,12 +870,12 @@ class ExpenseBill(BaseTeamModel):
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     billmunshiName = models.CharField(max_length=100, null=True, blank=True)
-    file = models.FileField(upload_to="bills/", validators=[validate_file_extension, validate_bill_file_size])
+    file = models.FileField(upload_to=bill_upload_path, validators=[validate_file_extension, validate_bill_file_size])
     fileType = models.CharField(choices=BILL_TYPE_CHOICES, max_length=100, null=True, blank=True,
                                 default="Single Invoice/File")
     analysed_data = models.JSONField(default=dict, null=True, blank=True)
     status = models.CharField(max_length=10, choices=BILL_STATUS_CHOICES, default="Draft", blank=True)
-    process = models.BooleanField(default=False)
+    process = models.BooleanField(default=False, help_text=("HAS-been-analysed flag: True once AI analysis has produced ``analysed_data`` and an ``analysed_headers`` row. Semantically means \"analysis done\", not \"currently processing\". For the in-progress state see ``is_processing``. Historical name — keep for backwards compat."))
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -882,6 +894,10 @@ class ExpenseBill(BaseTeamModel):
     is_processing = models.BooleanField(default=False, help_text="Whether this bill is currently being processed in background")
     processing_error = models.TextField(blank=True, null=True, help_text="Error message if processing failed")
     job_id = models.CharField(max_length=100, blank=True, null=True, help_text="Background job ID for tracking")
+    content_hash = models.CharField(
+        max_length=64, blank=True, null=True, db_index=True,
+        help_text="SHA-256 hex digest of the uploaded file for exact-duplicate detection",
+    )
 
     # Bill ownership and description
     bill_belong_your_org = models.BooleanField(default=False, help_text="Whether this bill belongs to your organization")

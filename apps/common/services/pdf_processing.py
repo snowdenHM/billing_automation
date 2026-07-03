@@ -58,14 +58,16 @@ def split_pdf_to_bills(
                 page_images[0].save(image_io, format="JPEG")
                 image_io.seek(0)
 
+                field_names = {f.name for f in bill_model._meta.get_fields()}
+                type_field = "file_type" if "file_type" in field_names else "fileType"
                 bill = bill_model.objects.create(
                     file=ContentFile(
                         image_io.read(),
                         name=f"{filename_prefix}-{page_num + 1}-{unique_id}.jpg",
                     ),
-                    file_type=file_type,
                     organization=organization,
                     uploaded_by=uploaded_by,
+                    **{type_field: file_type},
                 )
                 created_bills.append(bill)
 
@@ -74,3 +76,63 @@ def split_pdf_to_bills(
         raise Exception(f"PDF processing failed: {str(e)}")
 
     return created_bills
+
+
+def enqueue_pdf_split_async(
+    pdf_file,
+    organization,
+    file_type,
+    uploaded_by,
+    bill_model,
+    split_task_fn,
+    filename_prefix="BM-Container",
+):
+    """Save the PDF as a *placeholder* bill and enqueue the split for RQ.
+
+    Instead of rendering all pages in the request thread (which can
+    block for tens of seconds on a 50-page PDF — see #14 in the upload
+    audit), we:
+
+    1. Persist the original PDF as a single placeholder bill row with
+       ``is_processing=True`` — the user sees "Splitting in progress".
+    2. Enqueue ``split_task_fn(placeholder_bill_id)`` which fires the
+       actual page-by-page render + per-page bill creation via
+       ``split_pdf_to_bills``, then deletes the placeholder.
+
+    Callers pass ``split_task_fn`` (module-specific, e.g.
+    ``apps.module.tally.tasks.split_pdf_bill_task``) so the RQ worker
+    can locate the right model + downstream analyzer.
+
+    Returns a single-item list containing the placeholder bill so the
+    upload endpoint response shape is unchanged from the sync path.
+    """
+    pdf_file.seek(0)
+    pdf_bytes = pdf_file.read()
+    original_name = getattr(pdf_file, "name", "container.pdf")
+
+    # Model field for bill type varies (Tally uses ``file_type``, Zoho
+    # uses ``fileType``). Pick whichever the model actually defines.
+    field_names = {f.name for f in bill_model._meta.get_fields()}
+    type_field = "file_type" if "file_type" in field_names else "fileType"
+
+    placeholder = bill_model.objects.create(
+        file=ContentFile(pdf_bytes, name=f"{filename_prefix}-{original_name}"),
+        organization=organization,
+        uploaded_by=uploaded_by,
+        is_processing=True,
+        **{type_field: file_type},
+    )
+    # Enqueue via ``transaction.on_commit`` at the caller — same guarantee
+    # as regular bill analysis, so the split job only fires if the
+    # surrounding upload transaction actually commits.
+    try:
+        from django.db import transaction
+        transaction.on_commit(
+            lambda: split_task_fn(str(placeholder.id))
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to schedule PDF split for placeholder %s: %s",
+            placeholder.id, exc,
+        )
+    return [placeholder]

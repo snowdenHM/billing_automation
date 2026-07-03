@@ -9,7 +9,11 @@ from django.conf import settings
 from django.db import models
 
 from apps.organizations.models import Organization
-from apps.common.validators import validate_bill_file_size, validate_file_extension
+from apps.common.validators import (
+    bill_upload_path,
+    validate_bill_file_size,
+    validate_file_extension,
+)
 
 
 # -----------------------------
@@ -298,7 +302,7 @@ class TallyVendorBill(BaseOrgModel):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
     bill_munshi_name = models.CharField(max_length=100, blank=True, null=True)  # Fixed: was billmunshiName
-    file = models.FileField(upload_to="bills/", validators=[validate_file_extension, validate_bill_file_size])
+    file = models.FileField(upload_to=bill_upload_path, validators=[validate_file_extension, validate_bill_file_size])
     file_type = models.CharField(
         choices=BillType.choices, max_length=100, blank=True, null=True, default=BillType.SINGLE
     )
@@ -306,7 +310,7 @@ class TallyVendorBill(BaseOrgModel):
     status = models.CharField(
         max_length=10, choices=BillStatus.choices, default=BillStatus.DRAFT, blank=True
     )
-    process = models.BooleanField(default=False)
+    process = models.BooleanField(default=False, help_text=("HAS-been-analysed flag: True once AI analysis has produced ``analysed_data`` and an ``analysed_headers`` row. Semantically means \"analysis done\", not \"currently processing\". For the in-progress state see ``is_processing``. Historical name — keep for backwards compat."))
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -326,6 +330,10 @@ class TallyVendorBill(BaseOrgModel):
     is_processing = models.BooleanField(default=False, help_text="Whether this bill is currently being processed in background")
     processing_error = models.TextField(blank=True, null=True, help_text="Error message if processing failed")
     job_id = models.CharField(max_length=100, blank=True, null=True, help_text="Background job ID for tracking")
+    content_hash = models.CharField(
+        max_length=64, blank=True, null=True, db_index=True,
+        help_text="SHA-256 hex digest of the uploaded file for exact-duplicate detection",
+    )
 
     # Tally sync status
     tally_synced = models.BooleanField(default=False, help_text="Whether this bill has been synced with Tally")
@@ -389,6 +397,11 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
         UNKNOWN = "Unknown", "Unknown"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    # ``selected_bill`` is 1:1 semantically — one AnalyzedBill per parent
+    # ``TallyVendorBill``. Enforced at DB level via ``UniqueConstraint`` in
+    # ``Meta.constraints`` below so the double-analysis race (sync analyze
+    # button + async RQ job creating twin rows) can no longer create
+    # duplicates. Sync callers should use ``get_or_create`` to be idempotent.
     selected_bill = models.ForeignKey(
         TallyVendorBill, on_delete=models.CASCADE, blank=True, null=True, related_name="analysed_headers"
     )
@@ -448,6 +461,15 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
     class Meta:
         verbose_name = "Tally Vendor Analysed Bill"
         verbose_name_plural = "Tally Vendor Analysed Bills"
+        constraints = [
+            # One AnalyzedBill per parent TallyVendorBill. Closes the
+            # sync-analyze + async-RQ double-create race.
+            models.UniqueConstraint(
+                fields=["selected_bill"],
+                name="uq_tally_vendor_analyzed_selected_bill",
+                condition=models.Q(selected_bill__isnull=False),
+            ),
+        ]
 
     def __str__(self) -> str:
         return (self.selected_bill.bill_munshi_name if self.selected_bill else None) or f"VendorAnalysed:{self.id}"
@@ -637,7 +659,7 @@ class TallyExpenseBill(BaseOrgModel):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
     bill_munshi_name = models.CharField(max_length=100, blank=True, null=True)  # Fixed: was billmunshiName
-    file = models.FileField(upload_to="bills/", validators=[validate_file_extension, validate_bill_file_size])
+    file = models.FileField(upload_to=bill_upload_path, validators=[validate_file_extension, validate_bill_file_size])
     file_type = models.CharField(  # Fixed: was fileType
         choices=BillType.choices, max_length=100, blank=True, null=True, default=BillType.SINGLE
     )
@@ -645,7 +667,7 @@ class TallyExpenseBill(BaseOrgModel):
     status = models.CharField(
         max_length=10, choices=BillStatus.choices, default=BillStatus.DRAFT, blank=True
     )
-    process = models.BooleanField(default=False)
+    process = models.BooleanField(default=False, help_text=("HAS-been-analysed flag: True once AI analysis has produced ``analysed_data`` and an ``analysed_headers`` row. Semantically means \"analysis done\", not \"currently processing\". For the in-progress state see ``is_processing``. Historical name — keep for backwards compat."))
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -665,6 +687,10 @@ class TallyExpenseBill(BaseOrgModel):
     is_processing = models.BooleanField(default=False, help_text="Whether this bill is currently being processed in background")
     processing_error = models.TextField(blank=True, null=True, help_text="Error message if processing failed")
     job_id = models.CharField(max_length=100, blank=True, null=True, help_text="Background job ID for tracking")
+    content_hash = models.CharField(
+        max_length=64, blank=True, null=True, db_index=True,
+        help_text="SHA-256 hex digest of the uploaded file for exact-duplicate detection",
+    )
 
     # Tally sync status
     tally_synced = models.BooleanField(default=False, help_text="Whether this bill has been synced with Tally")
@@ -807,6 +833,15 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
     class Meta:
         verbose_name = "Tally Expense Analysed Bill"
         verbose_name_plural = "Tally Expense Analysed Bills"
+        constraints = [
+            # One AnalyzedBill per parent TallyExpenseBill — closes the
+            # sync-analyze + async-RQ double-create race (see #4 audit).
+            models.UniqueConstraint(
+                fields=["selected_bill"],
+                name="uq_tally_expense_analyzed_selected_bill",
+                condition=models.Q(selected_bill__isnull=False),
+            ),
+        ]
 
     def __str__(self) -> str:
         return (self.selected_bill.bill_munshi_name if self.selected_bill else None) or f"ExpenseAnalysed:{self.id}"

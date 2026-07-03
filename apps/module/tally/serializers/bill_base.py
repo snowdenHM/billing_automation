@@ -6,9 +6,12 @@ Eliminates duplication by providing common functionality.
 import logging
 from decimal import Decimal, InvalidOperation
 
+from django.conf import settings
 from rest_framework import serializers
 
 from apps.common.serializers import UploadedByUserSerializer
+from apps.common.validators import validate_bill_file_size, validate_file_extension
+from apps.common.views import generate_signed_bill_file_url
 
 logger = logging.getLogger(__name__)
 
@@ -75,13 +78,16 @@ class BaseTallyBillSerializer(serializers.ModelSerializer):
     ]
 
     def get_file(self, obj):
-        """Return complete file URL"""
-        if obj.file:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.file.url)
-            return obj.file.url
-        return None
+        """Return a short-lived, HMAC-signed URL for the bill file.
+
+        The signature is verified in ``apps.common.views.serve_bill_file``
+        — that's the only path where ``/media/bills/…`` is accessible.
+        Bare ``obj.file.url`` (unsigned) would be rejected by that view.
+        """
+        if not obj.file:
+            return None
+        request = self.context.get('request')
+        return generate_signed_bill_file_url(obj.file, request=request)
 
     def get_uploaded_by_name(self, obj):
         """Return formatted name of the user who uploaded the bill"""
@@ -172,18 +178,23 @@ class BaseBillUploadSerializer(serializers.Serializer):
         if len(value) > 20:
             raise serializers.ValidationError("Maximum 20 files allowed per upload")
 
+        # Delegate to the shared model validators so the same rules run at
+        # both the API boundary and any future paths that go via
+        # ``full_clean``. ``BILL_MAX_UPLOAD_BYTES`` (default 25 MB, env
+        # override ``BILL_MAX_UPLOAD_MB``) is the authoritative size limit.
         for file in value:
-            # Check file extension
-            allowed_extensions = ['.pdf', '.jpg', '.jpeg', '.png']
-            file_extension = file.name.lower().split('.')[-1]
-            if f'.{file_extension}' not in allowed_extensions:
+            try:
+                validate_file_extension(file)
+                validate_bill_file_size(file)
+            except Exception as exc:
+                # ``ValidationError`` from django.core has a ``.messages``
+                # attr — join them into a single readable string. Any
+                # other exception is re-raised as a DRF ValidationError so
+                # the API returns 400 with a JSON body, not a 500.
+                message = getattr(exc, "messages", None) or [str(exc)]
                 raise serializers.ValidationError(
-                    f"Unsupported file type: {file.name}. Allowed: {', '.join(allowed_extensions)}"
+                    f"{file.name}: {' '.join(str(m) for m in message)}"
                 )
-
-            # Check file size (10MB per file)
-            if file.size > 10 * 1024 * 1024:
-                raise serializers.ValidationError(f"File {file.name} exceeds 10MB limit")
 
         # Additional validation for MULTI type
         if self.bill_model:
