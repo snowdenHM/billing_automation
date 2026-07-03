@@ -1971,10 +1971,12 @@ def vendor_bills_sync_list(request, org_id):
             'products__cgst_ledger',
             'products__sgst_ledger',
             'products__igst_ledger',
+            # ``TallyVendorConsolidatedProduct`` only has a single
+            # ``taxes`` FK (purchase-side); it has NO per-line CGST/SGST/
+            # IGST ledgers. Consolidated products fall back to bill-level
+            # tax ledgers at emit time (see prepare_sync_data). Adding
+            # non-existent FKs here would crash Django prefetch validation.
             'consolidated_products__taxes',
-            'consolidated_products__cgst_ledger',
-            'consolidated_products__sgst_ledger',
-            'consolidated_products__igst_ledger',
         )
         .order_by('-created_at')
     )
