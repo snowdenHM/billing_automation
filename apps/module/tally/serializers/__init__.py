@@ -28,9 +28,20 @@ from .expense_serializers import (
     ExpenseBillVerificationSerializer,
     ExpenseBillSyncResponseSerializer
 )
+from .payment_serializers import (
+    TallyPaymentBillSerializer,
+    TallyPaymentBillDetailSerializer,
+    TallyPaymentAnalyzedBillSerializer,
+    TallyPaymentAnalyzedProductSerializer,
+    PaymentBillUploadSerializer,
+    PaymentBillAnalysisRequestSerializer,
+    PaymentBillVerificationSerializer,
+    PaymentBillSyncResponseSerializer,
+)
 
 # Backward compatibility - alias for expense sync request
 ExpenseBillSyncRequestSerializer = BillSyncRequestSerializer
+PaymentBillSyncRequestSerializer = BillSyncRequestSerializer
 
 __all__ = [
     # Base classes
@@ -67,4 +78,14 @@ __all__ = [
     'ExpenseBillVerificationSerializer',
     'ExpenseBillSyncRequestSerializer',
     'ExpenseBillSyncResponseSerializer',
+    # Payment Voucher
+    'TallyPaymentBillSerializer',
+    'TallyPaymentBillDetailSerializer',
+    'TallyPaymentAnalyzedBillSerializer',
+    'TallyPaymentAnalyzedProductSerializer',
+    'PaymentBillUploadSerializer',
+    'PaymentBillAnalysisRequestSerializer',
+    'PaymentBillVerificationSerializer',
+    'PaymentBillSyncRequestSerializer',
+    'PaymentBillSyncResponseSerializer',
 ]

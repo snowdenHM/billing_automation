@@ -1,0 +1,44 @@
+{% extends "emails/base.html" %}
+{% block subject %}Welcome to Bill Munshi{% endblock %}
+{% block heading %}Welcome aboard, {{ display_name }} 👋{% endblock %}
+{% block content %}
+  <p style="margin:0 0 14px;">
+    We&rsquo;re thrilled to have you at
+    <strong style="color:#0f172a;">Bill Munshi</strong> — the fastest way to
+    scan, understand and sync bills into Tally &amp; Zoho.
+  </p>
+
+  <p style="margin:0 0 20px;">
+    Your account has been created with
+    <span style="display:inline-block;padding:2px 8px;background:#f1f5f9;border-radius:6px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:13px;color:#0f172a;">{{ user.email }}</span>.
+  </p>
+
+  {% if verify_url %}
+  <p style="margin:0 0 20px;">
+    Please confirm your email address so we can keep your account secure:
+  </p>
+
+  <p style="margin:0 0 28px;text-align:center;">
+    <a href="{{ verify_url }}"
+       style="display:inline-block;padding:14px 28px;background:#f97316;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;border-radius:10px;box-shadow:0 6px 18px rgba(249,115,22,0.35);letter-spacing:0.02em;">
+      Verify my email
+    </a>
+  </p>
+
+  <p style="margin:0 0 16px;font-size:13px;color:#64748b;">
+    Or paste this link into your browser:<br />
+    <a href="{{ verify_url }}" style="color:#f97316;word-break:break-all;">{{ verify_url }}</a>
+  </p>
+  {% endif %}
+
+  <div style="margin:24px 0 0;padding:16px 18px;background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;">
+    <p style="margin:0 0 6px;font-weight:700;color:#9a3412;font-size:13px;text-transform:uppercase;letter-spacing:0.08em;">
+      What&rsquo;s next
+    </p>
+    <ul style="margin:0;padding-left:20px;color:#7c2d12;font-size:14px;line-height:1.7;">
+      <li>Snap a photo or drop a PDF &mdash; we auto-enhance it for OCR.</li>
+      <li>We extract vendor, GST, amounts &amp; line items in seconds.</li>
+      <li>Verify once, then sync straight into Tally or Zoho Books.</li>
+    </ul>
+  </div>
+{% endblock %}

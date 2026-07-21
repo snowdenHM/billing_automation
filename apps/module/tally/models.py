@@ -73,9 +73,28 @@ def _pick_round_off_ledger(organization):
 # Masters
 # -----------------------------
 
+class SyncSource(models.TextChoices):
+    """Where the master record came from — decides sync direction."""
+    TALLY = "tally", "Tally"           # Imported from Tally; already exists there.
+    BILLMUNSHI = "billmunshi", "Bill Munshi"  # User-created here; awaits sync to Tally.
+
+
 class ParentLedger(BaseOrgModel):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
     parent = models.CharField(max_length=255, blank=True, null=True)
+
+    # Sync tracking (see docs/tally-master-sync.md).
+    # ``source=tally`` records come from Tally imports and are already
+    # in sync by definition; ``source=billmunshi`` records are created
+    # via the quick-add flow and must be pushed to Tally.
+    source = models.CharField(
+        max_length=16,
+        choices=SyncSource.choices,
+        default=SyncSource.TALLY,
+        db_index=True,
+    )
+    tally_synced = models.BooleanField(default=True, db_index=True)
+    tally_sync_message = models.TextField(blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)  # Fixed typo: was 'update_at'
@@ -100,6 +119,23 @@ class Ledger(BaseOrgModel):
                                           default=Decimal("0"))  # Fixed: was CharField
     gst_in = models.CharField(max_length=255, blank=True, null=True)
     company = models.CharField(max_length=255, blank=True, null=True)
+
+    # Sync tracking (see docs/tally-master-sync.md).
+    source = models.CharField(
+        max_length=16,
+        choices=SyncSource.choices,
+        default=SyncSource.TALLY,
+        db_index=True,
+        help_text=(
+            "``tally``: imported from Tally, already in sync. "
+            "``billmunshi``: created via quick-add flow; sync pending."
+        ),
+    )
+    tally_synced = models.BooleanField(
+        default=True, db_index=True,
+        help_text="True once Tally has confirmed the record exists on its side.",
+    )
+    tally_sync_message = models.TextField(blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)  # Added missing timestamp
     updated_at = models.DateTimeField(auto_now=True)  # Added missing timestamp
@@ -132,9 +168,24 @@ class StockItem(BaseOrgModel):
     unit = models.CharField(max_length=100, blank=True, null=True)
     category = models.CharField(max_length=255, blank=True, null=True)
     gst_applicable = models.CharField(max_length=100, blank=True, null=True)
+    # Explicit GST rate (e.g. "18%", "28%", "0%") — set when creating
+    # via the BM quick-add flow. Tally uses this to pick the right HSN
+    # / tax classification when the stock item is created on its side.
+    gst_rate = models.CharField(max_length=20, blank=True, null=True)
+    hsn_code = models.CharField(max_length=50, blank=True, null=True, db_index=True)
     item_code = models.CharField(max_length=255, blank=True, null=True)
     alias = models.CharField(max_length=255, blank=True, null=True)
     company = models.CharField(max_length=500, blank=True, null=True)
+
+    # Sync tracking (see docs/tally-master-sync.md)
+    source = models.CharField(
+        max_length=16,
+        choices=SyncSource.choices,
+        default=SyncSource.TALLY,
+        db_index=True,
+    )
+    tally_synced = models.BooleanField(default=True, db_index=True)
+    tally_sync_message = models.TextField(blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1200,6 +1251,398 @@ class TallyExpenseGstLine(BaseOrgModel):
     class Meta:
         verbose_name = "Tally Expense GST Line"
         verbose_name_plural = "Tally Expense GST Lines"
+        ordering = ["rate", "tax_type"]
+
+    def __str__(self) -> str:
+        return f"{self.tax_type} {self.rate} ₹{self.amount} ({self.debit_or_credit})"
+
+
+# =============================================================================
+# Payment Vouchers (Upload + Analysed)
+#
+# Structural mirror of the Expense (Journal) stack — same fields, same
+# behaviour, own tables. Sync payload uses ``voucher_type: "Payment"``
+# instead of ``"Journal"``; the Payable/Paid ledger defaults to blank
+# so the operator picks a Bank/Cash ledger themselves.
+# =============================================================================
+
+class TallyPaymentBill(BaseOrgModel):
+    class BillStatus(models.TextChoices):
+        DRAFT = "Draft", "Draft"
+        ANALYSED = "Analysed", "Analysed"
+        VERIFIED = "Verified", "Verified"
+        SYNCED = "Synced", "Synced"
+
+    class BillType(models.TextChoices):
+        SINGLE = "Single Invoice/File", "Single Invoice/File"
+        MULTI = "Multiple Invoice/File", "Multiple Invoice/File"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    bill_munshi_name = models.CharField(max_length=100, blank=True, null=True)
+    file = models.FileField(
+        upload_to=bill_upload_path,
+        validators=[validate_file_extension, validate_bill_file_size],
+    )
+    file_type = models.CharField(
+        choices=BillType.choices, max_length=100, blank=True, null=True, default=BillType.SINGLE,
+    )
+    analysed_data = models.JSONField(default=dict, blank=True, null=True)
+    status = models.CharField(
+        max_length=10, choices=BillStatus.choices, default=BillStatus.DRAFT, blank=True,
+    )
+    process = models.BooleanField(
+        default=False,
+        help_text="HAS-been-analysed flag: True once AI analysis has produced ``analysed_data``.",
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tally_payment_bills",
+        null=True, blank=True,
+        help_text="User who uploaded this payment voucher",
+    )
+
+    is_duplicate = models.BooleanField(default=False)
+    duplicate_description = models.TextField(blank=True, null=True)
+    duplicate_score = models.FloatField(null=True, blank=True)
+    duplicate_matched_bills = models.JSONField(default=list, blank=True)
+
+    is_processing = models.BooleanField(default=False)
+    processing_error = models.TextField(blank=True, null=True)
+    job_id = models.CharField(max_length=100, blank=True, null=True)
+    content_hash = models.CharField(
+        max_length=64, blank=True, null=True, db_index=True,
+        help_text="SHA-256 hex digest of the uploaded file for exact-duplicate detection",
+    )
+
+    tally_synced = models.BooleanField(default=False)
+    tally_sync_message = models.TextField(blank=True, null=True)
+
+    bill_belong_your_org = models.BooleanField(default=False)
+    description = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Tally Payment Voucher"
+        verbose_name_plural = "Tally Payment Vouchers"
+
+    def __str__(self) -> str:
+        return self.bill_munshi_name or f"TallyPaymentBill:{self.id}"
+
+    def save(self, *args, **kwargs):
+        """Autogenerate bill_munshi_name as 'YYYYMMDDTP{N}' if missing.
+
+        ``TP`` prefix = Tally Payment (mirrors ``TE`` for expense/journal).
+        """
+        if not self.bill_munshi_name:
+            from datetime import date
+            today = date.today()
+            date_prefix = today.strftime("%Y%m%d")
+            bill_prefix = f"{date_prefix}TP"
+
+            existing_bills = TallyPaymentBill.objects.filter(
+                organization=self.organization,
+                bill_munshi_name__startswith=bill_prefix,
+            ).values_list("bill_munshi_name", flat=True)
+
+            max_num = 0
+            pattern = rf"{re.escape(bill_prefix)}(\d+)$"
+            for bill_name in existing_bills:
+                if bill_name:
+                    m = re.match(pattern, bill_name)
+                    if m:
+                        num = int(m.group(1))
+                        max_num = max(max_num, num)
+
+            next_num = max_num + 1
+            self.bill_munshi_name = f"{bill_prefix}{next_num:05d}"
+
+        super().save(*args, **kwargs)
+
+
+class TallyPaymentAnalyzedBill(BaseOrgModel):
+    class GSTType(models.TextChoices):
+        IGST = "IGST", "IGST"
+        CGST_SGST = "CGST_SGST", "CGST+SGST"
+        UNKNOWN = "Unknown", "Unknown"
+
+    class DebitCredit(models.TextChoices):
+        CREDIT = "credit", "Credit"
+        DEBIT = "debit", "Debit"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    selected_bill = models.ForeignKey(
+        TallyPaymentBill, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="analysed_headers",
+    )
+    # For a Payment Voucher the "vendor" slot holds the *Bank / Cash*
+    # ledger the user picks. Blank by default (see product spec) — the
+    # operator must choose it themselves. Kept as an FK to Ledger so we
+    # reuse all the existing ledger widgets on the frontend.
+    vendor = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="vendor_tally_payment_analysed_bills",
+    )
+    vendor_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True,
+        default=DebitCredit.CREDIT,
+    )
+    vendor_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"),
+    )
+
+    voucher = models.CharField(max_length=255, blank=True, null=True)
+    bill_no = models.CharField(max_length=50, blank=True, null=True)
+    bill_date = models.DateField(blank=True, null=True)
+    due_date = models.DateField(blank=True, null=True)
+    gst_type = models.CharField(max_length=20, choices=GSTType.choices, default=GSTType.UNKNOWN)
+
+    total = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    igst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    igst_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="igst_tally_payment_analysed_bills",
+    )
+    igst_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+    cgst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    cgst_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="cgst_tally_payment_analysed_bills",
+    )
+    cgst_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+    sgst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    sgst_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="sgst_tally_payment_analysed_bills",
+    )
+    sgst_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+
+    tds = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    tds_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="tds_tally_payment_analysed_bills",
+    )
+    tds_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+
+    other_adjustment = models.DecimalField(
+        max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"),
+    )
+    other_adjustment_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="other_adjustment_tally_payment_analysed_bills",
+    )
+    other_adjustment_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+
+    round_off = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    round_off_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="round_off_tally_payment_analysed_bills",
+    )
+    round_off_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+
+    note = models.CharField(max_length=100, blank=True, null=True, default="Enter Your Description")
+
+    consolidate = models.BooleanField(
+        default=True,
+        help_text=(
+            "Payment vouchers default to consolidated line items — most "
+            "users only care about ledger-level totals in a payment."
+        ),
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Tally Payment Analysed Voucher"
+        verbose_name_plural = "Tally Payment Analysed Vouchers"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["selected_bill"],
+                name="uq_tally_payment_analyzed_selected_bill",
+                condition=models.Q(selected_bill__isnull=False),
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (self.selected_bill.bill_munshi_name if self.selected_bill else None) or f"PaymentAnalysed:{self.id}"
+
+    def save(self, *args, **kwargs):
+        skip_validation = kwargs.pop("skip_validation", False)
+        if not skip_validation:
+            self.full_clean()
+        super().save(*args, **kwargs)
+
+    ROUND_OFF_THRESHOLD = Decimal("1.00")
+
+    def compute_round_off(self, save=True):
+        """Recompute round_off for a payment voucher.
+
+        Mirrors ``TallyExpenseAnalyzedBill.compute_round_off`` — same
+        DR == CR balancing rule, same tolerance. Kept as an independent
+        method so future payment-specific rules can diverge without
+        touching the expense side.
+        """
+        from decimal import Decimal as _D
+
+        def _sum_side(side):
+            total = _D("0")
+            if self.pk:
+                for product in self.products.all():
+                    if product.debit_or_credit == side:
+                        total += product.amount or _D("0")
+            for amount, dc in (
+                (self.igst, self.igst_debit_or_credit),
+                (self.cgst, self.cgst_debit_or_credit),
+                (self.sgst, self.sgst_debit_or_credit),
+                (self.tds, self.tds_debit_or_credit),
+                (self.other_adjustment, self.other_adjustment_debit_or_credit),
+                (self.vendor_amount, self.vendor_debit_or_credit),
+            ):
+                if dc == side and amount:
+                    total += amount
+            return total
+
+        dr_total = _sum_side(self.DebitCredit.DEBIT)
+        cr_total = _sum_side(self.DebitCredit.CREDIT)
+        residual = (dr_total - cr_total).quantize(_D("0.01"))
+
+        if abs(residual) >= self.ROUND_OFF_THRESHOLD or residual == _D("0"):
+            self.round_off = _D("0")
+        else:
+            self.round_off = abs(residual)
+            self.round_off_debit_or_credit = (
+                self.DebitCredit.CREDIT if residual > 0 else self.DebitCredit.DEBIT
+            )
+            if not self.round_off_taxes_id:
+                org = getattr(self, "organization", None) if self.organization_id else None
+                self.round_off_taxes = _pick_round_off_ledger(org)
+
+        if save:
+            self.save(
+                skip_validation=True,
+                update_fields=["round_off", "round_off_debit_or_credit", "round_off_taxes"],
+            )
+        return self.round_off
+
+
+class TallyPaymentAnalyzedProduct(BaseOrgModel):
+    class DebitCredit(models.TextChoices):
+        CREDIT = "credit", "Credit"
+        DEBIT = "debit", "Debit"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    payment_bill = models.ForeignKey(
+        TallyPaymentAnalyzedBill, related_name="products", on_delete=models.CASCADE,
+    )
+
+    item_details = models.CharField(max_length=2000, blank=True, null=True)
+    chart_of_accounts = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=50, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Tally Payment Analysed Voucher Product"
+        verbose_name_plural = "Tally Payment Analysed Voucher Products"
+
+    def __str__(self) -> str:
+        if self.payment_bill and self.payment_bill.selected_bill:
+            return self.payment_bill.selected_bill.bill_munshi_name or f"PaymentProduct:{self.id}"
+        return f"PaymentProduct:{self.id}"
+
+
+class TallyPaymentConsolidatedProduct(BaseOrgModel):
+    """Consolidated product line for Tally Payment Vouchers.
+
+    Mirrors ``TallyExpenseConsolidatedProduct`` — kept separate so
+    payment-side aggregation logic can diverge later (different tax
+    treatment for TDS-on-payment, for instance).
+    """
+    class DebitCredit(models.TextChoices):
+        CREDIT = "credit", "Credit"
+        DEBIT = "debit", "Debit"
+
+    id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
+    payment_bill = models.ForeignKey(
+        "TallyPaymentAnalyzedBill", on_delete=models.CASCADE,
+        related_name="consolidated_products",
+    )
+
+    item_details = models.CharField(max_length=2000, blank=True, null=True)
+    chart_of_accounts = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=50, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+
+    original_entries_count = models.IntegerField(default=0)
+    consolidation_notes = models.TextField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Consolidated Tally Payment Product"
+        verbose_name_plural = "Consolidated Tally Payment Products"
+
+    def __str__(self):
+        return f"Consolidated Payment: {self.item_details[:50] if self.item_details else 'Multiple Entries'} ({self.original_entries_count} entries)"
+
+
+class TallyPaymentGstLine(BaseOrgModel):
+    """Per-rate GST entry on a Tally Payment Voucher.
+
+    Kept identical in shape to ``TallyExpenseGstLine`` so the same
+    frontend GST-lines table renders for both voucher types.
+    """
+
+    class TaxType(models.TextChoices):
+        CGST = "CGST", "CGST"
+        SGST = "SGST", "SGST"
+        IGST = "IGST", "IGST"
+
+    class DebitCredit(models.TextChoices):
+        DEBIT = "debit", "Debit"
+        CREDIT = "credit", "Credit"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    payment_bill = models.ForeignKey(
+        TallyPaymentAnalyzedBill, on_delete=models.CASCADE, related_name="gst_lines",
+    )
+    rate = models.CharField(max_length=10, blank=True, default="")
+    tax_type = models.CharField(max_length=10, choices=TaxType.choices)
+    amount = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal("0"))
+    ledger = models.ForeignKey(
+        Ledger, on_delete=models.SET_NULL, blank=True, null=True,
+        related_name="tally_payment_gst_lines",
+    )
+    debit_or_credit = models.CharField(
+        max_length=10, choices=DebitCredit.choices, default=DebitCredit.DEBIT,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Tally Payment GST Line"
+        verbose_name_plural = "Tally Payment GST Lines"
         ordering = ["rate", "tax_type"]
 
     def __str__(self) -> str:

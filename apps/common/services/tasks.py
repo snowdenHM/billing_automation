@@ -57,9 +57,17 @@ def mark_processing_start(bill):
 
 
 def mark_processing_done(bill):
-    """Clear the processing flag."""
+    """Clear the processing flag AND any stale error from a prior run.
+
+    Without wiping ``processing_error`` here, a bill that once failed
+    and later succeeded still carries the old message forever — which
+    surfaces as a red "Error" badge on the list UI even though the
+    row is now Synced/Analysed. Since we've reached the ``done`` state,
+    the previous error is by definition no longer relevant.
+    """
     bill.is_processing = False
-    bill.save(update_fields=["is_processing"])
+    bill.processing_error = ""
+    bill.save(update_fields=["is_processing", "processing_error"])
 
 
 def mark_processing_error(bill, error_msg: str):

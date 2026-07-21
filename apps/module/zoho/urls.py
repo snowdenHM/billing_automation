@@ -46,6 +46,11 @@ from .views import (
     expense_bill_sync_view,
     expense_bill_delete_view,
 )
+from .views.bill_reports import (
+    zoho_vendor_bills_report,
+    zoho_journal_bills_report,
+    zoho_expense_bills_report,
+)
 
 app_name = "zoho"
 
@@ -116,5 +121,12 @@ urlpatterns = [
         path('expense-bills/<str:bill_id>/verify/', expense_bill_verify_view, name='expense_bill_verify'),
         path('expense-bills/<str:bill_id>/sync/', expense_bill_sync_view, name='expense_bill_sync'),
         path('expense-bills/<str:bill_id>/delete/', expense_bill_delete_view, name='expense_bill_delete'),
+
+        # ============================================================================
+        # XLSX Report Downloads (?status=Analysed,Verified,Synced filter)
+        # ============================================================================
+        path('vendor-bills/report/', zoho_vendor_bills_report, name='vendor_bills_report'),
+        path('journal-bills/report/', zoho_journal_bills_report, name='journal_bills_report'),
+        path('expense-bills/report/', zoho_expense_bills_report, name='expense_bills_report'),
     ])),
 ]

@@ -53,6 +53,7 @@ THIRD_PARTY_APPS = [
     "rest_framework_api_key",
     "waffle",
     "django_rq",
+    "anymail",
 ]
 
 LOCAL_APPS = [
@@ -232,10 +233,26 @@ CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 
 # ------------------------------------------------------------
-# Email (reset password, invites). Override in env for prod.
+# Email (welcome, verify, reset password, invites).
+#
+# Runtime credentials live in the DB (see ``apps.common.models.EmailSettings``)
+# so they can be rotated from Django admin without a redeploy. The
+# settings below are only used as a fallback when the DB row is empty
+# or the ``EmailSettings.is_enabled`` flag is off.
 # ------------------------------------------------------------
-EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@billmunshi.local")
+EMAIL_BACKEND = env(
+    "EMAIL_BACKEND",
+    default="django.core.mail.backends.console.EmailBackend",
+)
+# Legacy ``.env`` fallback for the SendGrid key — only used when the
+# ``EmailSettings`` row hasn't been populated yet.
+SENDGRID_API_KEY = env("SENDGRID_API_KEY", default="")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Bill Munshi <support@billmunshi.com>")
+SERVER_EMAIL = env("SERVER_EMAIL", default=DEFAULT_FROM_EMAIL)
+
+# Frontend base URL — links in emails (reset password, verify email)
+# resolve against this. MUST be set in production.
+FRONTEND_URL = env("FRONTEND_URL", default="https://billmunshi.com")
 
 # ------------------------------------------------------------
 # Cache / Redis (for rate limiting, general cache)

@@ -5,10 +5,64 @@ All org-scoped ``ModelAdmin`` classes should inherit from
 :class:`BaseOrgAdmin` instead of ``admin.ModelAdmin`` directly.
 """
 
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
+
+from apps.common.models import EmailSettings
+
+
+@admin.register(EmailSettings)
+class EmailSettingsAdmin(admin.ModelAdmin):
+    """Singleton admin — always edit the same row (pk=1)."""
+
+    list_display = ("id", "is_enabled", "from_email", "from_name", "updated_at")
+    fieldsets = (
+        (None, {
+            "fields": ("is_enabled",),
+        }),
+        ("SendGrid", {
+            "fields": ("sendgrid_api_key",),
+            "description": (
+                "Paste the SendGrid API key here (starts with <code>SG.</code>). "
+                "The sender address below must be a verified single sender "
+                "or belong to an authenticated domain in your SendGrid account."
+            ),
+        }),
+        ("Sender identity", {
+            "fields": ("from_email", "from_name", "reply_to"),
+        }),
+    )
+    readonly_fields = ("updated_at",)
+
+    def has_add_permission(self, request):
+        # Enforce singleton: only allow the row to be created if it
+        # doesn't exist yet.
+        return not EmailSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        # Redirect the list page straight to the single row's edit page.
+        obj = EmailSettings.load()
+        from django.shortcuts import redirect
+        return redirect(
+            "admin:{app}_{model}_change".format(
+                app=self.opts.app_label,
+                model=self.opts.model_name,
+            ),
+            obj.pk,
+        )
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        messages.success(
+            request,
+            "Email settings saved. Cache invalidated — the next outbound "
+            "email will use the new credentials.",
+        )
 
 
 # ---------------------------------------------------------------------------

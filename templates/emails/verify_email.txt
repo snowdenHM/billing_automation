@@ -1,0 +1,13 @@
+Confirm your email address
+
+Hi {{ display_name }},
+
+Please confirm this is your email address so we can secure your
+Bill Munshi account and let you sign in:
+  {{ verify_url }}
+
+Didn't sign up for Bill Munshi? Ignore this email — no account will be
+created for you.
+
+— The Bill Munshi team
+https://billmunshi.com

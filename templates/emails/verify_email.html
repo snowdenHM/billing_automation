@@ -1,0 +1,30 @@
+{% extends "emails/base.html" %}
+{% block subject %}Confirm your Bill Munshi email{% endblock %}
+{% block heading %}Confirm your email address{% endblock %}
+{% block content %}
+  <p style="margin:0 0 14px;">
+    Hi {{ display_name }},
+  </p>
+
+  <p style="margin:0 0 20px;">
+    Please confirm this is your email address so we can secure your
+    Bill Munshi account and let you sign in.
+  </p>
+
+  <p style="margin:0 0 28px;text-align:center;">
+    <a href="{{ verify_url }}"
+       style="display:inline-block;padding:14px 28px;background:#f97316;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;border-radius:10px;box-shadow:0 6px 18px rgba(249,115,22,0.35);letter-spacing:0.02em;">
+      Confirm my email
+    </a>
+  </p>
+
+  <p style="margin:0 0 16px;font-size:13px;color:#64748b;">
+    Or paste this link into your browser:<br />
+    <a href="{{ verify_url }}" style="color:#f97316;word-break:break-all;">{{ verify_url }}</a>
+  </p>
+
+  <p style="margin:24px 0 0;font-size:13px;color:#64748b;">
+    Didn&rsquo;t sign up for Bill Munshi? Ignore this email — no account will be
+    created for you.
+  </p>
+{% endblock %}

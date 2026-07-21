@@ -18,6 +18,10 @@ from .models import (
     TallyExpenseAnalyzedBill,
     TallyExpenseAnalyzedProduct,
     TallyExpenseConsolidatedProduct,
+    TallyPaymentBill,
+    TallyPaymentAnalyzedBill,
+    TallyPaymentAnalyzedProduct,
+    TallyPaymentConsolidatedProduct,
     StockItem
 )
 from .forms import TallyConfigForm
@@ -718,3 +722,88 @@ class GstRateLedgerMappingAdmin(BaseOrgAdmin):
     )
     autocomplete_fields = ("cgst_ledger", "sgst_ledger", "igst_ledger")
     ordering = ("organization", "rate")
+
+
+# ============================================================================
+# Payment Voucher Admin
+# ============================================================================
+
+@admin.register(TallyPaymentBill)
+class TallyPaymentBillAdmin(_TallyBillAdminBase):
+    """Admin interface for Tally Payment Vouchers."""
+    pass
+
+
+class TallyPaymentAnalyzedProductInline(admin.TabularInline):
+    model = TallyPaymentAnalyzedProduct
+    extra = 0
+    fields = ("item_details", "chart_of_accounts", "amount", "debit_or_credit")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(TallyPaymentAnalyzedBill)
+class TallyPaymentAnalyzedBillAdmin(BaseOrgAdmin):
+    list_display = ("__str__", "vendor", "bill_no", "bill_date", "due_date", "total", "organization")
+    list_filter = ("organization", "created_at", "bill_date")
+    search_fields = ("bill_no", "vendor__name", "selected_bill__bill_munshi_name", "voucher")
+    inlines = [TallyPaymentAnalyzedProductInline]
+    autocomplete_fields = ("organization", "vendor", "selected_bill")
+    readonly_fields = ("created_at",)
+    date_hierarchy = "created_at"
+    list_per_page = 50
+
+    fieldsets = (
+        ("Voucher Information", {
+            "fields": ("selected_bill", "vendor", "voucher", "bill_no", "bill_date", "due_date", "note"),
+        }),
+        ("GST Details", {
+            "fields": ("total", "igst", "igst_taxes", "cgst", "cgst_taxes", "sgst", "sgst_taxes"),
+        }),
+        ("TDS & Other Adjustments", {
+            "fields": ("tds", "tds_taxes", "other_adjustment", "other_adjustment_taxes"),
+        }),
+        ("Round Off", {
+            "fields": ("round_off", "round_off_taxes", "round_off_debit_or_credit"),
+            "description": "Auto-computed during verify when |DR − CR| < ₹1.",
+        }),
+        ("Metadata", {
+            "fields": ("organization", "created_at"),
+            "classes": ("collapse",),
+        }),
+    )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            "organization", "vendor", "selected_bill",
+        )
+
+
+@admin.register(TallyPaymentConsolidatedProduct)
+class TallyPaymentConsolidatedProductAdmin(BaseOrgAdmin):
+    list_display = (
+        "payment_bill_name", "item_details_short", "amount", "debit_or_credit",
+        "original_entries_count", "organization", "created_at",
+    )
+    list_filter = ("organization", "debit_or_credit", "created_at")
+    search_fields = ("item_details", "payment_bill__selected_bill__bill_munshi_name", "organization__name")
+    readonly_fields = ("created_at", "updated_at")
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ("organization", "payment_bill", "chart_of_accounts")
+
+    @admin.display(description="Payment Voucher", ordering="payment_bill__selected_bill__bill_munshi_name")
+    def payment_bill_name(self, obj):
+        if obj.payment_bill and obj.payment_bill.selected_bill:
+            return obj.payment_bill.selected_bill.bill_munshi_name
+        return "N/A"
+
+    @admin.display(description="Item Details")
+    def item_details_short(self, obj):
+        if obj.item_details:
+            return obj.item_details[:50] + "..." if len(obj.item_details) > 50 else obj.item_details
+        return "N/A"
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            "organization", "payment_bill", "payment_bill__selected_bill",
+        )

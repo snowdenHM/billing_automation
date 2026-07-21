@@ -2,6 +2,9 @@
 """
 Authentication views: register, login, password reset, email verification, token refresh.
 """
+import logging
+
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.encoding import force_bytes, force_str
@@ -12,7 +15,42 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from apps.common.utils import send_simple_email
+from apps.common.utils import send_simple_email, send_templated_email
+
+logger = logging.getLogger(__name__)
+
+
+def _display_name(user):
+    return (
+        user.get_full_name() if hasattr(user, "get_full_name") and user.get_full_name()
+        else getattr(user, "first_name", "") or user.email.split("@")[0]
+    )
+
+
+def _build_frontend_url(path):
+    base = getattr(settings, "FRONTEND_URL", "https://billmunshi.com").rstrip("/")
+    return f"{base}{path}"
+
+
+def _send_verify_email(user):
+    """Generate a signed verification link and send the branded email."""
+    token = PasswordResetTokenGenerator().make_token(user)
+    uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+    verify_url = _build_frontend_url(f"/auth/verify-email?uidb64={uidb64}&token={token}")
+    try:
+        send_templated_email(
+            subject="Confirm your Bill Munshi email",
+            template_base="verify_email",
+            to_email=user.email,
+            context={
+                "user": user,
+                "display_name": _display_name(user),
+                "verify_url": verify_url,
+            },
+        )
+    except Exception as exc:
+        logger.error("Verify-email send failed for %s: %s", user.email, exc)
+    return verify_url
 from apps.users.serializers import (
     RegisterSerializer,
     LoginSerializer,
@@ -34,6 +72,24 @@ def register_view(request):
     serializer = RegisterSerializer(data=request.data, context={"request": request})
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
+
+    # Fire the welcome + verify-email flow. Failures are logged, never
+    # fatal — signup itself succeeds even if SMTP is temporarily down.
+    verify_url = _send_verify_email(user)
+    try:
+        send_templated_email(
+            subject="Welcome to Bill Munshi",
+            template_base="welcome",
+            to_email=user.email,
+            context={
+                "user": user,
+                "display_name": _display_name(user),
+                "verify_url": verify_url,
+            },
+        )
+    except Exception as exc:
+        logger.error("Welcome email send failed for %s: %s", user.email, exc)
+
     return Response(
         {"user": UserSerializer(user, context={"request": request}).data},
         status=status.HTTP_201_CREATED,
@@ -63,16 +119,29 @@ def password_reset_request_view(request):
     if user:
         token = PasswordResetTokenGenerator().make_token(user)
         uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
-        reset_url = f"https://billmunshi.com/reset-password?uidb64={uidb64}&token={token}"
-        message = (
-            f"Hello {user.get_full_name() or user.email},\n\n"
-            f"Please click the link below to reset your password:\n"
-            f"{reset_url}\n\n"
-            f"If you didn't request this password reset, please ignore this email.\n\n"
-            f"Best regards,\nThe Bill Munshi Team"
+        reset_url = _build_frontend_url(
+            f"/auth/reset-password?uidb64={uidb64}&token={token}"
         )
-        send_simple_email("Password Reset", message, to_email=user.email)
+        # Django's default PasswordResetTokenGenerator TTL is
+        # PASSWORD_RESET_TIMEOUT (3 days). Show minutes in a human way.
+        ttl_minutes = int(getattr(settings, "PASSWORD_RESET_TIMEOUT", 3 * 24 * 3600) / 60)
+        try:
+            send_templated_email(
+                subject="Reset your Bill Munshi password",
+                template_base="password_reset",
+                to_email=user.email,
+                context={
+                    "user": user,
+                    "display_name": _display_name(user),
+                    "reset_url": reset_url,
+                    "ttl_minutes": ttl_minutes,
+                },
+            )
+        except Exception as exc:
+            logger.error("Password-reset email send failed for %s: %s", user.email, exc)
 
+    # Always respond generically so the endpoint doesn't leak which
+    # emails exist in the DB.
     return Response({"detail": "If the email exists, a reset link was sent."})
 
 

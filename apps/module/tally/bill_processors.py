@@ -44,6 +44,15 @@ def _get_expense_process_fn():
     return process_expense_analysis_data
 
 
+def _get_payment_process_fn():
+    """Return process_payment_analysis_data regardless of views structure."""
+    try:
+        from .views.payment_bills import process_payment_analysis_data
+    except (ImportError, ModuleNotFoundError):
+        from .views import process_payment_analysis_data
+    return process_payment_analysis_data
+
+
 # ---------------------------------------------------------------------------
 # Duplicate-check wrappers (no views dependency at all)
 # ---------------------------------------------------------------------------
@@ -58,6 +67,12 @@ def check_duplicate_tally_expense_bill(bill, organization):
     """Delegate to apps.common.services.duplicate_detection.check_duplicate_bill."""
     from .models import TallyExpenseBill
     return check_duplicate_bill(bill, organization, TallyExpenseBill)
+
+
+def check_duplicate_tally_payment_bill(bill, organization):
+    """Delegate to apps.common.services.duplicate_detection.check_duplicate_bill."""
+    from .models import TallyPaymentBill
+    return check_duplicate_bill(bill, organization, TallyPaymentBill)
 
 
 # ---------------------------------------------------------------------------
@@ -113,3 +128,27 @@ def analyze_expense_bill_with_ai(bill, organization):
 
     process_expense_analysis_data = _get_expense_process_fn()
     return process_expense_analysis_data(bill, json_data, organization)
+
+
+def analyze_payment_bill_with_ai(bill, organization):
+    """Analyze a payment voucher with AI and persist results.
+
+    Reuses the expense-bill prompt — the extracted fields are the same
+    (vendor / date / amount / line items). Payment-specific handling
+    (Bank/Cash ledger selection) happens on the verify step, not here.
+    """
+    logger.info(
+        "Starting AI analysis for payment voucher %s, file: %s", bill.id, bill.file.name
+    )
+
+    try:
+        json_data = analyze_bill_file(
+            bill.file.path, bill.file.name, get_expense_bill_prompt()
+        )
+        logger.info("AI analysis successful for payment voucher %s", bill.id)
+    except Exception as exc:
+        logger.error("AI analysis failed for payment voucher %s: %s", bill.id, exc)
+        raise Exception(f"AI processing failed: {exc}") from exc
+
+    process_payment_analysis_data = _get_payment_process_fn()
+    return process_payment_analysis_data(bill, json_data, organization)

@@ -6,8 +6,10 @@ import re
 from datetime import datetime
 
 from django.conf import settings
-from django.core.mail import send_mail
+from django.core.mail import EmailMultiAlternatives, get_connection, send_mail
 from django.shortcuts import get_object_or_404
+from django.template.loader import render_to_string
+from django.template import TemplateDoesNotExist
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,87 @@ def send_simple_email(subject: str, message: str, to_email: str, from_email: str
     if not from_email:
         from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@local")
     send_mail(subject, message, from_email, [to_email], fail_silently=False)
+
+
+def _resolve_email_connection(cfg):
+    """Return a DRF-style email connection matching the runtime config.
+
+    When SendGrid is enabled we build an anymail SendGrid backend with the
+    DB-provided API key. Otherwise Django's ``get_connection`` returns the
+    ``EMAIL_BACKEND`` configured in settings (console in dev, SMTP in
+    prod fallback).
+    """
+    if cfg.use_sendgrid:
+        return get_connection(
+            backend="anymail.backends.sendgrid.EmailBackend",
+            api_key=cfg.sendgrid_api_key,
+        )
+    return get_connection()
+
+
+def send_templated_email(
+    subject: str,
+    template_base: str,
+    to_email: str,
+    context: dict | None = None,
+    from_email: str | None = None,
+    reply_to: list[str] | None = None,
+):
+    """Render ``emails/<template_base>.{txt,html}`` and send a multipart email.
+
+    ``template_base`` is the shared basename of the two template files —
+    e.g. ``"welcome"`` renders both ``templates/emails/welcome.txt`` and
+    ``templates/emails/welcome.html``. The HTML alternative is attached
+    only when the file exists; otherwise the plain-text body is sent
+    alone so misconfigured templates never silently drop the email.
+
+    Sender identity + SendGrid credentials are loaded at runtime from
+    the DB-backed ``EmailSettings`` singleton (see
+    ``apps.common.email_config``), so operators can rotate the API key
+    from Django admin without a redeploy.
+
+    Failures are logged and re-raised so the calling view/task can
+    surface them; the mail helper does NOT swallow exceptions.
+    """
+    from apps.common.email_config import get_email_config
+
+    context = context or {}
+    cfg = get_email_config()
+
+    # Explicit ``from_email`` argument still wins so ad-hoc sends can
+    # override the DB default when needed.
+    if not from_email:
+        from_email = cfg.formatted_from
+
+    reply_to_addrs = reply_to or ([cfg.reply_to] if cfg.reply_to else None)
+
+    text_body = render_to_string(f"emails/{template_base}.txt", context)
+    try:
+        html_body = render_to_string(f"emails/{template_base}.html", context)
+    except TemplateDoesNotExist:
+        html_body = None
+
+    connection = _resolve_email_connection(cfg)
+    email = EmailMultiAlternatives(
+        subject=subject,
+        body=text_body,
+        from_email=from_email,
+        to=[to_email],
+        reply_to=reply_to_addrs,
+        connection=connection,
+    )
+    if html_body:
+        email.attach_alternative(html_body, "text/html")
+
+    try:
+        email.send(fail_silently=False)
+        logger.info(
+            "Sent '%s' email to %s (template=%s, sendgrid=%s)",
+            subject, to_email, template_base, cfg.use_sendgrid,
+        )
+    except Exception as exc:
+        logger.exception("Failed to send '%s' email to %s: %s", subject, to_email, exc)
+        raise
 
 
 # ---------------------------------------------------------------------------

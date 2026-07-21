@@ -59,6 +59,20 @@ from .expense_bills import (
     expense_bill_sync_external,
 )
 
+# Payment voucher views (structural clone of expense — see payment_bills.py)
+from .payment_bills import (
+    payment_bills_list,
+    payment_bills_upload,
+    payment_bill_detail,
+    payment_bill_delete,
+    payment_bill_analyze,
+    payment_bill_verify,
+    payment_bill_sync,
+    payment_bills_sync_list,
+    payment_bill_sync_external,
+    process_payment_analysis_data,
+)
+
 # Bill move
 from .bill_move import move_tally_bills_between_modules_view
 
@@ -111,6 +125,17 @@ __all__ = [
     "expense_bill_sync",
     "expense_bills_sync_list",
     "expense_bill_sync_external",
+    # Payment vouchers
+    "payment_bills_list",
+    "payment_bills_upload",
+    "payment_bill_detail",
+    "payment_bill_delete",
+    "payment_bill_analyze",
+    "payment_bill_verify",
+    "payment_bill_sync",
+    "payment_bills_sync_list",
+    "payment_bill_sync_external",
+    "process_payment_analysis_data",
     # Bill move
     "move_tally_bills_between_modules_view",
     # Organization data

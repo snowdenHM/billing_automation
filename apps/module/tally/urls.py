@@ -35,6 +35,32 @@ from .views import (
     expense_bill_sync,
     expense_bills_sync_list,
     expense_bill_sync_external,
+    # Payment vouchers
+    payment_bills_list,
+    payment_bills_upload,
+    payment_bill_detail,
+    payment_bill_delete,
+    payment_bill_analyze,
+    payment_bill_verify,
+    payment_bill_sync,
+    payment_bills_sync_list,
+    payment_bill_sync_external,
+)
+from .views.bill_reports import (
+    tally_vendor_bills_report,
+    tally_expense_bills_report,
+    tally_payment_bills_report,
+)
+from .views.quick_create import (
+    quick_create_vendor,
+    quick_create_ledger,
+    quick_create_item,
+)
+from .views.master_sync import (
+    masters_pending_sync,
+    masters_mark_synced,
+)
+from .views import (
     # Bill move
     move_tally_bills_between_modules_view,
     # Organization data
@@ -106,6 +132,31 @@ urlpatterns = [
         path('expense-bills/sync/', expense_bill_sync, name='expense-bill-sync'),
         path('expense-bills/sync_bills/', expense_bills_sync_list, name='expense-bills-sync-list'),
         path('expense-bills/sync_external/', expense_bill_sync_external, name='expense-bill-sync-external'),
+
+        # Quick-create masters from bill detail / standalone pages
+        path('quick-create/vendor/', quick_create_vendor, name='quick-create-vendor'),
+        path('quick-create/ledger/', quick_create_ledger, name='quick-create-ledger'),
+        path('quick-create/item/',   quick_create_item,   name='quick-create-item'),
+
+        # Master-sync contract — Tally TCP polls pending_sync then callbacks mark_synced
+        path('masters/pending_sync/', masters_pending_sync, name='masters-pending-sync'),
+        path('masters/mark_synced/',  masters_mark_synced,  name='masters-mark-synced'),
+
+        # XLSX report downloads (one per bill type, ?status= filter)
+        path('vendor-bills/report/', tally_vendor_bills_report, name='vendor-bills-report'),
+        path('expense-bills/report/', tally_expense_bills_report, name='expense-bills-report'),
+        path('payment-vouchers/report/', tally_payment_bills_report, name='payment-vouchers-report'),
+
+        # Function-based payment voucher endpoints
+        path('payment-vouchers/', payment_bills_list, name='payment-vouchers-list'),
+        path('payment-vouchers/upload/', payment_bills_upload, name='payment-vouchers-upload'),
+        path('payment-vouchers/<uuid:bill_id>/delete/', payment_bill_delete, name='payment-voucher-delete'),
+        path('payment-vouchers/analyze/', payment_bill_analyze, name='payment-voucher-analyze'),
+        path('payment-vouchers/<uuid:bill_id>/details/', payment_bill_detail, name='payment-voucher-detail'),
+        path('payment-vouchers/verify/', payment_bill_verify, name='payment-voucher-verify'),
+        path('payment-vouchers/sync/', payment_bill_sync, name='payment-voucher-sync'),
+        path('payment-vouchers/sync_bills/', payment_bills_sync_list, name='payment-vouchers-sync-list'),
+        path('payment-vouchers/sync_external/', payment_bill_sync_external, name='payment-voucher-sync-external'),
 
         # Bill tally sync status update endpoint
         path('bills/tally_status/', update_bill_tally_sync_status, name='update-bill-tally-sync-status'),

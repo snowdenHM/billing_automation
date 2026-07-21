@@ -1,0 +1,18 @@
+Welcome to Bill Munshi, {{ display_name }}!
+
+We're thrilled to have you on board. Your account has been created with:
+  {{ user.email }}
+
+{% if verify_url %}Please confirm your email so we can keep your account secure:
+  {{ verify_url }}
+
+{% endif %}What's next
+-----------
+  * Snap a photo or drop a PDF — we auto-enhance it for OCR.
+  * We extract vendor, GST, amounts and line items in seconds.
+  * Verify once, then sync straight into Tally or Zoho Books.
+
+Need help? Reply to this email or write to support@billmunshi.com.
+
+— The Bill Munshi team
+https://billmunshi.com

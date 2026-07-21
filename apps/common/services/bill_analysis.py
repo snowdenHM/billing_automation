@@ -2,10 +2,12 @@
 """
 Shared AI bill analysis service.
 
-Consolidates the PDF/image → base64 → OpenAI/Ollama → JSON pipeline that was
+Consolidates the PDF/image → base64 → OpenAI → JSON pipeline that was
 previously copy-pasted across all 5 bill view files.
 
-Supports both OpenAI (paid) and Ollama (free, local) with automatic fallback.
+Uses OpenAI vision (default ``gpt-4o``). The historical Ollama
+fallback path has been removed — the free local model was never
+production-viable and its config knobs added noise.
 """
 import base64
 import json
@@ -20,17 +22,8 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# OCR Engine Configuration
+# OCR Engine Configuration — OpenAI only
 # ---------------------------------------------------------------------------
-
-def _get_ocr_config():
-    """Get OCR configuration from environment or settings."""
-    return {
-        'primary_engine': os.getenv('OCR_PRIMARY_ENGINE', 'openai').lower(),
-        'enable_fallback': os.getenv('OCR_ENABLE_FALLBACK', 'true').lower() == 'true',
-        'ollama_url': os.getenv('OLLAMA_API_URL', 'http://localhost:11434'),
-        'ollama_model': os.getenv('OLLAMA_VISION_MODEL', 'llava:latest'),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -194,9 +187,8 @@ def prepare_bill_image_from_bytes(file_content, file_extension):
 
 
 def analyze_bill_bytes(file_content, file_extension, prompt):
-    """Full pipeline from raw bytes: bytes -> image -> OCR (OpenAI/Ollama) -> validated JSON dict.
+    """Full pipeline from raw bytes: bytes -> image -> OpenAI OCR -> validated JSON dict.
 
-    Automatically uses configured OCR engine with fallback support.
     Convenience wrapper for Zoho-style callers that receive ``(bytes, ext)``
     instead of ``(file_path, file_name)``.
     """
@@ -209,83 +201,32 @@ def analyze_bill_bytes(file_content, file_extension, prompt):
 # OpenAI call + JSON parsing
 # ---------------------------------------------------------------------------
 
-def call_ocr_analysis(image_base64, mime_type, prompt, model=None, 
+def call_ocr_analysis(image_base64, mime_type, prompt, model=None,
                       max_tokens=2000, temperature=0.1):
-    """Unified OCR analysis with automatic fallback.
-    
-    Primary engine is configured via OCR_PRIMARY_ENGINE env var.
-    If primary fails and fallback is enabled, tries the alternate engine.
-    
+    """Unified OCR analysis via OpenAI vision.
+
+    Historical: this used to fan out to Ollama with fallback semantics.
+    That path was removed — see module docstring. The signature is
+    preserved for backward compatibility with existing callers.
+
     Args:
         image_base64: Base64-encoded image
         mime_type: MIME type of the image
         prompt: Analysis prompt
-        model: Optional model override (engine-specific)
+        model: Optional OpenAI model override (default ``gpt-4o``)
         max_tokens: Maximum tokens for response
         temperature: Temperature for generation
-    
+
     Returns:
         Parsed JSON dict from OCR analysis
     """
-    config = _get_ocr_config()
-    primary = config['primary_engine']
-    enable_fallback = config['enable_fallback']
-    
-    # Determine primary and fallback engines
-    engines = []
-    if primary == 'ollama':
-        engines.append('ollama')
-        if enable_fallback:
-            engines.append('openai')
-    else:  # default to openai
-        engines.append('openai')
-        if enable_fallback:
-            engines.append('ollama')
-    
-    last_error = None
-    
-    for engine in engines:
-        try:
-            logger.info(f"Attempting OCR analysis with {engine.upper()}")
-            
-            if engine == 'openai':
-                return call_openai_analysis(
-                    image_base64, mime_type, prompt, 
-                    model=model or "gpt-4o",
-                    max_tokens=max_tokens, 
-                    temperature=temperature
-                )
-            elif engine == 'ollama':
-                return call_ollama_analysis(
-                    image_base64, mime_type, prompt,
-                    model=model or config['ollama_model'],
-                    max_tokens=max_tokens
-                )
-        except Exception as e:
-            error_msg = str(e)
-            last_error = e
-            
-            # Check if it's an OpenAI quota error
-            is_quota_error = ('quota' in error_msg.lower() or 
-                            '429' in error_msg or 
-                            'insufficient_quota' in error_msg.lower())
-            
-            if is_quota_error:
-                logger.warning(f"{engine.upper()} quota exceeded: {error_msg}")
-            else:
-                logger.error(f"{engine.upper()} OCR analysis failed: {error_msg}")
-            
-            # If this was the last engine or fallback is disabled, raise
-            if engine == engines[-1]:
-                raise Exception(
-                    f"All OCR engines failed. Last error from {engine.upper()}: {error_msg}"
-                ) from last_error
-            
-            # Otherwise, log and try next engine
-            logger.info(f"Falling back to next OCR engine...")
-    
-    # Should never reach here, but just in case
-    raise Exception("OCR analysis failed with all configured engines") from last_error
+    logger.info("Running OCR analysis via OpenAI")
+    return call_openai_analysis(
+        image_base64, mime_type, prompt,
+        model=model or "gpt-4o",
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
 
 
 def call_openai_analysis(image_base64, mime_type, prompt, model="gpt-4o",
@@ -326,89 +267,13 @@ def call_openai_analysis(image_base64, mime_type, prompt, model="gpt-4o",
     return parse_openai_json_response(raw)
 
 
-def call_ollama_analysis(image_base64, mime_type, prompt, model="llava:latest",
-                        max_tokens=2000):
-    """Send an image to Ollama (local) for analysis and return the parsed JSON dict.
-    
-    Uses Ollama's vision models (e.g., llava, bakllava) for free local OCR.
-    
-    Args:
-        image_base64: Base64-encoded image
-        mime_type: MIME type (ignored, Ollama auto-detects)
-        prompt: Analysis prompt
-        model: Ollama model to use (default: llava:latest)
-        max_tokens: Maximum tokens for response
-    
-    Returns:
-        Parsed JSON dict
-    
-    Raises:
-        Exception on failure
-    """
-    import requests
-    
-    config = _get_ocr_config()
-    ollama_url = config['ollama_url']
-    
-    # Enhanced prompt for Ollama to ensure JSON output
-    enhanced_prompt = f"""{prompt}
-
-IMPORTANT: You MUST respond with ONLY valid JSON. Do not include any explanatory text before or after the JSON.
-The response must start with {{ and end with }}.
-"""
-    
-    try:
-        # Ollama API endpoint
-        url = f"{ollama_url}/api/generate"
-        
-        payload = {
-            "model": model,
-            "prompt": enhanced_prompt,
-            "images": [image_base64],
-            "stream": False,
-            "options": {
-                "num_predict": max_tokens,
-                "temperature": 0.1,
-            }
-        }
-        
-        logger.info(f"Calling Ollama API at {url} with model {model}")
-        
-        response = requests.post(url, json=payload, timeout=120)
-        response.raise_for_status()
-        
-        result = response.json()
-        
-        if 'response' not in result:
-            raise ValueError(f"Invalid Ollama response format: {result}")
-        
-        raw = result['response'].strip()
-        logger.debug(f"Ollama raw response (first 500 chars): {raw[:500]}")
-        
-        # Parse the JSON response
-        return parse_openai_json_response(raw)
-        
-    except requests.exceptions.ConnectionError:
-        raise Exception(
-            f"Failed to connect to Ollama at {ollama_url}. "
-            "Make sure Ollama is running: 'ollama serve'"
-        )
-    except requests.exceptions.Timeout:
-        raise Exception(
-            f"Ollama request timed out after 120 seconds. "
-            "The model might be downloading or your system might be slow."
-        )
-    except Exception as e:
-        raise Exception(f"Ollama OCR analysis failed: {str(e)}") from e
-
-
 def parse_openai_json_response(raw):
     """Best-effort JSON extraction from an OpenAI text response.
 
     Tries: markdown stripping → direct parse → brace extraction → fallback dict.
     """
     # 0. Aggressive markdown code-block stripping
-    # Ollama often wraps JSON in ```json\n...\n``` markers
+    # Some models wrap JSON in ```json\n...\n``` markers
     cleaned = raw.strip()
     
     # Try regex-based extraction first (handles various markdown formats)
@@ -453,7 +318,7 @@ def parse_openai_json_response(raw):
                 pass
 
     # 3. Fallback
-    logger.error("All JSON parsing attempts failed for OpenAI/Ollama response")
+    logger.error("All JSON parsing attempts failed for OpenAI response")
     logger.error(f"Raw response (first 500 chars): {raw[:500]}")
     return {
         "error": "json_parse_failed",
@@ -672,9 +537,7 @@ def get_journal_bill_prompt():
 # ---------------------------------------------------------------------------
 
 def analyze_bill_file(file_path, file_name, prompt):
-    """Full pipeline: read file → image → OCR (OpenAI/Ollama) → validated JSON dict.
-
-    Automatically uses configured OCR engine with fallback support.
+    """Full pipeline: read file → image → OpenAI OCR → validated JSON dict.
 
     Args:
         file_path: Absolute path to the bill file.

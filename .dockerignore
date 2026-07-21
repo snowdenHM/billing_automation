@@ -1,0 +1,14 @@
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+.git
+.venv
+venv
+env
+.env
+.env.local
+db.sqlite3
+media
+staticfiles
+node_modules
+package-lock.json

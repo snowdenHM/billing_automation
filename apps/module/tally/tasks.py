@@ -19,7 +19,7 @@ from apps.common.services.tasks import (
     update_bill_duplicate_fields,
 )
 
-from .models import TallyExpenseBill, TallyVendorBill
+from .models import TallyExpenseBill, TallyPaymentBill, TallyVendorBill
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +27,17 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "enqueue_vendor_bill_processing",
     "enqueue_expense_bill_processing",
+    "enqueue_payment_bill_processing",
+    "enqueue_pdf_split_vendor",
+    "enqueue_pdf_split_expense",
+    "enqueue_pdf_split_payment",
     "get_job_status",
     "process_vendor_bill_analysis",
     "process_expense_bill_analysis",
+    "process_payment_bill_analysis",
+    "split_pdf_bill_vendor",
+    "split_pdf_bill_expense",
+    "split_pdf_bill_payment",
     "process_multiple_bills",
 ]
 
@@ -48,6 +56,11 @@ def enqueue_expense_bill_processing(bill_id):
     return enqueue_bill_processing(process_expense_bill_analysis, bill_id)
 
 
+def enqueue_payment_bill_processing(bill_id):
+    """Enqueue a payment voucher for background processing."""
+    return enqueue_bill_processing(process_payment_bill_analysis, bill_id)
+
+
 def enqueue_pdf_split_vendor(bill_id):
     """Enqueue the page-by-page splitting of a placeholder vendor PDF."""
     return enqueue_bill_processing(split_pdf_bill_vendor, bill_id)
@@ -56,6 +69,11 @@ def enqueue_pdf_split_vendor(bill_id):
 def enqueue_pdf_split_expense(bill_id):
     """Enqueue the page-by-page splitting of a placeholder expense PDF."""
     return enqueue_bill_processing(split_pdf_bill_expense, bill_id)
+
+
+def enqueue_pdf_split_payment(bill_id):
+    """Enqueue the page-by-page splitting of a placeholder payment-voucher PDF."""
+    return enqueue_bill_processing(split_pdf_bill_payment, bill_id)
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +159,15 @@ def split_pdf_bill_expense(bill_id, **kwargs):
     )
 
 
+def split_pdf_bill_payment(bill_id, **kwargs):
+    """RQ entry point: split a placeholder payment-voucher PDF into per-page bills."""
+    return _split_pdf_placeholder(
+        bill_id,
+        model_class=TallyPaymentBill,
+        enqueue_analysis_fn=enqueue_payment_bill_processing,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Task processors
 # ---------------------------------------------------------------------------
@@ -220,6 +247,18 @@ def process_expense_bill_analysis(bill_id, **kwargs):
         model_class=TallyExpenseBill,
         get_functions=lambda: (analyze_expense_bill_with_ai, check_duplicate_tally_expense_bill),
         bill_type="expense",
+    )
+
+
+def process_payment_bill_analysis(bill_id, **kwargs):
+    """Background task: AI-analyse a payment voucher, then check duplicates."""
+    from .bill_processors import analyze_payment_bill_with_ai, check_duplicate_tally_payment_bill
+
+    return _process_tally_bill(
+        bill_id,
+        model_class=TallyPaymentBill,
+        get_functions=lambda: (analyze_payment_bill_with_ai, check_duplicate_tally_payment_bill),
+        bill_type="payment",
     )
 
 

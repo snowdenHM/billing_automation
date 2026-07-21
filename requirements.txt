@@ -11,6 +11,8 @@ charset-normalizer
 click
 distro
 django
+django-anymail[sendgrid]
+openpyxl
 django-cors-headers
 django-environ
 django-filter

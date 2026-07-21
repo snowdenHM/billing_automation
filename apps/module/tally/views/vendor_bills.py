@@ -1857,6 +1857,19 @@ def vendor_bill_sync(request, org_id):
             'error_code': 'BILL_NOT_VERIFIED'
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
+    # Master-sync guard (Option C — see docs/tally-master-sync.md).
+    # If the bill references any BM-created ledger that Tally hasn't
+    # imported yet, refuse the sync with a 409 so the frontend can
+    # show a "waiting for masters" spinner and retry after the next
+    # Tally poll cycle. XML shape stays unchanged.
+    from .bill_sync_guard import find_pending_masters, build_waiting_response_payload
+    pending_masters = find_pending_masters(analyzed_bill)
+    if pending_masters:
+        return Response(
+            build_waiting_response_payload(pending_masters),
+            status=status.HTTP_409_CONFLICT,
+        )
+
     try:
         # Get structured bill data in the same format as verify view
         sync_data = get_structured_bill_data(analyzed_bill, organization)
