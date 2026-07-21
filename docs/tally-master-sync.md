@@ -366,6 +366,17 @@ XML lands — that's precisely what `/masters/pending_sync/` +
 
 ---
 
+## URL conventions — trailing slashes are **required**
+
+Every endpoint below (and every existing endpoint your TDL already
+uses) **must** end with a trailing `/`. Django's URL router requires
+it, and DRF returns 404 on `POST` without the slash. `GET` requests
+without the slash get a 301 redirect — safe, but wastes a round trip
+and can break clients that don't follow redirects on non-idempotent
+methods.
+
+Rule of thumb: **always send the URL exactly as printed in this doc.**
+
 ## Recommended TDL schedule
 
 | Task                                    | Cadence           |

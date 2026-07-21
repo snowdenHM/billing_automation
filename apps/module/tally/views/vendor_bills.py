@@ -2138,6 +2138,14 @@ def _sync_data_to_xml(bills_data):
                 for entry in value:
                     _emit_ledger_entry(ledgers_elem, entry)
             elif key == 'items' and isinstance(value, list):
+                # Emit <items> only when there IS something to put in it.
+                # In Accounting-Invoice mode (Inventory Sync = OFF) the
+                # list is empty; Tally ignores an empty <items></items>
+                # anyway, so we drop the tag entirely for a cleaner
+                # payload — the presence of <items> alone is what tells
+                # the TDL to switch to Item-Invoice mode.
+                if not value:
+                    continue
                 items_elem = ET.SubElement(bill_elem, 'items')
                 for item in value:
                     item_elem = ET.SubElement(items_elem, 'item')
@@ -2206,6 +2214,20 @@ def prepare_sync_data(analyzed_bill, organization):
         return f"{_money(value):.2f}"
 
     # ------------------------------------------------------------------
+    # Inventory toggle (Settings → Tally Integration → "Inventory Sync").
+    # When OFF the voucher is emitted in "Accounting Invoice" mode:
+    #   * <items> is left empty (Tally treats it as a plain accounting
+    #     voucher, no stock update).
+    #   * The taxable amount rolls up into a single <ledger> row using
+    #     the products' purchase-ledger (or the first item's if mixed).
+    # When ON (default from a user's PoV, though the DB default is
+    # False for legacy reasons) the existing per-item shape is emitted.
+    # ------------------------------------------------------------------
+    from ..models import TallyConfig
+    tally_config = TallyConfig.objects.filter(organization=organization).first()
+    use_inventory = bool(getattr(tally_config, 'tally_product_allow_sync', False))
+
+    # ------------------------------------------------------------------
     # Items: ZERO tax fields here. All tax info lives in the <taxes>
     # block which is grouped by (type, ledger) below.
     # ------------------------------------------------------------------
@@ -2229,10 +2251,17 @@ def prepare_sync_data(analyzed_bill, organization):
         source_lines = list(analyzed_bill.products.all())
 
     logger.info(
-        "prepare_sync_data: bill=%s, lines=%d, source=%s",
+        "prepare_sync_data: bill=%s, lines=%d, source=%s, inventory=%s",
         analyzed_bill.bill_no, len(source_lines),
         'consolidated' if use_consolidated else 'individual',
+        'on' if use_inventory else 'off',
     )
+
+    # Accounting-invoice mode rollup: bucket product amounts by their
+    # purchase ledger so a mixed-rate bill (some 18%, some 28% items)
+    # still emits ONE <ledger> row per distinct purchase-ledger.
+    # Only used when ``use_inventory=False``.
+    purchase_rollup = {}  # {purchase_ledger_name: Decimal_total}
 
     for line in source_lines:
         # The "purchase ledger" is the dr-side ledger that the bill amount
@@ -2242,14 +2271,24 @@ def prepare_sync_data(analyzed_bill, organization):
             str(line.taxes) if getattr(line, 'taxes', None) else "No Purchase Ledger"
         )
 
-        items_payload.append({
-            "name": _clean_tally_text(getattr(line, 'item_name', '')) or "",
-            "details": _clean_tally_text(getattr(line, 'item_details', '')) or "",
-            "purchase_ledger": purchase_ledger_name,
-            "price": _fmt_money(getattr(line, 'price', 0)),
-            "quantity": int(getattr(line, 'quantity', 0) or 0),
-            "amount": _fmt_money(getattr(line, 'amount', 0)),
-        })
+        if use_inventory:
+            # Item-invoice mode — per-item <item> rows with the purchase
+            # ledger attached to each one.
+            items_payload.append({
+                "name": _clean_tally_text(getattr(line, 'item_name', '')) or "",
+                "details": _clean_tally_text(getattr(line, 'item_details', '')) or "",
+                "purchase_ledger": purchase_ledger_name,
+                "price": _fmt_money(getattr(line, 'price', 0)),
+                "quantity": int(getattr(line, 'quantity', 0) or 0),
+                "amount": _fmt_money(getattr(line, 'amount', 0)),
+            })
+        else:
+            # Accounting-invoice mode — collapse into a purchase-ledger
+            # rollup that will be prepended to the ``ledgers_payload`` below.
+            purchase_rollup[purchase_ledger_name] = (
+                purchase_rollup.get(purchase_ledger_name, Decimal('0.00'))
+                + _money(getattr(line, 'amount', 0))
+            )
 
         # Capture line-level tax info for the grouping pass below.
         # Per-product GST ledger FKs only exist on individual products,
@@ -2331,6 +2370,18 @@ def prepare_sync_data(analyzed_bill, organization):
     )
 
     ledgers_payload = []
+    # When inventory sync is OFF we prepend a <ledger> row per distinct
+    # purchase ledger — this is what makes the payload valid for
+    # Tally's "Accounting Invoice" voucher mode (no stock update).
+    if not use_inventory:
+        for pledger_name, total in purchase_rollup.items():
+            if total == 0:
+                continue
+            ledgers_payload.append({
+                "amount": _fmt_money(total),
+                "ledger": pledger_name,
+            })
+
     for entry in sorted_gst_buckets:
         # Pick the dominant rate seen across grouped lines for the
         # informational `<rate>` element. (Within one ledger bucket
