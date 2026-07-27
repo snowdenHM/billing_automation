@@ -1663,14 +1663,34 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 product.sgst = calc_sgst
                 needs_update = True
 
-            # Tax ledger
-            if 'tax_ledger' in item and item['tax_ledger'] != "No Tax Ledger":
-                current_name = str(product.taxes) if product.taxes else "No Tax Ledger"
-                if current_name != item['tax_ledger']:
-                    tax_ledger = find_or_create_tax_ledger(item['tax_ledger'], 'Product Tax', organization)
-                    if tax_ledger:
-                        product.taxes = tax_ledger
+            # Tax ledger — prefer UUID over name (name collision +
+            # sentinel-string mismatch was silently wiping the real
+            # ledger on re-verify). Treat all blank/sentinel names
+            # as "no change" so we never overwrite a good FK with a
+            # bogus find_or_create_tax_ledger("No Purchase Ledger").
+            _BLANK_LEDGER_SENTINELS = {"", "no tax ledger", "no purchase ledger", "none", "null"}
+            tax_ledger_id = item.get('tax_ledger_id') or item.get('taxes')
+            if tax_ledger_id:
+                try:
+                    from ..models import Ledger as _Ledger
+                    new_tax_ledger = _Ledger.objects.get(id=tax_ledger_id, organization=organization)
+                    if product.taxes_id != new_tax_ledger.id:
+                        product.taxes = new_tax_ledger
                         needs_update = True
+                except (_Ledger.DoesNotExist, ValueError):
+                    logger.warning(
+                        "update_analyzed_products: tax_ledger_id %s not found in org %s",
+                        tax_ledger_id, organization.id,
+                    )
+            elif 'tax_ledger' in item:
+                name = str(item.get('tax_ledger') or '').strip()
+                if name.lower() not in _BLANK_LEDGER_SENTINELS:
+                    current_name = str(product.taxes) if product.taxes else ""
+                    if current_name != name:
+                        tax_ledger = find_or_create_tax_ledger(name, 'Product Tax', organization)
+                        if tax_ledger:
+                            product.taxes = tax_ledger
+                            needs_update = True
 
             # Per-line CGST / SGST / IGST tax ledger FKs (used for mixed-rate bills)
             for fk_field in ('cgst_ledger', 'sgst_ledger', 'igst_ledger'):
@@ -1711,10 +1731,21 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 cgst=calc_cgst,
                 sgst=calc_sgst,
             )
-            if item.get('tax_ledger') and item['tax_ledger'] != "No Tax Ledger":
-                tax_ledger = find_or_create_tax_ledger(item['tax_ledger'], 'Product Tax', organization)
-                if tax_ledger:
-                    product.taxes = tax_ledger
+            # Same guard as update path: prefer UUID, reject sentinel strings.
+            _BLANK_LEDGER_SENTINELS = {"", "no tax ledger", "no purchase ledger", "none", "null"}
+            tax_ledger_id = item.get('tax_ledger_id') or item.get('taxes')
+            if tax_ledger_id:
+                try:
+                    from ..models import Ledger as _Ledger
+                    product.taxes = _Ledger.objects.get(id=tax_ledger_id, organization=organization)
+                except (_Ledger.DoesNotExist, ValueError):
+                    pass
+            else:
+                name = str(item.get('tax_ledger') or '').strip()
+                if name.lower() not in _BLANK_LEDGER_SENTINELS:
+                    tax_ledger = find_or_create_tax_ledger(name, 'Product Tax', organization)
+                    if tax_ledger:
+                        product.taxes = tax_ledger
 
             for fk_field in ('cgst_ledger', 'sgst_ledger', 'igst_ledger'):
                 raw_id = item.get(fk_field)
