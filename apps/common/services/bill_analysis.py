@@ -450,8 +450,24 @@ def get_vendor_bill_prompt():
         "total": 0,
         "igst": 0,
         "cgst": 0,
-        "sgst": 0
+        "sgst": 0,
+        "round_off": 0,
+        "discount": 0,
+        "cess": 0,
+        "freight": 0
     }
+
+    round_off / discount / cess / freight EXTRACTION RULES:
+      - If the invoice explicitly prints a line like
+        "ROUND OFF VALUE (₹)", "Rounded Off", "R/O" — put that
+        signed amount in ``round_off`` (may be negative).
+      - If the invoice prints "Discount", "Trade Discount",
+        "Less: Discount" — put the amount (positive) in ``discount``.
+      - "Cess", "GST Cess" → ``cess``. "Freight", "Shipping",
+        "Delivery Charges" → ``freight``.
+      - If the field is absent on the invoice, return 0. Do NOT
+        derive round_off from a total-minus-tax subtraction —
+        that's the backend's job. Only extract what is printed.
 """
     )
 

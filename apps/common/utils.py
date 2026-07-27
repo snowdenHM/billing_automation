@@ -365,30 +365,57 @@ def normalize_company_name(name):
 def normalize_company_name_enhanced(name):
     """Enhanced company name normalization for Indian businesses.
 
-    Strips all business suffixes and special characters for fuzzy comparison.
+    Canonicalises so that "ABC Pvt. Ltd." and "ABC Private Limited"
+    both reduce to "abc" — the core token used for fuzzy match. Order:
+
+      1. Lowercase, strip year suffixes.
+      2. Strip ALL punctuation FIRST (was after suffix-strip, which
+         broke ``\\b`` word-boundary matching on tokens ending in
+         ``.`` like ``Pvt.`` and ``Ltd.`` — issue #5 fix).
+      3. Expand common long forms to their canonical short form
+         (``private limited`` → ``pvt ltd``, ``limited`` → ``ltd``,
+         ``incorporated`` → ``inc``, etc.).
+      4. Strip trailing business-entity words.
     """
     if not name:
         return ""
 
-    normalized = name.strip()
+    normalized = name.strip().lower()
 
-    # Remove year patterns
+    # 1. Year patterns
     normalized = re.sub(r'\s*\([0-9]{4}[-/][0-9]{2,4}\)', '', normalized)
-    normalized = re.sub(r'\s*\(FY[0-9]{2}\)', '', normalized)
+    normalized = re.sub(r'\s*\(fy[0-9]{2}\)', '', normalized)
 
-    business_suffixes = [
-        'Private Limited', 'Pvt Ltd', 'Pvt. Ltd.', 'Ltd', 'Ltd.',
-        'Limited Liability Partnership', 'LLP', 'LLC',
-        'Company', 'Co.', 'Co', 'Corporation', 'Corp', 'Inc', 'Inc.',
-        'Enterprises', 'Industries', 'Trading', 'Traders', 'Services',
-        'Technologies', 'Tech', 'Systems', 'Solutions',
+    # 2. Strip all punctuation → spaces (so word-boundary regexes below
+    # see clean tokens regardless of ``.``/``,``/etc.).
+    normalized = re.sub(r'[^\w\s]', ' ', normalized)
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+
+    # 3. Expand long forms to short so both variants collapse to same
+    # token before trailing-suffix strip.
+    expansions = [
+        (r'\bprivate\s+limited\b', 'pvt ltd'),
+        (r'\bprivate\s+ltd\b',     'pvt ltd'),
+        (r'\bpvt\s+limited\b',     'pvt ltd'),
+        (r'\blimited\b',           'ltd'),
+        (r'\bincorporated\b',      'inc'),
+        (r'\bcorporation\b',       'corp'),
+        (r'\bcompany\b',           'co'),
+        (r'\blimited\s+liability\s+partnership\b', 'llp'),
     ]
+    for pattern, replacement in expansions:
+        normalized = re.sub(pattern, replacement, normalized)
 
-    for suffix in business_suffixes:
-        normalized = re.sub(r'\b' + re.escape(suffix) + r'\b', '', normalized, flags=re.IGNORECASE)
+    # 4. Strip trailing / standalone business-entity tokens.
+    trailing = [
+        'pvt ltd', 'ltd', 'llp', 'llc', 'co', 'corp', 'inc',
+        'enterprises', 'industries', 'trading', 'traders', 'services',
+        'technologies', 'tech', 'systems', 'solutions',
+    ]
+    for suffix in trailing:
+        normalized = re.sub(r'\b' + suffix + r'\b', '', normalized)
 
     normalized = re.sub(r'\s+', ' ', normalized).strip()
-    normalized = re.sub(r'[^\w\s]', '', normalized)  # Remove special chars
     return normalized
 
 

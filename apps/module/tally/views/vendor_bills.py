@@ -262,11 +262,21 @@ def process_analysis_data(bill, json_data, organization):
 
             total_val = safe_float_convert(relevant_data.get('total', 0))
             discount_val = safe_float_convert(relevant_data.get('discount', 0))
+            # New extraction fields — captures printed round_off / cess /
+            # freight from invoices that explicitly show them. Bills that
+            # don't print these still get round_off auto-computed later
+            # via ``analyzed_bill.compute_round_off()``.
+            round_off_val = safe_float_convert(relevant_data.get('round_off', 0))
+            cess_val     = safe_float_convert(relevant_data.get('cess', 0))
+            freight_val  = safe_float_convert(relevant_data.get('freight', 0))
             igst_rounded = Decimal(str(igst_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             cgst_rounded = Decimal(str(cgst_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             sgst_rounded = Decimal(str(sgst_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             total_rounded = Decimal(str(total_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             discount_rounded = Decimal(str(discount_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            round_off_rounded = Decimal(str(round_off_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            cess_rounded     = Decimal(str(cess_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            freight_rounded  = Decimal(str(freight_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
             logger.warning(f"💵 Bill amounts - Total: {total_rounded}, IGST: {igst_rounded}, CGST: {cgst_rounded}, SGST: {sgst_rounded}")
 
@@ -289,6 +299,9 @@ def process_analysis_data(bill, json_data, organization):
                     "cgst_taxes": cgst_tax_ledger,
                     "sgst_taxes": sgst_tax_ledger,
                     "discount": discount_rounded,
+                    "round_off": round_off_rounded,
+                    "cess": cess_rounded,
+                    "freight": freight_rounded,
                     "total": total_rounded,
                     "note": "AI Analyzed Bill",
                     "organization": organization,
@@ -309,6 +322,9 @@ def process_analysis_data(bill, json_data, organization):
                 analyzed_bill.cgst_taxes = cgst_tax_ledger
                 analyzed_bill.sgst_taxes = sgst_tax_ledger
                 analyzed_bill.discount = discount_rounded
+                analyzed_bill.round_off = round_off_rounded
+                analyzed_bill.cess = cess_rounded
+                analyzed_bill.freight = freight_rounded
                 analyzed_bill.total = total_rounded
                 analyzed_bill.gst_type = gst_type
                 analyzed_bill.save()
@@ -450,11 +466,24 @@ def process_analysis_data(bill, json_data, organization):
                 else:
                     logger.info(f"ℹ️ Skipping consolidated product creation - bill has only {len(product_instances)} item(s)")
 
+            # Auto-fill round_off right after analysis so the UI shows a
+            # balanced bill from the moment it opens (was blank until
+            # user hit Verify, but Verify required the round-off ledger
+            # picked first → chicken-and-egg). ``compute_round_off``
+            # applies only when |diff| < ₹1 so genuine mismatches still
+            # surface for review.
+            try:
+                analyzed_bill.compute_round_off()
+            except Exception as round_off_err:
+                logger.warning(
+                    f"Auto round-off failed for vendor bill {analyzed_bill.id}: {round_off_err}"
+                )
+
             # Update bill status
             bill.status = TallyVendorBill.BillStatus.ANALYSED
             bill.process = True
             bill.save(update_fields=['status', 'process'])
-            
+
             logger.warning(f"🎉 ANALYSIS COMPLETE - Bill {bill.id} status updated to ANALYSED")
 
             return analyzed_bill
@@ -1230,6 +1259,30 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
         except (InvalidOperation, ValueError, TypeError):
             return Decimal('0.00')
 
+    from ..models import Ledger as _Ledger
+
+    def _resolve_tax_ledger(payload, tax_type):
+        """Return a Ledger — prefer ``ledger_id`` UUID over ``ledger`` name.
+        Name-only lookups can silently pick a duplicate ledger from a
+        different parent group; UUID from the frontend dropdown is
+        authoritative.
+        """
+        if not isinstance(payload, dict):
+            return None
+        ledger_id = payload.get('ledger_id') or payload.get('id')
+        if ledger_id:
+            try:
+                return _Ledger.objects.get(id=ledger_id, organization=organization)
+            except (_Ledger.DoesNotExist, ValueError):
+                logger.warning(
+                    "Verify: ledger_id %s not in org %s — falling back to name",
+                    ledger_id, organization.id,
+                )
+        name = payload.get('ledger')
+        if name and name != "No Tax Ledger":
+            return find_or_create_tax_ledger(name, tax_type, organization)
+        return None
+
     with transaction.atomic():
         # Handle consolidate flag if present in analyzed_data
         if 'consolidate' in analyzed_data:
@@ -1241,27 +1294,43 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
             except AttributeError:
                 logger.warning("Consolidate field not available in analyzed_bill model")
 
-        # Update vendor information
+        # Update vendor information. Prefer explicit ``vendor_id`` UUID
+        # sent by the frontend dropdown — name-based fuzzy match can
+        # silently pick a wrong vendor when two ledgers share a name
+        # across parent groups. Falls back to name lookup only when
+        # the frontend didn't send an ID (legacy shape).
         vendor_data = analyzed_data.get('vendor', {})
-        if vendor_data and vendor_data.get('vendor_name') != "No Ledger":
-            vendor_name = vendor_data.get('vendor_name')
-            if vendor_name:
-                # Check if vendor is different from current one
-                current_vendor = analyzed_bill.vendor
-                if not current_vendor or current_vendor.name != vendor_name.strip():
-                    # Only find/create if vendor has changed
-                    vendor = find_or_create_vendor_ledger(vendor_name, vendor_data, organization)
-                    if vendor:
-                        analyzed_bill.vendor = vendor
-                else:
-                    # Update existing vendor details if provided
-                    if vendor_data.get('master_id') and vendor_data['master_id'] != "No Ledger":
-                        current_vendor.master_id = vendor_data['master_id']
-                    if vendor_data.get('gst_in') and vendor_data['gst_in'] != "No Ledger":
-                        current_vendor.gst_in = vendor_data['gst_in']
-                    if vendor_data.get('company') and vendor_data['company'] != "No Ledger":
-                        current_vendor.company = vendor_data['company']
-                    current_vendor.save()
+        if vendor_data:
+            vendor_id = vendor_data.get('vendor_id') or vendor_data.get('id')
+            if vendor_id:
+                try:
+                    from ..models import Ledger as _Ledger
+                    analyzed_bill.vendor = _Ledger.objects.get(
+                        id=vendor_id, organization=organization,
+                    )
+                except (_Ledger.DoesNotExist, ValueError):
+                    logger.warning(
+                        "Verify: vendor_id %s not found in org %s — "
+                        "falling back to name match",
+                        vendor_id, organization.id,
+                    )
+                    vendor_id = None
+            if not vendor_id and vendor_data.get('vendor_name') != "No Ledger":
+                vendor_name = vendor_data.get('vendor_name')
+                if vendor_name:
+                    current_vendor = analyzed_bill.vendor
+                    if not current_vendor or current_vendor.name != vendor_name.strip():
+                        vendor = find_or_create_vendor_ledger(vendor_name, vendor_data, organization)
+                        if vendor:
+                            analyzed_bill.vendor = vendor
+                    else:
+                        if vendor_data.get('master_id') and vendor_data['master_id'] != "No Ledger":
+                            current_vendor.master_id = vendor_data['master_id']
+                        if vendor_data.get('gst_in') and vendor_data['gst_in'] != "No Ledger":
+                            current_vendor.gst_in = vendor_data['gst_in']
+                        if vendor_data.get('company') and vendor_data['company'] != "No Ledger":
+                            current_vendor.company = vendor_data['company']
+                        current_vendor.save()
 
         # Update bill details
         if 'bill_no' in analyzed_data:
@@ -1279,76 +1348,36 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
         if 'total_amount' in analyzed_data:
             analyzed_bill.total = _money(analyzed_data['total_amount'])
 
-        # Update tax information
+        # Update tax information. All 7 fields (igst/cgst/sgst/discount/
+        # cess/freight/round_off) share the same shape → single loop.
+        # Ledger FK cleared when amount is zero so stale references
+        # don't leak into the sync XML.
         taxes_data = analyzed_data.get('taxes', {})
         if taxes_data:
-            # Update IGST
-            igst_data = taxes_data.get('igst', {})
-            if 'amount' in igst_data:
-                analyzed_bill.igst = _money(igst_data['amount'])
-            if 'ledger' in igst_data and igst_data['ledger'] != "No Tax Ledger":
-                # Check if current IGST tax ledger is different
-                current_igst_ledger = analyzed_bill.igst_taxes
-                if not current_igst_ledger or str(current_igst_ledger) != igst_data['ledger']:
-                    igst_ledger = find_or_create_tax_ledger(igst_data['ledger'], 'IGST', organization)
-                    if igst_ledger:
-                        analyzed_bill.igst_taxes = igst_ledger
-            # Update CGST
-            cgst_data = taxes_data.get('cgst', {})
-            if 'amount' in cgst_data:
-                analyzed_bill.cgst = _money(cgst_data['amount'])
-            if 'ledger' in cgst_data and cgst_data['ledger'] != "No Tax Ledger":
-                # Check if current CGST tax ledger is different
-                current_cgst_ledger = analyzed_bill.cgst_taxes
-                if not current_cgst_ledger or str(current_cgst_ledger) != cgst_data['ledger']:
-                    cgst_ledger = find_or_create_tax_ledger(cgst_data['ledger'], 'CGST', organization)
-                    if cgst_ledger:
-                        analyzed_bill.cgst_taxes = cgst_ledger
-            # Update SGST
-            sgst_data = taxes_data.get('sgst', {})
-            if 'amount' in sgst_data:
-                analyzed_bill.sgst = _money(sgst_data['amount'])
-            if 'ledger' in sgst_data and sgst_data['ledger'] != "No Tax Ledger":
-                # Check if current SGST tax ledger is different
-                current_sgst_ledger = analyzed_bill.sgst_taxes
-                if not current_sgst_ledger or str(current_sgst_ledger) != sgst_data['ledger']:
-                    sgst_ledger = find_or_create_tax_ledger(sgst_data['ledger'], 'SGST', organization)
-                    if sgst_ledger:
-                        analyzed_bill.sgst_taxes = sgst_ledger
-
-            # Update Discount
-            discount_data = taxes_data.get('discount', {})
-            if 'amount' in discount_data:
-                analyzed_bill.discount = _money(discount_data['amount'])
-            if 'ledger' in discount_data and discount_data['ledger'] != "No Tax Ledger":
-                # Check if current discount tax ledger is different
-                current_discount_ledger = analyzed_bill.discount_taxes
-                if not current_discount_ledger or str(current_discount_ledger) != discount_data['ledger']:
-                    discount_ledger = find_or_create_tax_ledger(discount_data['ledger'], 'DISCOUNT', organization)
-                    if discount_ledger:
-                        analyzed_bill.discount_taxes = discount_ledger
-
-            # Update Cess
-            cess_data = taxes_data.get('cess', {})
-            if 'amount' in cess_data:
-                analyzed_bill.cess = _money(cess_data['amount'])
-            if 'ledger' in cess_data and cess_data['ledger'] != "No Tax Ledger":
-                current_cess_ledger = analyzed_bill.cess_taxes
-                if not current_cess_ledger or str(current_cess_ledger) != cess_data['ledger']:
-                    cess_ledger = find_or_create_tax_ledger(cess_data['ledger'], 'CESS', organization)
-                    if cess_ledger:
-                        analyzed_bill.cess_taxes = cess_ledger
-
-            # Update Freight
-            freight_data = taxes_data.get('freight', {})
-            if 'amount' in freight_data:
-                analyzed_bill.freight = _money(freight_data['amount'])
-            if 'ledger' in freight_data and freight_data['ledger'] != "No Tax Ledger":
-                current_freight_ledger = analyzed_bill.freight_taxes
-                if not current_freight_ledger or str(current_freight_ledger) != freight_data['ledger']:
-                    freight_ledger = find_or_create_tax_ledger(freight_data['ledger'], 'FREIGHT', organization)
-                    if freight_ledger:
-                        analyzed_bill.freight_taxes = freight_ledger
+            _TAX_FIELDS = (
+                ('igst',      'igst',      'igst_taxes',      'IGST'),
+                ('cgst',      'cgst',      'cgst_taxes',      'CGST'),
+                ('sgst',      'sgst',      'sgst_taxes',      'SGST'),
+                ('discount',  'discount',  'discount_taxes',  'DISCOUNT'),
+                ('cess',      'cess',      'cess_taxes',      'CESS'),
+                ('freight',   'freight',   'freight_taxes',   'FREIGHT'),
+                ('round_off', 'round_off', 'round_off_taxes', 'ROUND_OFF'),
+            )
+            for payload_key, amount_field, ledger_field, tax_type in _TAX_FIELDS:
+                block = taxes_data.get(payload_key)
+                if not isinstance(block, dict):
+                    continue
+                if 'amount' in block:
+                    amt = _money(block['amount'])
+                    setattr(analyzed_bill, amount_field, amt)
+                    if amt == 0:
+                        # Amount cleared — drop the FK so the sync XML
+                        # doesn't emit a ghost ledger row.
+                        setattr(analyzed_bill, ledger_field, None)
+                        continue
+                resolved = _resolve_tax_ledger(block, tax_type)
+                if resolved:
+                    setattr(analyzed_bill, ledger_field, resolved)
 
         # Determine GST type based on updated amounts
         if analyzed_bill.igst and analyzed_bill.igst > 0:
@@ -1735,6 +1764,9 @@ def get_structured_bill_data(analyzed_bill, organization):
             "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
             "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
             "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "No Ledger",
+            # UUID so the frontend can re-select the exact ledger row
+            # on reload instead of guessing by name.
+            "id": str(vendor_ledger.id) if vendor_ledger else None,
         },
         "bill_details": {
             "bill_number": analyzed_bill.bill_no,
@@ -1743,34 +1775,47 @@ def get_structured_bill_data(analyzed_bill, organization):
             "total_amount": float(analyzed_bill.total or 0),
             "company_id": team_slug,
         },
+        # Notes were saved but not returned — reload of a bill showed
+        # blank notes even though the user had entered text.
+        "note": analyzed_bill.note or "",
+        # Response ships BOTH ledger name and UUID for every tax row.
+        # Frontend prefers the UUID to auto-select the right dropdown
+        # option (name alone can collide across parent groups).
         "taxes": {
             "igst": {
                 "amount": float(analyzed_bill.igst or 0),
                 "ledger": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "No Tax Ledger",
+                "ledger_id": str(analyzed_bill.igst_taxes.id) if analyzed_bill.igst_taxes else None,
             },
             "cgst": {
                 "amount": float(analyzed_bill.cgst or 0),
                 "ledger": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "No Tax Ledger",
+                "ledger_id": str(analyzed_bill.cgst_taxes.id) if analyzed_bill.cgst_taxes else None,
             },
             "sgst": {
                 "amount": float(analyzed_bill.sgst or 0),
                 "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
+                "ledger_id": str(analyzed_bill.sgst_taxes.id) if analyzed_bill.sgst_taxes else None,
             },
             "discount": {
                 "amount": float(analyzed_bill.discount or 0),
                 "ledger": str(analyzed_bill.discount_taxes) if analyzed_bill.discount_taxes else "No Tax Ledger",
+                "ledger_id": str(analyzed_bill.discount_taxes.id) if analyzed_bill.discount_taxes else None,
             },
             "cess": {
                 "amount": float(analyzed_bill.cess or 0),
                 "ledger": str(analyzed_bill.cess_taxes) if analyzed_bill.cess_taxes else "No Tax Ledger",
+                "ledger_id": str(analyzed_bill.cess_taxes.id) if analyzed_bill.cess_taxes else None,
             },
             "freight": {
                 "amount": float(analyzed_bill.freight or 0),
                 "ledger": str(analyzed_bill.freight_taxes) if analyzed_bill.freight_taxes else "No Tax Ledger",
+                "ledger_id": str(analyzed_bill.freight_taxes.id) if analyzed_bill.freight_taxes else None,
             },
             "round_off": {
                 "amount": float(analyzed_bill.round_off or 0),
                 "ledger": str(analyzed_bill.round_off_taxes) if analyzed_bill.round_off_taxes else "No Tax Ledger",
+                "ledger_id": str(analyzed_bill.round_off_taxes.id) if analyzed_bill.round_off_taxes else None,
             }
         },
         "products": [
@@ -1778,7 +1823,11 @@ def get_structured_bill_data(analyzed_bill, organization):
                 "item_id": str(item.id),  # <-- return item_id for future PATCHes
                 "item_name": item.item_name,
                 "item_details": item.item_details,
-                "tax_ledger": str(item.taxes) if item.taxes else "No Tax Ledger",
+                "tax_ledger": item.taxes.name if item.taxes else "No Tax Ledger",
+                # Explicit UUID lets the frontend match the dropdown by ID
+                # instead of guessing from the display name (was issue in
+                # detail.jsx:2399 — name-based lookup lost tax ledger on reload).
+                "tax_ledger_id": str(item.taxes.id) if item.taxes else None,
                 "price": float(item.price or 0),
                 "quantity": int(item.quantity or 0),
                 "amount": float(item.amount or 0),

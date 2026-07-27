@@ -1017,6 +1017,17 @@ def update_analyzed_payment_bill_data(analyzed_bill, analyzed_data, organization
             if 'debit_or_credit' in other_adjustment_data:
                 analyzed_bill.other_adjustment_debit_or_credit = other_adjustment_data['debit_or_credit']
 
+            # Handle Round Off (mirror of vendor/expense fix).
+            round_off_data = taxes_data.get('round_off', {})
+            if 'amount' in round_off_data:
+                analyzed_bill.round_off = _to_decimal(round_off_data['amount'])
+            if 'ledger' in round_off_data and round_off_data['ledger'] != "No Tax Ledger":
+                round_off_ledger = find_or_create_payment_tax_ledger(round_off_data['ledger'], 'ROUND_OFF', organization)
+                if round_off_ledger:
+                    analyzed_bill.round_off_taxes = round_off_ledger
+            if 'debit_or_credit' in round_off_data:
+                analyzed_bill.round_off_debit_or_credit = round_off_data['debit_or_credit']
+
         # ------------------------------------------------------------------
         # Multi-rate GST lines — replaces the single bill-level CGST/SGST/IGST
         # values. The frontend now sends ``analyzed_data.gst_lines`` as an
@@ -1279,6 +1290,21 @@ def update_analyzed_payment_products(analyzed_bill, payment_items, organization)
         elif analyzed_bill.vendor_debit_or_credit == 'credit':
             total_credit += float(analyzed_bill.vendor_amount)
 
+    # Include other_adjustment + round_off (mirror expense fix).
+    if analyzed_bill.other_adjustment and analyzed_bill.other_adjustment != 0:
+        amt = abs(float(analyzed_bill.other_adjustment))
+        if analyzed_bill.other_adjustment_debit_or_credit == 'debit':
+            total_debit += amt
+        elif analyzed_bill.other_adjustment_debit_or_credit == 'credit':
+            total_credit += amt
+
+    if analyzed_bill.round_off and analyzed_bill.round_off != 0:
+        amt = abs(float(analyzed_bill.round_off))
+        if analyzed_bill.round_off_debit_or_credit == 'debit':
+            total_debit += amt
+        elif analyzed_bill.round_off_debit_or_credit == 'credit':
+            total_credit += amt
+
     # Check if debit and credit amounts are equal (including all components)
     # (allowing for small rounding differences)
     if abs(total_debit - total_credit) > 0.01:
@@ -1286,7 +1312,8 @@ def update_analyzed_payment_products(analyzed_bill, payment_items, organization)
             f"Total Debit and Credit amounts must be equal across all components. "
             f"Total Debit: {total_debit}, Total Credit: {total_credit}, "
             f"Difference: {abs(total_debit - total_credit)}. "
-            f"This includes payment items, taxes (IGST/CGST/SGST/TDS), and vendor amount."
+            f"This includes payment items, taxes (IGST/CGST/SGST/TDS), "
+            f"vendor amount, other adjustment and round off."
         )
 
     # Get existing products mapped by their ID
