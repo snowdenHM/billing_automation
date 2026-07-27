@@ -127,6 +127,9 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
             'bill_no', 'bill_date', 'due_date', 'total', 'igst', 'igst_taxes',
             'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes', 'discount', 'discount_taxes',
             'cess', 'cess_taxes', 'freight', 'freight_taxes',
+            # round_off was missing → saved values dropped on reload; UI
+            # showed blank amount + blank ledger even after successful save.
+            'round_off', 'round_off_taxes', 'round_off_debit_or_credit',
             'gst_type', 'note', 'consolidate', 'products', 'created_at'
         ]
         read_only_fields = ['id', 'created_at', 'vendor_name', 'selected_bill_name', 'products']
