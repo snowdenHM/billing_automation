@@ -7,6 +7,71 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 
 
+# ---------------------------------------------------------------------------
+# Business-email enforcement
+#
+# Demo requests are a sales-qualification funnel, so we only accept an
+# address at a domain the person's organisation actually controls. Free
+# consumer mailboxes (gmail.com, yahoo.in, …) and throwaway/disposable
+# providers carry no signal about who is asking, so they're rejected.
+#
+# This is a denylist rather than an allowlist: we can't enumerate every
+# legitimate company domain, but the set of consumer providers is small
+# and stable. Extend it per-deployment with ``BLOCKED_EMAIL_DOMAINS`` in
+# settings instead of editing this list.
+# ---------------------------------------------------------------------------
+
+FREE_EMAIL_DOMAINS = frozenset({
+    # Global consumer providers
+    "gmail.com", "googlemail.com",
+    "yahoo.com", "yahoo.co.in", "yahoo.co.uk", "yahoo.in", "ymail.com", "rocketmail.com",
+    "hotmail.com", "hotmail.co.uk", "outlook.com", "outlook.in", "live.com", "msn.com",
+    "aol.com", "icloud.com", "me.com", "mac.com",
+    "protonmail.com", "proton.me", "pm.me",
+    "zoho.com", "zohomail.com",
+    "gmx.com", "gmx.net", "mail.com", "inbox.com", "fastmail.com",
+    "yandex.com", "yandex.ru", "tutanota.com", "hushmail.com",
+    # India-specific consumer providers
+    "rediffmail.com", "rediff.com", "sify.com", "indiatimes.com",
+    "bsnl.in", "bsnl.co.in", "vsnl.net", "vsnl.com", "airtelmail.in",
+    # Disposable / throwaway
+    "mailinator.com", "guerrillamail.com", "10minutemail.com", "tempmail.com",
+    "temp-mail.org", "throwawaymail.com", "yopmail.com", "trashmail.com",
+    "sharklasers.com", "getnada.com", "dispostable.com", "maildrop.cc",
+})
+
+
+def get_blocked_email_domains():
+    """Return the effective set of non-business email domains.
+
+    ``settings.BLOCKED_EMAIL_DOMAINS`` is merged on top of the built-in
+    list so a deployment can block extra domains without a code change.
+    """
+    extra = getattr(settings, "BLOCKED_EMAIL_DOMAINS", None) or ()
+    return FREE_EMAIL_DOMAINS | {str(d).strip().lower().lstrip("@") for d in extra if d}
+
+
+def is_business_email(value):
+    """True when ``value`` looks like a company-controlled address."""
+    if not value or "@" not in str(value):
+        return False
+    domain = str(value).rsplit("@", 1)[1].strip().lower()
+    return bool(domain) and domain not in get_blocked_email_domains()
+
+
+def validate_business_email(value):
+    """Reject free/personal/disposable mailboxes.
+
+    Raises ``ValidationError`` so it works as both a model field
+    validator and a DRF field-level validator.
+    """
+    if not is_business_email(value):
+        raise ValidationError(
+            "Please use your work email address. "
+            "Personal email accounts (Gmail, Yahoo, Outlook, etc.) are not accepted."
+        )
+
+
 def validate_file_extension(value):
     """
     Validates the file extension for uploads (PDF/Images only).

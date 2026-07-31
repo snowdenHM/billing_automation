@@ -2,6 +2,8 @@ from django.db import models
 from django.utils import timezone
 import uuid
 
+from apps.common.validators import validate_business_email
+
 
 class TimeStampedModel(models.Model):
     """Abstract base model with created/updated timestamps."""
@@ -106,3 +108,57 @@ class EmailSettings(models.Model):
         if self.from_name:
             return f"{self.from_name} <{self.from_email}>"
         return self.from_email
+
+
+# ---------------------------------------------------------------------------
+# DemoRequest — public "Book a demo" lead capture
+# ---------------------------------------------------------------------------
+
+class DemoRequest(TimeStampedModel):
+    """A demo booking submitted from the public /book-demo page.
+
+    ``email`` is unique so one work address can only ever hold one
+    booking — the DB constraint is the real guarantee, the serializer
+    check just turns the race into a friendly message.
+
+    Addresses are normalised to lowercase on save so ``Foo@acme.com``
+    and ``foo@acme.com`` collide as the same person.
+    """
+
+    class Software(models.TextChoices):
+        ZOHO = "zoho", "Zoho Books"
+        TALLY = "tally", "Tally"
+        BOTH = "both", "Both (Zoho Books & Tally)"
+        OTHER = "other", "Other / Not sure"
+
+    class Status(models.TextChoices):
+        NEW = "new", "New"
+        CONTACTED = "contacted", "Contacted"
+        SCHEDULED = "scheduled", "Scheduled"
+        COMPLETED = "completed", "Completed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    full_name = models.CharField(max_length=150)
+    organization = models.CharField(max_length=150)
+    accounting_software = models.CharField(max_length=20, choices=Software.choices)
+    email = models.EmailField(
+        unique=True,
+        validators=[validate_business_email],
+        help_text="Work email. Personal mailboxes (Gmail, Yahoo, …) are rejected.",
+    )
+    phone = models.CharField(max_length=20)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.NEW)
+    notes = models.TextField(blank=True, help_text="Internal sales notes.")
+
+    class Meta:
+        verbose_name = "Demo request"
+        verbose_name_plural = "Demo requests"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.full_name} <{self.email}> ({self.organization})"
+
+    def save(self, *args, **kwargs):
+        if self.email:
+            self.email = self.email.strip().lower()
+        super().save(*args, **kwargs)

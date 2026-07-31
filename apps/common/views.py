@@ -6,10 +6,19 @@ import os
 
 from django.conf import settings
 from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
+from django.db import IntegrityError
 from django.http import Http404, HttpResponseForbidden
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.views.decorators.csrf import csrf_exempt
 from django.views.static import serve as django_serve
+from drf_spectacular.utils import extend_schema
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+from apps.common.serializers import DemoRequestSerializer
+from apps.common.utils import send_simple_email
 
 logger = logging.getLogger(__name__)
 
@@ -107,3 +116,84 @@ def serve_bill_file(request, path):
     # ``private`` so shared proxies don't cache one user's token response.
     response["Cache-Control"] = "private, max-age=3600"
     return response
+
+
+# ---------------------------------------------------------------------------
+# Public demo booking
+# ---------------------------------------------------------------------------
+
+@extend_schema(
+    request=DemoRequestSerializer,
+    responses={201: DemoRequestSerializer},
+    tags=["Public"],
+    methods=["POST"],
+)
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def book_demo_view(request):
+    """Record a demo request from the public /book-demo page.
+
+    Rejects non-business emails and repeat bookings. Both checks live in
+    :class:`DemoRequestSerializer`; this view only adds the duplicate
+    race guard and the notification email.
+    """
+    serializer = DemoRequestSerializer(data=request.data)
+
+    if not serializer.is_valid():
+        errors = serializer.errors
+        email_errors = [str(e) for e in errors.get("email", [])]
+        already_booked = DemoRequestSerializer.ALREADY_BOOKED_MESSAGE in email_errors
+
+        # Surface one flat message for the toast, keep per-field errors
+        # for inline display.
+        first_error = next(
+            (str(msgs[0]) for msgs in errors.values() if msgs),
+            "Please check the form and try again.",
+        )
+        return Response(
+            {
+                "message": first_error,
+                "code": "already_booked" if already_booked else "validation_error",
+                "errors": errors,
+            },
+            status=status.HTTP_409_CONFLICT if already_booked else status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        demo_request = serializer.save()
+    except IntegrityError:
+        # Two submissions for the same email raced past the serializer
+        # check; the unique index is the real arbiter.
+        return Response(
+            {
+                "message": DemoRequestSerializer.ALREADY_BOOKED_MESSAGE,
+                "code": "already_booked",
+                "errors": {"email": [DemoRequestSerializer.ALREADY_BOOKED_MESSAGE]},
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    # Notify sales. A dead SMTP server must never fail the booking the
+    # visitor already completed, so failures are logged and swallowed.
+    try:
+        send_simple_email(
+            subject=f"New demo request — {demo_request.organization}",
+            message=(
+                f"Name: {demo_request.full_name}\n"
+                f"Organization: {demo_request.organization}\n"
+                f"Email: {demo_request.email}\n"
+                f"Phone: {demo_request.phone}\n"
+                f"Accounting software: {demo_request.get_accounting_software_display()}\n"
+            ),
+            to_email=getattr(settings, "SALES_NOTIFICATION_EMAIL", "support@billmunshi.com"),
+        )
+    except Exception as exc:
+        logger.error("Demo-request notification failed for %s: %s", demo_request.email, exc)
+
+    return Response(
+        {
+            "message": "Thank you! Our team will contact you shortly to schedule your demo.",
+            "demo_request": DemoRequestSerializer(demo_request).data,
+        },
+        status=status.HTTP_201_CREATED,
+    )

@@ -10,7 +10,41 @@ from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
-from apps.common.models import EmailSettings
+from apps.common.models import DemoRequest, EmailSettings
+
+
+@admin.register(DemoRequest)
+class DemoRequestAdmin(admin.ModelAdmin):
+    """Read-mostly view of public demo bookings."""
+
+    list_display = (
+        "full_name", "organization", "email", "phone",
+        "accounting_software", "status", "created_at",
+    )
+    list_filter = ("status", "accounting_software", "created_at")
+    search_fields = ("full_name", "organization", "email", "phone")
+    list_editable = ("status",)
+    readonly_fields = (
+        "id", "full_name", "organization", "accounting_software",
+        "email", "phone", "created_at", "updated_at",
+    )
+    fieldsets = (
+        ("Contact", {
+            "fields": ("full_name", "organization", "email", "phone", "accounting_software"),
+        }),
+        ("Follow-up", {
+            "fields": ("status", "notes"),
+        }),
+        ("Metadata", {
+            "fields": ("id", "created_at", "updated_at"),
+            "classes": ("collapse",),
+        }),
+    )
+    ordering = ("-created_at",)
+
+    def has_add_permission(self, request):
+        # Bookings only ever arrive through the public form.
+        return False
 
 
 @admin.register(EmailSettings)
