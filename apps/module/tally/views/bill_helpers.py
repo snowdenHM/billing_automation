@@ -367,9 +367,13 @@ def bills_upload_base(
 
         with transaction.atomic():
             upload_warnings = []
+            rejected_files = []
 
             from apps.common.services.content_hash import (
                 compute_file_hash, find_hash_duplicate,
+            )
+            from apps.common.services.document_classification import (
+                classify_document, describe_rejection,
             )
 
             for uploaded_file in files:
@@ -405,6 +409,23 @@ def bills_upload_base(
                     logger.info(
                         "Exact-duplicate detected for %s (hash=%s) — skipping upload",
                         uploaded_file.name, content_hash[:12],
+                    )
+                    continue
+
+                # Screen the document BEFORE creating the Draft row, so a
+                # non-bill never becomes a bill the user has to clean up.
+                uploaded_file.seek(0)
+                verdict = classify_document(uploaded_file.read(), file_extension)
+                uploaded_file.seek(0)
+
+                if not verdict['is_bill']:
+                    rejected_files.append(
+                        describe_rejection(uploaded_file.name, verdict)
+                    )
+                    logger.info(
+                        "[%s] Rejected %s — detected as %s (confidence %.2f)",
+                        bill_type_label, uploaded_file.name,
+                        verdict['document_type'], verdict['confidence'],
                     )
                     continue
 
@@ -499,16 +520,35 @@ def bills_upload_base(
             for bill in created_bills
         ]
 
+        # Nothing survived screening — say so rather than reporting success
+        # with zero bills.
+        if rejected_files and not created_bills:
+            return Response({
+                'error': 'No Bills Uploaded',
+                'detail': 'None of the uploaded files look like bills or invoices.',
+                'rejected_files': rejected_files,
+                'files_rejected': len(rejected_files),
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         response_serializer = response_serializer_class(created_bills, many=True, context={'request': request})
 
+        accepted = len(files) - len(rejected_files)
         response_data = {
-            'message': f'Successfully uploaded {len(files)} file(s) and created {len(created_bills)} {bill_type_label} bill(s). Processing started in background.',
-            'files_uploaded': len(files),
+            'message': f'Successfully uploaded {accepted} file(s) and created {len(created_bills)} {bill_type_label} bill(s). Processing started in background.',
+            'files_uploaded': accepted,
             'bills_created': len(created_bills),
             'bills': response_serializer.data,
             'processing_jobs': job_results,
             'note': 'Bills are being processed in the background. Use the bill status endpoint to check progress.'
         }
+
+        if rejected_files:
+            response_data['rejected_files'] = rejected_files
+            response_data['files_rejected'] = len(rejected_files)
+            response_data['rejection_message'] = (
+                f"{len(rejected_files)} file(s) were not uploaded because they "
+                "do not look like bills."
+            )
 
         if upload_warnings:
             response_data['upload_warnings'] = upload_warnings

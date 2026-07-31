@@ -156,9 +156,13 @@ def zoho_bills_upload_base(
     try:
         with transaction.atomic():
             upload_warnings = []
+            rejected_files = []
 
             from apps.common.services.content_hash import (
                 compute_file_hash, find_hash_duplicate,
+            )
+            from apps.common.services.document_classification import (
+                classify_document, describe_rejection,
             )
 
             for i, uploaded_file in enumerate(files):
@@ -192,6 +196,25 @@ def zoho_bills_upload_base(
                     logger.info(
                         "Exact-duplicate detected for %s (hash=%s) — skipping",
                         uploaded_file.name, content_hash[:12],
+                    )
+                    continue
+
+                # Screen the document BEFORE creating the Draft row, so a
+                # non-bill never becomes a bill the user has to clean up.
+                # Runs after the hash check so re-uploading a known file
+                # costs nothing.
+                uploaded_file.seek(0)
+                verdict = classify_document(uploaded_file.read(), file_extension)
+                uploaded_file.seek(0)
+
+                if not verdict['is_bill']:
+                    rejected_files.append(
+                        describe_rejection(uploaded_file.name, verdict)
+                    )
+                    logger.info(
+                        "[%s] Rejected %s — detected as %s (confidence %.2f)",
+                        tag, uploaded_file.name,
+                        verdict['document_type'], verdict['confidence'],
                     )
                     continue
 
@@ -341,6 +364,18 @@ def zoho_bills_upload_base(
         # scheduled via ``transaction.on_commit`` above so job IDs are
         # not yet populated at response time; the frontend polls for them.
         if enqueue_analysis_fn:
+            # Nothing survived screening — tell the user plainly rather than
+            # returning a "success" with zero bills.
+            if rejected_files and not created_bills:
+                return Response({
+                    'error': 'No Bills Uploaded',
+                    'detail': (
+                        'None of the uploaded files look like bills or invoices.'
+                    ),
+                    'rejected_files': rejected_files,
+                    'files_rejected': len(rejected_files),
+                }, status=status.HTTP_400_BAD_REQUEST)
+
             processing_jobs = [
                 {
                     'bill_id': str(bill.id),
@@ -356,16 +391,18 @@ def zoho_bills_upload_base(
             )
             logger.info(
                 f"Successfully processed {len(files)} files and created "
-                f"{len(created_bills)} {label} bills"
+                f"{len(created_bills)} {label} bills "
+                f"({len(rejected_files)} rejected as non-bills)"
             )
 
+            accepted = len(files) - len(rejected_files)
             response_data = {
                 'message': (
-                    f'Successfully uploaded {len(files)} file(s) and created '
+                    f'Successfully uploaded {accepted} file(s) and created '
                     f'{len(created_bills)} {label} bill(s). '
                     'Processing started in background.'
                 ),
-                'files_uploaded': len(files),
+                'files_uploaded': accepted,
                 'bills_created': len(created_bills),
                 'bills': response_serializer.data,
                 'processing_jobs': processing_jobs,
@@ -374,6 +411,14 @@ def zoho_bills_upload_base(
                     'The page will automatically refresh to show results.'
                 ),
             }
+
+            if rejected_files:
+                response_data['rejected_files'] = rejected_files
+                response_data['files_rejected'] = len(rejected_files)
+                response_data['rejection_message'] = (
+                    f"{len(rejected_files)} file(s) were not uploaded because "
+                    "they do not look like bills."
+                )
 
             if upload_warnings:
                 response_data['upload_warnings'] = upload_warnings

@@ -336,3 +336,19 @@ BILL_MAX_UPLOAD_BYTES = DATA_UPLOAD_MAX_MEMORY_SIZE
 # ------------------------------------------------------------
 OPENAI_REQUEST_TIMEOUT = env.float("OPENAI_REQUEST_TIMEOUT", default=60.0)
 OPENAI_MAX_RETRIES = env.int("OPENAI_MAX_RETRIES", default=2)
+
+# ------------------------------------------------------------
+# Upload screening — "is this actually a bill?"
+# ------------------------------------------------------------
+# Runs one vision call per uploaded file BEFORE the Draft row is created, so
+# a random PDF never becomes a bill. Costs an extra API call and a couple of
+# seconds per file; set to False to skip it entirely.
+BILL_DOCUMENT_VALIDATION_ENABLED = env.bool(
+    "BILL_DOCUMENT_VALIDATION_ENABLED", default=True,
+)
+# Only refuse a file when the model is at least this confident it is not a
+# bill. Raise it to reject less (fewer false rejections, more junk gets in);
+# lower it to reject more aggressively.
+BILL_DOCUMENT_VALIDATION_MIN_CONFIDENCE = env.float(
+    "BILL_DOCUMENT_VALIDATION_MIN_CONFIDENCE", default=0.7,
+)
