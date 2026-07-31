@@ -825,21 +825,18 @@ def vendor_bill_detail_view(request, org_id, bill_id):
         # Fetch the VendorBill without prefetch_related to avoid relationship errors
         bill = VendorBill.objects.get(id=bill_id, organization=organization)
 
-        # Get the next bill with 'Analyzed' status
-        next_bill_id = None
-        analysed_bills = VendorBill.objects.filter(
-            organization=organization,
-            status='Analysed'
-        ).exclude(id=bill_id).values_list('id', flat=True)
+        # Neighbouring bills in the verification queue, ordered the same way
+        # the list page shows them. Positional so that Back is the exact
+        # inverse of Next.
+        from apps.common.services.bill_navigation import get_adjacent_bill_ids
 
-        if analysed_bills:
-            next_bill_id = str(analysed_bills[0])  # Get the first analysed bill
-            logger.info(f"Found next analysed bill: {next_bill_id}")
-        else:
-            logger.info("No analysed bills found for next_bill")
-
-        # Always set next_bill on the bill object
+        previous_bill_id, next_bill_id = get_adjacent_bill_ids(bill)
+        bill.previous_bill = previous_bill_id
         bill.next_bill = next_bill_id
+        logger.info(
+            "Queue neighbours for %s — previous=%s next=%s",
+            bill_id, previous_bill_id, next_bill_id,
+        )
 
         # Get the related VendorZohoBill if it exists
         try:

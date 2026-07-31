@@ -121,6 +121,7 @@ class BaseZohoBillDetailSerializer(serializers.Serializer):
     analysed_data = serializers.JSONField(read_only=True)
     zoho_bill = serializers.SerializerMethodField()
     next_bill = serializers.CharField(read_only=True, allow_null=True)
+    previous_bill = serializers.CharField(read_only=True, allow_null=True)
 
     # Subclasses must set this
     zoho_bill_serializer_class = None

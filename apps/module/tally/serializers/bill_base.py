@@ -252,18 +252,20 @@ class BaseBillDetailSerializer(serializers.ModelSerializer):
     organization_name = serializers.CharField(source='organization.name', read_only=True)
     analyzed_bill = serializers.SerializerMethodField()
     next_bill = serializers.SerializerMethodField()
+    previous_bill = serializers.SerializerMethodField()
 
     # Common fields for all detail serializers
     base_fields = [
         'id', 'bill_munshi_name', 'file', 'file_type', 'analysed_data',
         'status', 'process', 'uploaded_by', 'uploaded_by_username',
         'organization_name', 'tally_synced', 'tally_sync_message',
-        'created_at', 'updated_at', 'analyzed_bill', 'next_bill'
+        'created_at', 'updated_at', 'analyzed_bill', 'next_bill',
+        'previous_bill',
     ]
 
     base_read_only_fields = [
-        'id', 'created_at', 'updated_at', 'uploaded_by_username', 
-        'organization_name', 'analyzed_bill', 'next_bill'
+        'id', 'created_at', 'updated_at', 'uploaded_by_username',
+        'organization_name', 'analyzed_bill', 'next_bill', 'previous_bill',
     ]
 
     def get_analyzed_bill(self, obj):
@@ -283,17 +285,22 @@ class BaseBillDetailSerializer(serializers.ModelSerializer):
             logger.error(f"Error getting analyzed bill for {obj.id}: {str(e)}")
         return None
 
-    def get_next_bill(self, obj):
-        """Get next bill to process (oldest analysed bill)."""
-        bill_model = obj.__class__
-        next_bill = (
-            bill_model.objects.filter(
-                organization=obj.organization,
-                status=bill_model.BillStatus.ANALYSED,
+    def _adjacent(self, obj):
+        """Cache the (previous, next) lookup — both fields need the same pair."""
+        from apps.common.services.bill_navigation import get_adjacent_bill_ids
+
+        if not hasattr(self, "_adjacent_cache"):
+            self._adjacent_cache = {}
+        if obj.id not in self._adjacent_cache:
+            self._adjacent_cache[obj.id] = get_adjacent_bill_ids(
+                obj, status=obj.__class__.BillStatus.ANALYSED,
             )
-            .exclude(id=obj.id)
-            .order_by('created_at')
-            .values_list('id', flat=True)
-            .first()
-        )
-        return str(next_bill) if next_bill else None
+        return self._adjacent_cache[obj.id]
+
+    def get_next_bill(self, obj):
+        """The next bill in the verification queue (older than this one)."""
+        return self._adjacent(obj)[1]
+
+    def get_previous_bill(self, obj):
+        """The previous bill in the verification queue (newer than this one)."""
+        return self._adjacent(obj)[0]

@@ -542,12 +542,12 @@ def zoho_bill_detail_base(
     try:
         bill = bill_model.objects.get(id=bill_id, organization=organization)
 
-        # Get next bill with 'Analysed' status
-        next_bill_qs = bill_model.objects.filter(
-            organization=organization, status='Analysed'
-        ).exclude(id=bill_id).values_list('id', flat=True)
+        # Neighbouring bills in the verification queue, ordered the same way
+        # the list page shows them. Positional so that Back is the exact
+        # inverse of Next.
+        from apps.common.services.bill_navigation import get_adjacent_bill_ids
 
-        bill.next_bill = str(next_bill_qs[0]) if next_bill_qs else None
+        bill.previous_bill, bill.next_bill = get_adjacent_bill_ids(bill)
 
         # Get related ZohoBill
         try:
