@@ -85,6 +85,43 @@ def check_duplicate_tally_payment_bill(bill, organization):
     return check_duplicate_bill(bill, organization, TallyPaymentBill)
 
 
+# ---------------------------------------------------------------------------
+# AI payload readers
+#
+# Payment vouchers are analysed with ``get_expense_bill_prompt`` (see
+# ``analyze_payment_bill_with_ai``), so the model returns line items under
+# ``expenses`` and the invoice number under ``invoiceNumber`` — the same
+# shape ``expense_bills.py`` consumes.
+#
+# This module used to read ``payments`` and ``billNumber``, keys the prompt
+# never emits. The result was silent: analysis "succeeded", the header
+# amounts came through, but every voucher landed with zero line items and an
+# empty ``bill_no``. Both readers below accept the legacy spellings too, so
+# anything already stored under the old keys still loads.
+# ---------------------------------------------------------------------------
+
+def extract_payment_line_items(data):
+    """Return the AI line items, whichever key the payload carries."""
+    if not isinstance(data, dict):
+        return []
+    for key in ("expenses", "payments", "items"):
+        value = data.get(key)
+        if isinstance(value, list) and value:
+            return value
+    return []
+
+
+def extract_payment_bill_number(data):
+    """Return the invoice number, tolerating both key spellings."""
+    if not isinstance(data, dict):
+        return ""
+    for key in ("invoiceNumber", "billNumber"):
+        value = data.get(key)
+        if value:
+            return str(value).strip()
+    return ""
+
+
 def analyze_payment_bill_with_ai(bill, organization):
     """Analyze payment bill using OpenAI API — delegates to shared service."""
     logger.info(f"Starting AI analysis for payment bill {bill.id}, file: {bill.file.name}")
@@ -146,12 +183,18 @@ def process_payment_analysis_data(bill, json_data, organization):
             if "properties" in json_data:
                 # Handle schema format - extract from properties with safe access
                 try:
+                    # Key names mirror the prompt exactly, so this branch and
+                    # the direct branch below store an identically-shaped
+                    # ``analysed_data``. Duplicate detection reads
+                    # ``invoiceNumber``, and the frontend falls back to it
+                    # too — the old ``billNumber`` spelling matched neither.
                     relevant_data = {
-                        "billNumber": safe_get_nested(json_data, ["properties", "billNumber", "const"], ""),
+                        "invoiceNumber": safe_get_nested(json_data, ["properties", "invoiceNumber", "const"], ""),
                         "dateIssued": safe_get_nested(json_data, ["properties", "dateIssued", "const"], ""),
+                        "dueDate": safe_get_nested(json_data, ["properties", "dueDate", "const"], ""),
                         "from": safe_get_nested(json_data, ["properties", "from", "properties"], {}),
                         "to": safe_get_nested(json_data, ["properties", "to", "properties"], {}),
-                        "payments": extract_payments_from_properties(json_data),
+                        "expenses": extract_payments_from_properties(json_data),
                         "total": safe_get_nested(json_data, ["properties", "total", "const"], 0),
                         "igst": safe_get_nested(json_data, ["properties", "igst", "const"], 0),
                         "cgst": safe_get_nested(json_data, ["properties", "cgst", "const"], 0),
@@ -173,7 +216,7 @@ def process_payment_analysis_data(bill, json_data, organization):
         bill.save(update_fields=['analysed_data'])
 
         # Extract required fields with safe access
-        bill_number = str(relevant_data.get('billNumber', '')).strip()
+        bill_number = extract_payment_bill_number(relevant_data)
         date_issued = str(relevant_data.get('dateIssued', ''))
 
         # Handle 'from' field safely with GST number extraction
@@ -287,7 +330,12 @@ def process_payment_analysis_data(bill, json_data, organization):
 
             # Create analyzed products (payment items) with auto-assigned COA ledger
             product_instances = []
-            payments = relevant_data.get('payments', [])
+            payments = extract_payment_line_items(relevant_data)
+            if not payments:
+                logger.warning(
+                    "Payment bill %s: AI returned no line items (analysed_data keys: %s)",
+                    bill.id, sorted(relevant_data.keys()) if isinstance(relevant_data, dict) else type(relevant_data),
+                )
             if isinstance(payments, list):
                 for payment in payments:
                     if isinstance(payment, dict):
@@ -384,9 +432,15 @@ def process_payment_analysis_data(bill, json_data, organization):
 
 
 def extract_payments_from_properties(json_data):
-    """Safely extract payments from properties format"""
+    """Safely extract line items from the schema-shaped ("properties") format.
+
+    The prompt nests them under ``expenses``; ``payments`` is checked only
+    so an older stored payload still parses.
+    """
     try:
-        payments_data = safe_get_nested(json_data, ["properties", "payments", "items"], [])
+        payments_data = safe_get_nested(json_data, ["properties", "expenses", "items"], [])
+        if not payments_data:
+            payments_data = safe_get_nested(json_data, ["properties", "payments", "items"], [])
         if isinstance(payments_data, list):
             extracted_payments = []
             for payment in payments_data:
@@ -635,8 +689,9 @@ def process_existing_payment_analysis_data(bill, existing_data, organization):
             pass
 
         # Extract required fields with safe access
-        bill_number = str(existing_data.get('billNumber', '')).strip()
+        bill_number = extract_payment_bill_number(existing_data)
         date_issued = str(existing_data.get('dateIssued', ''))
+        due_date_issued = str(existing_data.get('dueDate', ''))
 
         # Handle 'from' field safely
         from_data = existing_data.get('from', {})
@@ -647,6 +702,10 @@ def process_existing_payment_analysis_data(bill, existing_data, organization):
 
         # Parse date with multiple format support
         bill_date = parse_payment_bill_date(date_issued)
+        # Due date was never carried over on this path, so re-analysing an
+        # existing payload silently dropped it. The fresh-analysis path has
+        # always set it.
+        due_date = parse_payment_bill_date(due_date_issued) if due_date_issued else None
 
         # Payment vouchers: Payable/Paid ledger stays blank so the user
         # picks a Bank/Cash ledger. See notes in ``process_payment_analysis_data``.
@@ -695,6 +754,7 @@ def process_existing_payment_analysis_data(bill, existing_data, organization):
                 vendor=vendor,
                 bill_no=bill_number,
                 bill_date=bill_date,
+                due_date=due_date,
                 igst=igst_val,
                 cgst=cgst_val,
                 sgst=sgst_val,
@@ -713,7 +773,12 @@ def process_existing_payment_analysis_data(bill, existing_data, organization):
 
             # Create analyzed products (payment items) with auto-assigned COA ledger
             created_products = []
-            payments = existing_data.get('payments', [])
+            payments = extract_payment_line_items(existing_data)
+            if not payments:
+                logger.warning(
+                    "Payment bill %s: stored analysed_data carries no line items (keys: %s)",
+                    bill.id, sorted(existing_data.keys()) if isinstance(existing_data, dict) else type(existing_data),
+                )
 
             if isinstance(payments, list):
                 for payment in payments:
