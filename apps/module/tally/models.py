@@ -8,12 +8,24 @@ from decimal import Decimal
 from django.conf import settings
 from django.db import models
 
+from django.db.models import Q
+
 from apps.organizations.models import Organization
+from apps.common.bill_naming import (
+    NAME_UNIQUENESS_ENFORCED_FROM,
+    save_with_unique_name,
+)
 from apps.common.validators import (
     bill_upload_path,
     validate_bill_file_size,
     validate_file_extension,
 )
+
+# Constraint names are referenced both by Meta and by the retry logic (which
+# matches them against the IntegrityError message), so they live in one place.
+UNIQUE_TALLY_VENDOR_BILL_NAME = "uniq_tally_vendorbill_org_name"
+UNIQUE_TALLY_EXPENSE_BILL_NAME = "uniq_tally_expensebill_org_name"
+UNIQUE_TALLY_PAYMENT_BILL_NAME = "uniq_tally_paymentbill_org_name"
 
 
 # -----------------------------
@@ -400,41 +412,30 @@ class TallyVendorBill(BaseOrgModel):
     class Meta:
         verbose_name = "Tally Vendor Bill"
         verbose_name_plural = "Tally Vendor Bills"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "bill_munshi_name"],
+                name=UNIQUE_TALLY_VENDOR_BILL_NAME,
+                # Partial: historical rows keep their (sometimes duplicated) names.
+                condition=Q(created_at__gte=NAME_UNIQUENESS_ENFORCED_FROM),
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.bill_munshi_name or f"TallyVendorBill:{self.id}"
 
     def save(self, *args, **kwargs):
-        """
-        Autogenerate bill_munshi_name as 'YYYYMMDDTB{N}' if missing.
-        Also validates status transitions.
-        """
-        if not self.bill_munshi_name:
-            from datetime import date
-            today = date.today()
-            date_prefix = today.strftime("%Y%m%d")
-            bill_prefix = f"{date_prefix}TB"
-            
-            # Get all existing bills with today's date prefix for this organization
-            existing_bills = TallyVendorBill.objects.filter(
-                organization=self.organization,
-                bill_munshi_name__startswith=bill_prefix
-            ).values_list('bill_munshi_name', flat=True)
-
-            # Extract numbers and find the maximum for today
-            max_num = 0
-            pattern = rf"{re.escape(bill_prefix)}(\d+)$"
-            for bill_name in existing_bills:
-                if bill_name:
-                    m = re.match(pattern, bill_name)
-                    if m:
-                        num = int(m.group(1))
-                        max_num = max(max_num, num)
-
-            next_num = max_num + 1
-            self.bill_munshi_name = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
-
-        super().save(*args, **kwargs)
+        """Autogenerate ``bill_munshi_name`` as ``YYYYMMDDTB00001`` if missing."""
+        return save_with_unique_name(
+            self,
+            super().save,
+            name_field="bill_munshi_name",
+            code="TB",
+            constraint=UNIQUE_TALLY_VENDOR_BILL_NAME,
+            should_generate=not self.bill_munshi_name,
+            args=args,
+            kwargs=kwargs,
+        )
 
 
 class TallyVendorAnalyzedBill(BaseOrgModel):
@@ -757,40 +758,30 @@ class TallyExpenseBill(BaseOrgModel):
     class Meta:
         verbose_name = "Tally Expense Bill"
         verbose_name_plural = "Tally Expense Bills"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "bill_munshi_name"],
+                name=UNIQUE_TALLY_EXPENSE_BILL_NAME,
+                # Partial: historical rows keep their (sometimes duplicated) names.
+                condition=Q(created_at__gte=NAME_UNIQUENESS_ENFORCED_FROM),
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.bill_munshi_name or f"TallyExpenseBill:{self.id}"
 
     def save(self, *args, **kwargs):
-        """
-        Autogenerate bill_munshi_name as 'YYYYMMDDТЕ{N}' if missing.
-        """
-        if not self.bill_munshi_name:
-            from datetime import date
-            today = date.today()
-            date_prefix = today.strftime("%Y%m%d")
-            bill_prefix = f"{date_prefix}TE"
-            
-            # Get all existing bills with today's date prefix for this organization
-            existing_bills = TallyExpenseBill.objects.filter(
-                organization=self.organization,
-                bill_munshi_name__startswith=bill_prefix
-            ).values_list('bill_munshi_name', flat=True)
-
-            # Extract numbers and find the maximum for today
-            max_num = 0
-            pattern = rf"{re.escape(bill_prefix)}(\d+)$"
-            for bill_name in existing_bills:
-                if bill_name:
-                    m = re.match(pattern, bill_name)
-                    if m:
-                        num = int(m.group(1))
-                        max_num = max(max_num, num)
-
-            next_num = max_num + 1
-            self.bill_munshi_name = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
-
-        super().save(*args, **kwargs)
+        """Autogenerate ``bill_munshi_name`` as ``YYYYMMDDTE00001`` if missing."""
+        return save_with_unique_name(
+            self,
+            super().save,
+            name_field="bill_munshi_name",
+            code="TE",
+            constraint=UNIQUE_TALLY_EXPENSE_BILL_NAME,
+            should_generate=not self.bill_munshi_name,
+            args=args,
+            kwargs=kwargs,
+        )
 
 
 class TallyExpenseAnalyzedBill(BaseOrgModel):
@@ -1327,39 +1318,33 @@ class TallyPaymentBill(BaseOrgModel):
     class Meta:
         verbose_name = "Tally Payment Voucher"
         verbose_name_plural = "Tally Payment Vouchers"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "bill_munshi_name"],
+                name=UNIQUE_TALLY_PAYMENT_BILL_NAME,
+                # Partial: historical rows keep their (sometimes duplicated) names.
+                condition=Q(created_at__gte=NAME_UNIQUENESS_ENFORCED_FROM),
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.bill_munshi_name or f"TallyPaymentBill:{self.id}"
 
     def save(self, *args, **kwargs):
-        """Autogenerate bill_munshi_name as 'YYYYMMDDTP{N}' if missing.
+        """Autogenerate ``bill_munshi_name`` as ``YYYYMMDDTP00001`` if missing.
 
         ``TP`` prefix = Tally Payment (mirrors ``TE`` for expense/journal).
         """
-        if not self.bill_munshi_name:
-            from datetime import date
-            today = date.today()
-            date_prefix = today.strftime("%Y%m%d")
-            bill_prefix = f"{date_prefix}TP"
-
-            existing_bills = TallyPaymentBill.objects.filter(
-                organization=self.organization,
-                bill_munshi_name__startswith=bill_prefix,
-            ).values_list("bill_munshi_name", flat=True)
-
-            max_num = 0
-            pattern = rf"{re.escape(bill_prefix)}(\d+)$"
-            for bill_name in existing_bills:
-                if bill_name:
-                    m = re.match(pattern, bill_name)
-                    if m:
-                        num = int(m.group(1))
-                        max_num = max(max_num, num)
-
-            next_num = max_num + 1
-            self.bill_munshi_name = f"{bill_prefix}{next_num:05d}"
-
-        super().save(*args, **kwargs)
+        return save_with_unique_name(
+            self,
+            super().save,
+            name_field="bill_munshi_name",
+            code="TP",
+            constraint=UNIQUE_TALLY_PAYMENT_BILL_NAME,
+            should_generate=not self.bill_munshi_name,
+            args=args,
+            kwargs=kwargs,
+        )
 
 
 class TallyPaymentAnalyzedBill(BaseOrgModel):

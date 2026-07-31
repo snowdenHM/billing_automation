@@ -9,12 +9,24 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from django.db.models import Q
+
 from apps.organizations.models import Organization
+from apps.common.bill_naming import (
+    NAME_UNIQUENESS_ENFORCED_FROM,
+    save_with_unique_name,
+)
 from apps.common.validators import (
     bill_upload_path,
     validate_bill_file_size,
     validate_file_extension,
 )
+
+# Constraint names are referenced both by Meta and by the retry logic (which
+# matches them against the IntegrityError message), so they live in one place.
+UNIQUE_ZOHO_VENDOR_BILL_NAME = "uniq_zoho_vendorbill_org_name"
+UNIQUE_ZOHO_JOURNAL_BILL_NAME = "uniq_zoho_journalbill_org_name"
+UNIQUE_ZOHO_EXPENSE_BILL_NAME = "uniq_zoho_expensebill_org_name"
 
 
 # -----------------------------
@@ -337,48 +349,29 @@ class VendorBill(BaseTeamModel):
     class Meta:
         verbose_name = "Vendor Bill"
         verbose_name_plural = "Vendor Bills"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "billmunshiName"],
+                name=UNIQUE_ZOHO_VENDOR_BILL_NAME,
+                # Partial: historical rows keep their (sometimes duplicated) names.
+                condition=Q(created_at__gte=NAME_UNIQUENESS_ENFORCED_FROM),
+            ),
+        ]
 
     def __str__(self):
         return self.billmunshiName or f"Bill:{self.id}"
 
     def save(self, *args, **kwargs):
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        if not self.billmunshiName and self.file:
-            logger.debug(f"[MODEL DEBUG] Generating billmunshiName for VendorBill with file: {self.file.name}")
-
-            from datetime import date
-            today = date.today()
-            date_prefix = today.strftime("%Y%m%d")
-            bill_prefix = f"{date_prefix}ZB"
-
-            # Get all existing bills with today's date prefix for this organization
-            existing_bills = VendorBill.objects.filter(
-                organization=self.organization,
-                billmunshiName__startswith=bill_prefix
-            ).values_list('billmunshiName', flat=True)
-
-            logger.debug(f"[MODEL DEBUG] Found {len(existing_bills)} existing bills with prefix {bill_prefix}")
-
-            # Extract numbers and find the maximum for today
-            max_num = 0
-            pattern = rf"{re.escape(bill_prefix)}(\d+)$"
-            for bill_name in existing_bills:
-                if bill_name:
-                    m = re.match(pattern, bill_name)
-                    if m:
-                        num = int(m.group(1))
-                        max_num = max(max_num, num)
-
-            next_num = max_num + 1
-            self.billmunshiName = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
-            logger.debug(f"[MODEL DEBUG] Generated billmunshiName: {self.billmunshiName}")
-
-        super().save(*args, **kwargs)
-
-        # Log successful save
-        logger.info(f"Successfully saved VendorBill: {self.billmunshiName} (ID: {self.id})")
+        return save_with_unique_name(
+            self,
+            super().save,
+            name_field="billmunshiName",
+            code="ZB",
+            constraint=UNIQUE_ZOHO_VENDOR_BILL_NAME,
+            should_generate=not self.billmunshiName and bool(self.file),
+            args=args,
+            kwargs=kwargs,
+        )
 
 
 class VendorZohoBill(BaseTeamModel):
@@ -632,48 +625,29 @@ class JournalBill(BaseTeamModel):
     class Meta:
         verbose_name = "Journal Bill"
         verbose_name_plural = "Journal Bills"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "billmunshiName"],
+                name=UNIQUE_ZOHO_JOURNAL_BILL_NAME,
+                # Partial: historical rows keep their (sometimes duplicated) names.
+                condition=Q(created_at__gte=NAME_UNIQUENESS_ENFORCED_FROM),
+            ),
+        ]
 
     def __str__(self):
         return self.billmunshiName or f"JournalBill:{self.id}"
 
     def save(self, *args, **kwargs):
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        if not self.billmunshiName and self.file:
-            logger.debug(f"[MODEL DEBUG] Generating billmunshiName for JournalBill with file: {self.file.name}")
-
-            from datetime import date
-            today = date.today()
-            date_prefix = today.strftime("%Y%m%d")
-            bill_prefix = f"{date_prefix}ZJ"
-
-            # Get all existing bills with today's date prefix for this organization
-            existing_bills = JournalBill.objects.filter(
-                organization=self.organization,
-                billmunshiName__startswith=bill_prefix
-            ).values_list('billmunshiName', flat=True)
-
-            logger.debug(f"[MODEL DEBUG] Found {len(existing_bills)} existing bills with prefix {bill_prefix}")
-
-            # Extract numbers and find the maximum for today
-            max_num = 0
-            pattern = rf"{re.escape(bill_prefix)}(\d+)$"
-            for bill_name in existing_bills:
-                if bill_name:
-                    m = re.match(pattern, bill_name)
-                    if m:
-                        num = int(m.group(1))
-                        max_num = max(max_num, num)
-
-            next_num = max_num + 1
-            self.billmunshiName = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
-            logger.debug(f"[MODEL DEBUG] Generated billmunshiName: {self.billmunshiName}")
-
-        super().save(*args, **kwargs)
-
-        # Log successful save
-        logger.info(f"Successfully saved JournalBill: {self.billmunshiName} (ID: {self.id})")
+        return save_with_unique_name(
+            self,
+            super().save,
+            name_field="billmunshiName",
+            code="ZJ",
+            constraint=UNIQUE_ZOHO_JOURNAL_BILL_NAME,
+            should_generate=not self.billmunshiName and bool(self.file),
+            args=args,
+            kwargs=kwargs,
+        )
 
 
 class JournalZohoBill(BaseTeamModel):
@@ -909,48 +883,29 @@ class ExpenseBill(BaseTeamModel):
     class Meta:
         verbose_name = "Expense Bill"
         verbose_name_plural = "Expense Bills"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "billmunshiName"],
+                name=UNIQUE_ZOHO_EXPENSE_BILL_NAME,
+                # Partial: historical rows keep their (sometimes duplicated) names.
+                condition=Q(created_at__gte=NAME_UNIQUENESS_ENFORCED_FROM),
+            ),
+        ]
 
     def __str__(self):
         return self.billmunshiName or f"ExpenseBill:{self.id}"
 
     def save(self, *args, **kwargs):
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        if not self.billmunshiName and self.file:
-            logger.debug(f"[MODEL DEBUG] Generating billmunshiName for ExpenseBill with file: {self.file.name}")
-
-            from datetime import date
-            today = date.today()
-            date_prefix = today.strftime("%Y%m%d")
-            bill_prefix = f"{date_prefix}ZE"
-
-            # Get all existing bills with today's date prefix for this organization
-            existing_bills = ExpenseBill.objects.filter(
-                organization=self.organization,
-                billmunshiName__startswith=bill_prefix
-            ).values_list('billmunshiName', flat=True)
-
-            logger.debug(f"[MODEL DEBUG] Found {len(existing_bills)} existing bills with prefix {bill_prefix}")
-
-            # Extract numbers and find the maximum for today
-            max_num = 0
-            pattern = rf"{re.escape(bill_prefix)}(\d+)$"
-            for bill_name in existing_bills:
-                if bill_name:
-                    m = re.match(pattern, bill_name)
-                    if m:
-                        num = int(m.group(1))
-                        max_num = max(max_num, num)
-
-            next_num = max_num + 1
-            self.billmunshiName = f"{bill_prefix}{next_num:05d}"  # 5-digit padding
-            logger.debug(f"[MODEL DEBUG] Generated billmunshiName: {self.billmunshiName}")
-
-        super().save(*args, **kwargs)
-
-        # Log successful save
-        logger.info(f"Successfully saved ExpenseBill: {self.billmunshiName} (ID: {self.id})")
+        return save_with_unique_name(
+            self,
+            super().save,
+            name_field="billmunshiName",
+            code="ZE",
+            constraint=UNIQUE_ZOHO_EXPENSE_BILL_NAME,
+            should_generate=not self.billmunshiName and bool(self.file),
+            args=args,
+            kwargs=kwargs,
+        )
 
 
 class ExpenseZohoBill(BaseTeamModel):
