@@ -28,13 +28,30 @@ def _get_organization(org_id):
 
 
 def _calculate_conversion_rates(funnel_data):
-    """Return analysis / verification / sync rates for a funnel dict."""
+    """Return analysis / verification / sync rates for a funnel dict.
+
+    Each rate is that stage's own share of the uploaded total, matching the
+    stage counts shown beside it on the dashboard.
+
+    These previously accumulated downstream stages — ``analysis_rate`` was
+    ``(analysed + verified + synced) / total`` — on the reasoning that a
+    synced bill must have been analysed at some point. But ``status`` holds a
+    single value, so the counts are mutually exclusive buckets: a synced bill
+    is counted only in ``synced``. The card therefore rendered "Analysed 0"
+    directly above "Analysis 100.0%", and 3-of-8 analysed read as 100%
+    instead of 37.5%.
+
+    Note this makes the bars a snapshot of where bills currently sit, not a
+    monotonically decreasing funnel. Showing true funnel throughput would
+    mean tracking stage timestamps (or cumulative counts) rather than
+    deriving history from the current status.
+    """
     total = funnel_data["total_uploaded"]
     if total == 0:
         return {"analysis_rate": 0.0, "verification_rate": 0.0, "sync_rate": 0.0}
     return {
-        "analysis_rate": (funnel_data["analysed"] + funnel_data["verified"] + funnel_data["synced"]) / total * 100,
-        "verification_rate": (funnel_data["verified"] + funnel_data["synced"]) / total * 100,
+        "analysis_rate": funnel_data["analysed"] / total * 100,
+        "verification_rate": funnel_data["verified"] / total * 100,
         "sync_rate": funnel_data["synced"] / total * 100,
     }
 
