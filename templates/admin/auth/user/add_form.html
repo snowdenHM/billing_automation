@@ -1,0 +1,8 @@
+{% extends "admin/auth/user/add_form.html" %}
+{% load static %}
+
+{% block extrahead %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'admin/css/password_visibility.css' %}">
+  <script src="{% static 'admin/js/password_visibility.js' %}"></script>
+{% endblock %}
