@@ -133,11 +133,14 @@ def serve_bill_file(request, path):
 def book_demo_view(request):
     """Record a demo request from the public /book-demo page.
 
-    Rejects non-business emails and repeat bookings. Both checks live in
-    :class:`DemoRequestSerializer`; this view only adds the duplicate
-    race guard and the notification email.
+    Rejects unverified captchas, non-business emails and repeat bookings.
+    All three checks live in :class:`DemoRequestSerializer`; this view
+    only adds the duplicate race guard and the notification email.
+
+    ``context`` carries the request through so the captcha field can pass
+    the caller's IP to Google.
     """
-    serializer = DemoRequestSerializer(data=request.data)
+    serializer = DemoRequestSerializer(data=request.data, context={"request": request})
 
     if not serializer.is_valid():
         errors = serializer.errors

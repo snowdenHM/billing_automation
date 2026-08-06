@@ -12,6 +12,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from drf_spectacular.utils import extend_schema_field, OpenApiTypes
 
+from apps.common.recaptcha import ReCaptchaField
 from apps.organizations.models import Organization, OrgMembership
 
 User = get_user_model()
@@ -102,10 +103,14 @@ class UserSerializer(serializers.ModelSerializer):
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, style={'input_type': 'password'})
     confirm_password = serializers.CharField(write_only=True, style={'input_type': 'password'})
+    # Signup is unauthenticated, so it needs the same bot gate as the
+    # public demo form. Verified against Google before anything else in
+    # this serializer runs.
+    recaptcha_token = ReCaptchaField()
 
     class Meta:
         model = User
-        fields = ["email", "password", "confirm_password", "first_name", "last_name", "phone_number"]
+        fields = ["email", "password", "confirm_password", "first_name", "last_name", "phone_number", "recaptcha_token"]
         extra_kwargs = {
             'email': {'required': True},
             'first_name': {'required': True},
@@ -131,6 +136,8 @@ class RegisterSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         # Remove confirm_password from the data
         validated_data.pop('confirm_password', None)
+        # The captcha token is proof-of-human, not a User field.
+        validated_data.pop('recaptcha_token', None)
         # Let create_user handle hashing & defaults
         password = validated_data.pop("password")
         user = User.objects.create_user(password=password, **validated_data)

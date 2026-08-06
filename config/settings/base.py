@@ -332,6 +332,30 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = _MAX_UPLOAD_MB * 1024 * 1024
 BILL_MAX_UPLOAD_BYTES = DATA_UPLOAD_MAX_MEMORY_SIZE
 
 # ------------------------------------------------------------
+# Google reCAPTCHA v2 ("I'm not a robot")
+# ------------------------------------------------------------
+# Guards the two public, unauthenticated forms: /book-demo and
+# /auth/register. Setting the secret switches verification on — the same
+# convention SENDGRID_API_KEY uses — so dev and CI need no extra flag.
+RECAPTCHA_SECRET_KEY = env("RECAPTCHA_SECRET_KEY", default="")
+
+# Tri-state override of the auto-detection above. Leave the env var unset
+# for "on when a secret is configured"; set it to force either answer.
+_RECAPTCHA_ENABLED_OVERRIDE = env("RECAPTCHA_ENABLED", default="").strip().lower()
+RECAPTCHA_ENABLED = (
+    None if not _RECAPTCHA_ENABLED_OVERRIDE
+    else _RECAPTCHA_ENABLED_OVERRIDE in ("1", "true", "yes", "on")
+)
+
+# Seconds to wait on Google's siteverify endpoint. It sits in the request
+# path of a form submit, so keep it short.
+RECAPTCHA_TIMEOUT = env.float("RECAPTCHA_TIMEOUT", default=5.0)
+
+# When siteverify is unreachable we reject the submission. Set this to
+# True to accept instead — trades spam exposure for uptime.
+RECAPTCHA_FAIL_OPEN = env.bool("RECAPTCHA_FAIL_OPEN", default=False)
+
+# ------------------------------------------------------------
 # OpenAI client
 # ------------------------------------------------------------
 OPENAI_REQUEST_TIMEOUT = env.float("OPENAI_REQUEST_TIMEOUT", default=60.0)

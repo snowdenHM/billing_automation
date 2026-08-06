@@ -12,6 +12,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from apps.common.models import DemoRequest
+from apps.common.recaptcha import ReCaptchaField
 from apps.common.validators import validate_business_email
 from apps.organizations.models import Organization
 
@@ -79,11 +80,12 @@ class UploadedByUserSerializer(serializers.ModelSerializer):
 class DemoRequestSerializer(serializers.ModelSerializer):
     """Validates a public /book-demo submission.
 
-    Two rules are enforced here, both server-side because the form is
+    Three rules are enforced here, all server-side because the form is
     unauthenticated and anything client-only is trivially bypassed:
 
-    1. ``email`` must be a business address (no Gmail/Yahoo/disposable).
-    2. one booking per email — a repeat submission is rejected with a
+    1. the reCAPTCHA token must verify with Google.
+    2. ``email`` must be a business address (no Gmail/Yahoo/disposable).
+    3. one booking per email — a repeat submission is rejected with a
        message the UI shows verbatim.
     """
 
@@ -91,6 +93,8 @@ class DemoRequestSerializer(serializers.ModelSerializer):
         "Your demo is already booked with this email. "
         "Our team will reach out to you shortly."
     )
+
+    recaptcha_token = ReCaptchaField()
 
     class Meta:
         model = DemoRequest
@@ -101,6 +105,7 @@ class DemoRequestSerializer(serializers.ModelSerializer):
             "accounting_software",
             "email",
             "phone",
+            "recaptcha_token",
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
@@ -140,3 +145,9 @@ class DemoRequestSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(self.ALREADY_BOOKED_MESSAGE)
 
         return value
+
+    def create(self, validated_data):
+        # ``recaptcha_token`` is proof-of-human, not data we keep — drop
+        # it before it reaches ``DemoRequest(**validated_data)``.
+        validated_data.pop("recaptcha_token", None)
+        return super().create(validated_data)
