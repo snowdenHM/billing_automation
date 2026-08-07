@@ -10,6 +10,7 @@ from django.conf import settings
 from rest_framework import status
 from rest_framework.response import Response
 
+from apps.common.bill_filters import apply_bill_search
 from apps.common.pagination import DefaultPagination
 from apps.common.utils import get_organization_from_request
 
@@ -76,7 +77,12 @@ def bills_list_base(request, org_id, bill_model, serializer_class, include_owner
         elif ownership_param == 'others':
             bills = bills.filter(bill_belong_your_org=False)
 
-    bills = bills.order_by('-created_at')
+    # Free-text search. This runs in the database rather than the browser so
+    # it covers every matching bill, not just the page already downloaded.
+    bills = apply_bill_search(bills, request.query_params.get('search'))
+
+    # select_related keeps the uploader columns from firing a query per row.
+    bills = bills.select_related('uploaded_by').order_by('-created_at')
 
     # Pagination
     paginator = DefaultPagination()

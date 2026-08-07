@@ -13,6 +13,7 @@ from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 
+from apps.common.bill_filters import apply_bill_search
 from apps.common.pagination import DefaultPagination
 from apps.common.utils import get_organization_from_request
 
@@ -47,7 +48,14 @@ def zoho_bills_list_base(request, org_id, *, bill_model, list_serializer):
     elif status_param == 'synced':
         bills = bills.filter(status='Synced')
 
-    bills = bills.order_by('-created_at')
+    # Free-text search runs in the database so it covers every matching
+    # bill, not just the page already downloaded. Zoho names the document
+    # field in camelCase.
+    bills = apply_bill_search(
+        bills, request.query_params.get('search'), name_field='billmunshiName'
+    )
+
+    bills = bills.select_related('uploaded_by').order_by('-created_at')
 
     paginator = DefaultPagination()
     paginated_bills = paginator.paginate_queryset(bills, request)

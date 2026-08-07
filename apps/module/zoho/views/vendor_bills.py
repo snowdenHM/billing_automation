@@ -18,6 +18,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.common.bill_filters import apply_bill_search
 from apps.common.pagination import DefaultPagination
 from apps.common.utils import (
     get_organization_from_request,
@@ -525,7 +526,13 @@ def vendor_bills_list_view(request, org_id):
     elif status_param == 'synced':
         bills = bills.filter(status='Synced')
 
-    bills = bills.order_by('-created_at')
+    # Free-text search runs in the database so it covers every matching
+    # bill, not just the page already downloaded.
+    bills = apply_bill_search(
+        bills, request.query_params.get('search'), name_field='billmunshiName'
+    )
+
+    bills = bills.select_related('uploaded_by').order_by('-created_at')
 
     # Apply pagination
     paginator = DefaultPagination()
