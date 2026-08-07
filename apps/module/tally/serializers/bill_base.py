@@ -7,6 +7,8 @@ import logging
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.common.serializers import UploadedByUserSerializer
@@ -60,6 +62,8 @@ class BaseTallyBillSerializer(serializers.ModelSerializer):
     uploaded_by_name = serializers.SerializerMethodField()
     bill_belong_your_org = serializers.SerializerMethodField()
     description = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
+    delete_blocked_reason = serializers.SerializerMethodField()
 
     # Common fields that all bill serializers share
     base_fields = [
@@ -69,12 +73,14 @@ class BaseTallyBillSerializer(serializers.ModelSerializer):
         'is_duplicate', 'duplicate_description', 'duplicate_score', 'duplicate_matched_bills',
         'is_processing', 'processing_error',
         'tally_synced', 'tally_sync_message',
+        'can_delete', 'delete_blocked_reason',
         'created_at', 'updated_at'
     ]
 
     base_read_only_fields = [
-        'id', 'bill_munshi_name', 'file', 'uploaded_by', 'uploaded_by_name', 
-        'bill_belong_your_org', 'description', 'created_at', 'updated_at'
+        'id', 'bill_munshi_name', 'file', 'uploaded_by', 'uploaded_by_name',
+        'bill_belong_your_org', 'description', 'can_delete', 'delete_blocked_reason',
+        'created_at', 'updated_at'
     ]
 
     def get_file(self, obj):
@@ -88,6 +94,23 @@ class BaseTallyBillSerializer(serializers.ModelSerializer):
             return None
         request = self.context.get('request')
         return generate_signed_bill_file_url(obj.file, request=request)
+
+    @extend_schema_field(OpenApiTypes.BOOL)
+    def get_can_delete(self, obj) -> bool:
+        """Whether this bill may be moved to Trash.
+
+        Exposed so the list UI can disable the control instead of
+        duplicating the rule client-side and drifting from the server,
+        which is the actual gate (``bill_delete_base`` returns 409).
+        """
+        from apps.module.tally.trash import can_be_trashed
+        return can_be_trashed(obj)
+
+    @extend_schema_field(OpenApiTypes.STR)
+    def get_delete_blocked_reason(self, obj):
+        """Explanation to show when ``can_delete`` is False, else None."""
+        from apps.module.tally.trash import trash_blocked_reason
+        return trash_blocked_reason(obj)
 
     def get_uploaded_by_name(self, obj):
         """Return formatted name of the user who uploaded the bill"""

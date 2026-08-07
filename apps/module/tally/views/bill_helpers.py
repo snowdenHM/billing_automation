@@ -126,6 +126,21 @@ def bill_delete_base(request, org_id, bill_id, bill_model):
             status=status.HTTP_404_NOT_FOUND
         )
 
+    # A bill that has actually reached Tally is a posted accounting record
+    # and stays put, whatever the client sends.
+    from apps.module.tally.trash import trash_blocked_reason
+
+    blocked = trash_blocked_reason(bill)
+    if blocked:
+        return Response(
+            {
+                'error': 'Bill cannot be deleted',
+                'message': blocked,
+                'error_code': 'BILL_ALREADY_SYNCED',
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
     bill.move_to_trash(user=getattr(request, 'user', None))
 
     return Response(status=status.HTTP_204_NO_CONTENT)

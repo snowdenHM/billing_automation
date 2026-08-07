@@ -60,6 +60,40 @@ def get_kind(slug):
     return TRASH_KINDS.get((slug or "").strip().lower())
 
 
+#: Shown to the user, and returned by the API, when a delete is refused.
+SYNCED_BLOCK_MESSAGE = (
+    "This bill has already been posted to Tally and can no longer be deleted."
+)
+
+
+def trash_blocked_reason(bill):
+    """Why *bill* may not be moved to trash, or ``None`` if it may.
+
+    A bill that has genuinely reached Tally is a posted accounting record —
+    deleting it here would leave the two systems disagreeing, so it is
+    refused outright.
+
+    The check is deliberately ``status`` **and** ``tally_synced`` rather
+    than status alone. A bill can sit at ``Synced`` while the push to Tally
+    never actually landed; ``vendor_bills_sync_list`` still offers exactly
+    those bills for re-sync. Blocking on status alone would strand a failed
+    sync as an undeletable row nobody can clear.
+    """
+    status_value = getattr(bill, "status", None)
+    model = type(bill)
+    synced_status = getattr(model, "BillStatus", None)
+    synced_value = getattr(synced_status, "SYNCED", "Synced")
+
+    if status_value == synced_value and getattr(bill, "tally_synced", False):
+        return SYNCED_BLOCK_MESSAGE
+    return None
+
+
+def can_be_trashed(bill):
+    """Whether *bill* may be moved to trash."""
+    return trash_blocked_reason(bill) is None
+
+
 def purge_bill(bill):
     """Destroy a trashed bill permanently: its file first, then the row.
 
