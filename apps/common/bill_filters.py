@@ -6,6 +6,8 @@ translation of that box into a queryset in one place stops the two module
 trees from drifting apart on what "search" means.
 """
 
+import uuid
+
 from django.db.models import Q
 
 
@@ -38,3 +40,50 @@ def apply_bill_search(queryset, term, name_field="bill_munshi_name"):
         | Q(uploaded_by__last_name__icontains=term)
         | Q(uploaded_by__email__icontains=term)
     ).distinct()
+
+
+def resolve_report_ids(request):
+    """Explicit bill ids requested for an export.
+
+    The report endpoints support two modes. Without ids they export every
+    bill matching the status filter (the original behaviour, still used by
+    any direct/API caller). With ids they export exactly that selection —
+    which is what the "Download Excel" button sends once the user has
+    ticked rows.
+
+    Accepts a JSON list on a POST body or a comma-separated string on
+    either POST or the query string. Sending ids by body keeps a
+    hundred-odd UUIDs out of the URL, where they would risk tripping
+    proxy request-line limits.
+
+    Returns:
+        ``None`` when the caller asked for no particular bills (export
+        everything matching status), otherwise a list of validated UUID
+        strings — possibly empty, which the caller should treat as
+        "nothing selected" rather than "everything".
+    """
+    raw = None
+    if request.method == "POST":
+        raw = request.data.get("ids")
+    if raw is None:
+        raw = request.query_params.get("ids")
+    if raw is None:
+        return None
+
+    if isinstance(raw, str):
+        parts = [p.strip() for p in raw.split(",")]
+    else:
+        parts = [str(p).strip() for p in raw]
+
+    # Drop anything that isn't a UUID rather than letting it reach the
+    # database, where a malformed value raises instead of simply not
+    # matching.
+    valid = []
+    for part in parts:
+        if not part:
+            continue
+        try:
+            valid.append(str(uuid.UUID(part)))
+        except (ValueError, AttributeError, TypeError):
+            continue
+    return valid

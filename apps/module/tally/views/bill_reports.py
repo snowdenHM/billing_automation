@@ -21,6 +21,7 @@ from apps.common.services.reports import (
     rows_from_vendor_analyzed,
     workbook_to_response,
 )
+from apps.common.bill_filters import resolve_report_ids
 from apps.common.utils import get_organization_from_request
 
 from ..models import (
@@ -82,12 +83,28 @@ def _build_and_stream(
     if not organization:
         return _org_not_found_response(org_id)
 
-    statuses = _resolve_statuses(request)
-    bills = (
-        bill_model.objects.alive()
-        .filter(organization=organization, status__in=statuses)
-        .order_by("-created_at")
-    )
+    bills = bill_model.objects.alive().filter(organization=organization)
+
+    # An explicit selection wins over the status filter: the user ticked
+    # those exact rows, so export those exact rows.
+    selected_ids = resolve_report_ids(request)
+    if selected_ids is None:
+        bills = bills.filter(status__in=_resolve_statuses(request))
+    elif not selected_ids:
+        return Response(
+            {
+                "error": "Nothing selected",
+                "message": "Select at least one bill to export.",
+                "error_code": "NO_BILLS_SELECTED",
+            },
+            status=400,
+        )
+    else:
+        # Still scoped to this organization above, so an id belonging to
+        # someone else simply matches nothing.
+        bills = bills.filter(id__in=selected_ids)
+
+    bills = bills.order_by("-created_at")
 
     rows = []
     for bill in bills.iterator():
@@ -113,6 +130,21 @@ def _build_and_stream(
                 filename_stub, bill.id, exc,
             )
 
+    # A selection that yielded nothing means every chosen bill is still
+    # un-analysed. Say so instead of handing back an empty spreadsheet.
+    if selected_ids and not rows:
+        return Response(
+            {
+                "error": "Nothing to export",
+                "message": (
+                    "None of the selected bills have analysed data yet. "
+                    "Analyse them first, then download."
+                ),
+                "error_code": "NO_ANALYSED_DATA",
+            },
+            status=400,
+        )
+
     wb = build_report_workbook(rows, sheet_title=sheet_title)
     timestamp = tz_now().strftime("%Y%m%d-%H%M")
     filename = f"{filename_stub}-{timestamp}.xlsx"
@@ -120,7 +152,7 @@ def _build_and_stream(
 
 
 @extend_schema(summary="Download Tally Purchase Voucher report (xlsx)", tags=["Tally · Reports"])
-@api_view(["GET"])
+@api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated, IsOrgAdmin])
 def tally_vendor_bills_report(request, org_id):
     return _build_and_stream(
@@ -136,7 +168,7 @@ def tally_vendor_bills_report(request, org_id):
 
 
 @extend_schema(summary="Download Tally Journal Entry report (xlsx)", tags=["Tally · Reports"])
-@api_view(["GET"])
+@api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated, IsOrgAdmin])
 def tally_expense_bills_report(request, org_id):
     return _build_and_stream(
@@ -152,7 +184,7 @@ def tally_expense_bills_report(request, org_id):
 
 
 @extend_schema(summary="Download Tally Payment Voucher report (xlsx)", tags=["Tally · Reports"])
-@api_view(["GET"])
+@api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated, IsOrgAdmin])
 def tally_payment_bills_report(request, org_id):
     return _build_and_stream(
