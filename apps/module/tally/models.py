@@ -15,6 +15,7 @@ from apps.common.bill_naming import (
     NAME_UNIQUENESS_ENFORCED_FROM,
     save_with_unique_name,
 )
+from apps.common.models import TrashableMixin
 from apps.common.validators import (
     bill_upload_path,
     validate_bill_file_size,
@@ -352,7 +353,7 @@ class GstRateLedgerMapping(BaseOrgModel):
 # Vendor Bills (Upload + Analysed)
 # ---------------------------------
 
-class TallyVendorBill(BaseOrgModel):
+class TallyVendorBill(BaseOrgModel, TrashableMixin):
     class BillStatus(models.TextChoices):
         DRAFT = "Draft", "Draft"
         ANALYSED = "Analysed", "Analysed"
@@ -698,7 +699,7 @@ class TallyVendorAnalyzedProduct(BaseOrgModel):
 # Expense Bills (Upload + Analysed)
 # ---------------------------------
 
-class TallyExpenseBill(BaseOrgModel):
+class TallyExpenseBill(BaseOrgModel, TrashableMixin):
     class BillStatus(models.TextChoices):
         DRAFT = "Draft", "Draft"
         ANALYSED = "Analysed", "Analysed"
@@ -1257,7 +1258,7 @@ class TallyExpenseGstLine(BaseOrgModel):
 # so the operator picks a Bank/Cash ledger themselves.
 # =============================================================================
 
-class TallyPaymentBill(BaseOrgModel):
+class TallyPaymentBill(BaseOrgModel, TrashableMixin):
     class BillStatus(models.TextChoices):
         DRAFT = "Draft", "Draft"
         ANALYSED = "Analysed", "Analysed"

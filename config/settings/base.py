@@ -356,6 +356,15 @@ RECAPTCHA_TIMEOUT = env.float("RECAPTCHA_TIMEOUT", default=5.0)
 RECAPTCHA_FAIL_OPEN = env.bool("RECAPTCHA_FAIL_OPEN", default=False)
 
 # ------------------------------------------------------------
+# Trash retention
+# ------------------------------------------------------------
+# Days a bill stays recoverable in Trash before `purge_trashed_bills`
+# destroys the row and its uploaded file for good. Lowering this makes
+# already-trashed bills expire sooner, since the window is measured from
+# each bill's own `deleted_at`.
+TRASH_RETENTION_DAYS = env.int("TRASH_RETENTION_DAYS", default=30)
+
+# ------------------------------------------------------------
 # OpenAI client
 # ------------------------------------------------------------
 OPENAI_REQUEST_TIMEOUT = env.float("OPENAI_REQUEST_TIMEOUT", default=60.0)

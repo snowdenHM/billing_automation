@@ -19,6 +19,18 @@ from apps.organizations.models import Organization
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+def _visible(bill_model):
+    """Base queryset for a bill model, with trashed rows excluded.
+
+    These helpers are shared by the Tally and Zoho dashboards. Only the
+    Tally bill models carry ``TrashableMixin``, so the trash filter is
+    applied on capability rather than unconditionally — Zoho models have
+    no ``is_deleted`` column and pass straight through.
+    """
+    manager = bill_model.objects
+    return manager.alive() if hasattr(manager, "alive") else manager.all()
+
+
 def _get_organization(org_id):
     """Return ``(organization, None)`` or ``(None, error_response)``."""
     try:
@@ -99,8 +111,8 @@ def build_overview_response(
     if err:
         return err
 
-    vendor_qs = vendor_bill_model.objects.filter(organization=organization)
-    expense_qs = expense_bill_model.objects.filter(organization=organization)
+    vendor_qs = _visible(vendor_bill_model).filter(organization=organization)
+    expense_qs = _visible(expense_bill_model).filter(organization=organization)
 
     analyzed_vendor_qs = analyzed_vendor_model.objects.filter(organization=organization)
     analyzed_expense_qs = analyzed_expense_model.objects.filter(organization=organization)
@@ -137,8 +149,8 @@ def build_funnel_response(org_id, *, vendor_bill_model, expense_bill_model):
         return err
 
     return Response({
-        "vendor_bills_funnel": _funnel(vendor_bill_model.objects.filter(organization=organization)),
-        "expense_bills_funnel": _funnel(expense_bill_model.objects.filter(organization=organization)),
+        "vendor_bills_funnel": _funnel(_visible(vendor_bill_model).filter(organization=organization)),
+        "expense_bills_funnel": _funnel(_visible(expense_bill_model).filter(organization=organization)),
     })
 
 
@@ -158,8 +170,8 @@ def build_usage_response(
     usage_stats = {}
     for period_name, days in [("today", 1), ("week", 7), ("month", 30), ("quarter", 90)]:
         start_date = now - timedelta(days=days)
-        vendor_qs = vendor_bill_model.objects.filter(organization=organization)
-        expense_qs = expense_bill_model.objects.filter(organization=organization)
+        vendor_qs = _visible(vendor_bill_model).filter(organization=organization)
+        expense_qs = _visible(expense_bill_model).filter(organization=organization)
 
         kw_analysed = {f"{updated_at_field}__gte": start_date}
         usage_stats[period_name] = {
@@ -175,8 +187,8 @@ def build_usage_response(
             ),
         }
 
-    vendor_files = vendor_bill_model.objects.filter(organization=organization, file__isnull=False).count()
-    expense_files = expense_bill_model.objects.filter(organization=organization, file__isnull=False).count()
+    vendor_files = _visible(vendor_bill_model).filter(organization=organization, file__isnull=False).count()
+    expense_files = _visible(expense_bill_model).filter(organization=organization, file__isnull=False).count()
 
     return Response({
         "usage_by_period": usage_stats,

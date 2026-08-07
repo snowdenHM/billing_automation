@@ -139,7 +139,7 @@ def move_tally_bills_between_modules_view(request, org_id):
 
                 if from_module == 'vendor':
                     try:
-                        source_bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
+                        source_bill = TallyVendorBill.objects.alive().get(id=bill_id, organization=organization)
                         try:
                             source_analyzed_bill = TallyVendorAnalyzedBill.objects.prefetch_related(
                                 'products', 'consolidated_product'
@@ -156,7 +156,7 @@ def move_tally_bills_between_modules_view(request, org_id):
 
                 elif from_module == 'expense':
                     try:
-                        source_bill = TallyExpenseBill.objects.get(id=bill_id, organization=organization)
+                        source_bill = TallyExpenseBill.objects.alive().get(id=bill_id, organization=organization)
                         try:
                             source_analyzed_bill = TallyExpenseAnalyzedBill.objects.prefetch_related(
                                 'products', 'consolidated_product'

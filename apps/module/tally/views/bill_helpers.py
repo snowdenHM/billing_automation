@@ -55,7 +55,8 @@ def bills_list_base(request, org_id, bill_model, serializer_class, include_owner
     if not organization:
         return org_not_found_response(org_id)
 
-    bills = bill_model.objects.filter(organization=organization)
+    # Trashed bills are hidden here; they surface only on the Trash page.
+    bills = bill_model.objects.alive().filter(organization=organization)
 
     # Filter by status based on query parameters
     status_param = request.query_params.get('status', '').lower()
@@ -94,14 +95,20 @@ def bills_list_base(request, org_id, bill_model, serializer_class, include_owner
 
 def bill_delete_base(request, org_id, bill_id, bill_model):
     """
-    Generic delete view for bills.
-    
+    Move a bill to the trash.
+
+    This is what the delete button on every bill list now calls. The row
+    and its uploaded file are both left intact so the bill stays fully
+    restorable; nothing is destroyed until either an admin deletes it
+    permanently from Trash or ``purge_trashed_bills`` collects it after
+    the retention window.
+
     Args:
         request: DRF request
         org_id: Organization UUID
-        bill_id: Bill UUID to delete
-        bill_model: Model class (TallyVendorBill or TallyExpenseBill)
-    
+        bill_id: Bill UUID to trash
+        bill_model: Model class (TallyVendorBill, TallyExpenseBill or TallyPaymentBill)
+
     Returns:
         204 No Content on success, 404 if not found
     """
@@ -110,24 +117,16 @@ def bill_delete_base(request, org_id, bill_id, bill_model):
         return org_not_found_response(org_id)
 
     try:
-        bill = bill_model.objects.get(id=bill_id, organization=organization)
+        # `.alive()` so trashing something already in the trash reads as
+        # "not found" rather than silently resetting its retention clock.
+        bill = bill_model.objects.alive().get(id=bill_id, organization=organization)
     except bill_model.DoesNotExist:
         return Response(
             {'error': 'Bill not found'},
             status=status.HTTP_404_NOT_FOUND
         )
 
-    # Delete the file from storage if it exists
-    if bill.file:
-        file_path = os.path.join(settings.MEDIA_ROOT, str(bill.file))
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except OSError as e:
-                logger.warning(f"Failed to delete file {file_path}: {e}")
-
-    # Delete the bill record from the database
-    bill.delete()
+    bill.move_to_trash(user=getattr(request, 'user', None))
 
     return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -155,7 +154,7 @@ def bill_detail_base(request, org_id, bill_id, bill_model, serializer_class):
         return org_not_found_response(org_id)
 
     try:
-        bill = bill_model.objects.get(id=bill_id, organization=organization)
+        bill = bill_model.objects.alive().get(id=bill_id, organization=organization)
     except bill_model.DoesNotExist:
         return Response(
             {'error': 'Bill not found'},
@@ -192,8 +191,8 @@ def bill_processing_status_base(request, org_id, bill_id, bill_model, bill_type_
         }, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        bill = bill_model.objects.get(id=bill_id, organization=organization)
-        
+        bill = bill_model.objects.alive().get(id=bill_id, organization=organization)
+
         status_data = {
             'bill_id': str(bill.id),
             'bill_name': bill.bill_munshi_name,
@@ -251,8 +250,8 @@ def bills_by_status_base(request, org_id, bill_model, serializer_class):
     if not organization:
         return org_not_found_response(org_id)
 
-    bills = bill_model.objects.filter(organization=organization)
-    
+    bills = bill_model.objects.alive().filter(organization=organization)
+
     status_param = request.query_params.get('status', '').strip()
     if status_param:
         bills = bills.filter(status=status_param)
@@ -588,7 +587,10 @@ def _check_file_duplicates(uploaded_file, organization, bill_model, bill_type_la
     """Check for potential file-level duplicates."""
     warnings = []
     
-    similar_files = bill_model.objects.filter(
+    # A trashed bill must not be reported as a duplicate — otherwise a
+    # re-upload of something the user just deleted gets flagged against
+    # a document they can no longer see.
+    similar_files = bill_model.objects.alive().filter(
         organization=organization,
         file__isnull=False
     ).exclude(status=bill_model.BillStatus.DRAFT)
@@ -699,7 +701,7 @@ def bill_analyze_base(
     organization = get_organization_from_request(request, org_id)
 
     try:
-        bill = bill_model.objects.get(id=bill_id, organization=organization)
+        bill = bill_model.objects.alive().get(id=bill_id, organization=organization)
     except bill_model.DoesNotExist:
         return Response(
             {'error': f'{bill_type_label.title()} bill not found'},

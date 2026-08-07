@@ -636,7 +636,7 @@ def vendor_bill_analyze(request, org_id):
     organization = get_organization_from_request(request, org_id)
 
     try:
-        bill = TallyVendorBill.objects.get(
+        bill = TallyVendorBill.objects.alive().get(
             id=bill_id,
             organization=organization
         )
@@ -1091,7 +1091,7 @@ def vendor_bill_verify(request, org_id):
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     try:
-        bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
+        bill = TallyVendorBill.objects.alive().get(id=bill_id, organization=organization)
 
         # Handle potential multiple analyzed bills - use the most recent one
         try:
@@ -1899,7 +1899,7 @@ def vendor_bill_sync(request, org_id):
     organization = get_organization_from_request(request, org_id)
 
     try:
-        bill = TallyVendorBill.objects.get(id=bill_id, organization=organization)
+        bill = TallyVendorBill.objects.alive().get(id=bill_id, organization=organization)
 
         # Handle potential multiple analyzed bills - use the most recent one
         try:
@@ -2081,7 +2081,9 @@ def vendor_bills_sync_list(request, org_id):
         TallyVendorAnalyzedBill.objects.filter(
             organization=organization,
             selected_bill__status=TallyVendorBill.BillStatus.SYNCED,
-            selected_bill__tally_synced=False
+            selected_bill__tally_synced=False,
+            # Never hand a trashed bill to the Tally TCP bridge.
+            selected_bill__is_deleted=False,
         )
         .select_related('selected_bill', 'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes')
         .prefetch_related(

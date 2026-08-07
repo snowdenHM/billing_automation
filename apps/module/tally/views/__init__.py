@@ -85,6 +85,14 @@ from .setup_guide import tally_setup_guide
 # Bill image scanner (CamScanner-style preprocessing before OCR)
 from .scan import scan_process
 
+# Trash — recoverable delete for every Tally bill type
+from .trash import (
+    trash_list,
+    trash_restore,
+    trash_delete_forever,
+    trash_empty,
+)
+
 __all__ = [
     # Helpers
     "NoPagination",
@@ -143,4 +151,9 @@ __all__ = [
     # Setup guide
     "tally_setup_guide",
     "scan_process",
+    # Trash
+    "trash_list",
+    "trash_restore",
+    "trash_delete_forever",
+    "trash_empty",
 ]

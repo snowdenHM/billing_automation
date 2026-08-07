@@ -1,3 +1,7 @@
+import math
+from datetime import timedelta
+
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 import uuid
@@ -36,6 +40,132 @@ class SoftDeleteModel(models.Model):
     def delete(self, using=None, keep_parents=False):  # pragma: no cover
         self.is_deleted = True
         self.save(update_fields=["is_deleted"])
+
+
+# ---------------------------------------------------------------------------
+# Trash — recoverable delete with a fixed retention window
+# ---------------------------------------------------------------------------
+
+#: Days a trashed record survives before the purge job destroys it for good.
+#: Override with ``TRASH_RETENTION_DAYS`` in settings.
+DEFAULT_TRASH_RETENTION_DAYS = 30
+
+
+def get_trash_retention_days():
+    """Retention window in days, read from settings at call time.
+
+    Read lazily rather than captured at import so a deployment can change
+    the window without the value being baked into a migration default.
+    """
+    return int(getattr(settings, "TRASH_RETENTION_DAYS", DEFAULT_TRASH_RETENTION_DAYS))
+
+
+def trash_cutoff(now=None):
+    """The ``deleted_at`` on or before which a trashed row has expired."""
+    return (now or timezone.now()) - timedelta(days=get_trash_retention_days())
+
+
+class TrashableQuerySet(models.QuerySet):
+    """Queryset helpers for models carrying :class:`TrashableMixin`."""
+
+    def alive(self):
+        """Rows that are not in the trash — what every normal list shows."""
+        return self.filter(is_deleted=False)
+
+    def trashed(self):
+        """Rows sitting in the trash, expired ones included."""
+        return self.filter(is_deleted=True)
+
+    def recoverable(self, now=None):
+        """Trashed rows still inside the retention window.
+
+        The Trash UI lists these. Filtering on the cutoff here — rather
+        than trusting the purge job to have run — means an expired bill
+        stops being offered for restore the moment it expires, even if
+        cron is lagging or has been down.
+        """
+        return self.trashed().filter(deleted_at__gt=trash_cutoff(now))
+
+    def expired(self, now=None):
+        """Trashed rows past the retention window, ready to be destroyed.
+
+        ``deleted_at`` is null-checked because a row trashed by an older
+        code path would otherwise never satisfy the comparison and would
+        linger forever.
+        """
+        return self.trashed().filter(
+            models.Q(deleted_at__lte=trash_cutoff(now)) | models.Q(deleted_at__isnull=True)
+        )
+
+
+class TrashableMixin(models.Model):
+    """Recoverable delete: move to trash now, destroy after the window.
+
+    Unlike :class:`SoftDeleteModel` this deliberately does **not** override
+    ``delete()``. The purge job and the "delete permanently" action both
+    need a real row-and-file destruction, and silently redefining
+    ``delete()`` to mean something else is exactly the kind of surprise
+    that leaves undeletable rows behind. Trashing is an explicit
+    :meth:`move_to_trash` call instead.
+    """
+
+    is_deleted = models.BooleanField(
+        default=False, db_index=True,
+        help_text="True while the record sits in the trash awaiting restore or purge.",
+    )
+    deleted_at = models.DateTimeField(
+        null=True, blank=True, db_index=True,
+        help_text="When the record was moved to trash. Drives the retention countdown.",
+    )
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="+",
+        help_text="User who moved the record to trash.",
+    )
+
+    objects = TrashableQuerySet.as_manager()
+
+    class Meta:
+        abstract = True
+
+    def move_to_trash(self, user=None):
+        """Flag the record as trashed. The uploaded file is left on disk.
+
+        Keeping the file is the whole point — restore has to return a
+        working document, so nothing is unlinked until the purge.
+        """
+        self.is_deleted = True
+        self.deleted_at = timezone.now()
+        self.deleted_by = user if (user and getattr(user, "is_authenticated", False)) else None
+        self.save(update_fields=["is_deleted", "deleted_at", "deleted_by"])
+
+    def restore(self):
+        """Bring the record back out of the trash."""
+        self.is_deleted = False
+        self.deleted_at = None
+        self.deleted_by = None
+        self.save(update_fields=["is_deleted", "deleted_at", "deleted_by"])
+
+    @property
+    def purge_at(self):
+        """When this record becomes eligible for permanent deletion."""
+        if not self.is_deleted or not self.deleted_at:
+            return None
+        return self.deleted_at + timedelta(days=get_trash_retention_days())
+
+    @property
+    def days_until_purge(self):
+        """Whole days left before purge; 0 once expired. None if not trashed."""
+        purge_at = self.purge_at
+        if purge_at is None:
+            return None
+        seconds_left = (purge_at - timezone.now()).total_seconds()
+        if seconds_left <= 0:
+            return 0
+        # Round up: with any part of a day left the UI should still say "1 day".
+        return math.ceil(seconds_left / 86400)
 
 
 # ---------------------------------------------------------------------------

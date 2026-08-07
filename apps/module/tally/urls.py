@@ -69,6 +69,11 @@ from .views import (
     tally_setup_guide,
     # Bill image scanner
     scan_process,
+    # Trash
+    trash_list,
+    trash_restore,
+    trash_delete_forever,
+    trash_empty,
 )
 
 # Create router for the remaining viewsets
@@ -160,5 +165,13 @@ urlpatterns = [
 
         # Bill tally sync status update endpoint
         path('bills/tally_status/', update_bill_tally_sync_status, name='update-bill-tally-sync-status'),
+
+        # Trash — recoverable delete across every Tally bill type.
+        # `empty/` is declared before the <slug> route so it can never be
+        # swallowed as a document type.
+        path('trash/', trash_list, name='trash-list'),
+        path('trash/empty/', trash_empty, name='trash-empty'),
+        path('trash/<slug:kind_slug>/<uuid:bill_id>/restore/', trash_restore, name='trash-restore'),
+        path('trash/<slug:kind_slug>/<uuid:bill_id>/', trash_delete_forever, name='trash-delete-forever'),
     ])),
 ]

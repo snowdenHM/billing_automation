@@ -518,7 +518,7 @@ def expense_bill_analyze(request, org_id):
     organization = get_organization_from_request(request, org_id)
 
     try:
-        bill = TallyExpenseBill.objects.get(
+        bill = TallyExpenseBill.objects.alive().get(
             id=bill_id,
             organization=organization
         )
@@ -828,7 +828,7 @@ def expense_bill_verify(request, org_id):
         )
 
     try:
-        bill = TallyExpenseBill.objects.get(id=bill_id, organization=organization)
+        bill = TallyExpenseBill.objects.alive().get(id=bill_id, organization=organization)
         analyzed_bill = TallyExpenseAnalyzedBill.objects.get(id=analyzed_bill_id, organization=organization)
     except (TallyExpenseBill.DoesNotExist, TallyExpenseAnalyzedBill.DoesNotExist):
         return Response(
@@ -1468,7 +1468,7 @@ def expense_bill_sync(request, org_id):
     organization = get_organization_from_request(request, org_id)
 
     try:
-        bill = TallyExpenseBill.objects.get(id=bill_id, organization=organization)
+        bill = TallyExpenseBill.objects.alive().get(id=bill_id, organization=organization)
         analyzed_bill = TallyExpenseAnalyzedBill.objects.get(selected_bill=bill)
     except (TallyExpenseBill.DoesNotExist, TallyExpenseAnalyzedBill.DoesNotExist):
         return Response({
@@ -1619,7 +1619,9 @@ def expense_bills_sync_list(request, org_id):
     analyzed_bills = TallyExpenseAnalyzedBill.objects.filter(
         organization=organization,
         selected_bill__status=TallyExpenseBill.BillStatus.SYNCED,
-        selected_bill__tally_synced=False
+        selected_bill__tally_synced=False,
+        # Never hand a trashed bill to the Tally TCP bridge.
+        selected_bill__is_deleted=False,
     ).select_related(
         'selected_bill', 'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes'
     ).prefetch_related(

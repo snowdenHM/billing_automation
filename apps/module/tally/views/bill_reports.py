@@ -84,7 +84,8 @@ def _build_and_stream(
 
     statuses = _resolve_statuses(request)
     bills = (
-        bill_model.objects.filter(organization=organization, status__in=statuses)
+        bill_model.objects.alive()
+        .filter(organization=organization, status__in=statuses)
         .order_by("-created_at")
     )
 
