@@ -30,6 +30,8 @@ class TallyExpenseBillSerializer(BaseTallyBillSerializer):
 
 class TallyExpenseAnalyzedProductSerializer(serializers.ModelSerializer):
     chart_of_accounts_name = serializers.CharField(source='chart_of_accounts.name', read_only=True)
+    # Explicit FK — bypass DRF auto-introspection bug on Ledger FKs.
+    chart_of_accounts = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
         model = TallyExpenseAnalyzedProduct
@@ -44,6 +46,16 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
     products = TallyExpenseAnalyzedProductSerializer(many=True, read_only=True)
     vendor_name = serializers.CharField(source='vendor.name', read_only=True)
     selected_bill_name = serializers.CharField(source='selected_bill.bill_munshi_name', read_only=True)
+
+    # Explicit FK declarations — see vendor_serializers.py for rationale.
+    selected_bill = serializers.PrimaryKeyRelatedField(read_only=True)
+    vendor = serializers.PrimaryKeyRelatedField(read_only=True)
+    igst_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    cgst_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    sgst_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    tds_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    other_adjustment_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    round_off_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
 
     def get_consolidate_prod_data(self, obj):
         """Get consolidated product data if exists"""

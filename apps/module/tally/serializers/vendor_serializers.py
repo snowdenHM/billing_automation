@@ -28,6 +28,13 @@ class TallyVendorBillSerializer(BaseTallyBillSerializer):
 class TallyVendorAnalyzedProductSerializer(serializers.ModelSerializer):
     taxes_name = serializers.CharField(source='taxes.name', read_only=True)
 
+    # Explicit FK declarations to sidestep DRF's auto-introspection bug
+    # ("cannot unpack non-iterable ForeignKey object") on Ledger FKs.
+    taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    cgst_ledger = serializers.PrimaryKeyRelatedField(read_only=True)
+    sgst_ledger = serializers.PrimaryKeyRelatedField(read_only=True)
+    igst_ledger = serializers.PrimaryKeyRelatedField(read_only=True)
+
     # Use SafeDecimalField for all decimal fields that might have invalid values
     price = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
     amount = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
@@ -60,6 +67,20 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
     products = TallyVendorAnalyzedProductSerializer(many=True, read_only=True)
     vendor_name = serializers.CharField(source='vendor.name', read_only=True)
     selected_bill_name = serializers.CharField(source='selected_bill.bill_munshi_name', read_only=True)
+
+    # Explicit FK declarations — bypass DRF's ModelSerializer auto-field
+    # introspection which throws "TypeError: cannot unpack non-iterable
+    # ForeignKey object" on the Ledger FK graph in certain DRF releases.
+    # Wire shape stays identical (UUID PK per FK).
+    selected_bill = serializers.PrimaryKeyRelatedField(read_only=True)
+    vendor = serializers.PrimaryKeyRelatedField(read_only=True)
+    igst_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    cgst_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    sgst_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    discount_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    cess_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    freight_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    round_off_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
 
     # Use SafeDecimalField for all decimal fields that might have invalid values
     total = SafeDecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)

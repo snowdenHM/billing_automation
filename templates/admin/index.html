@@ -1,9 +1,11 @@
-{# Bill Munshi admin dashboard override.
-   Populated by `apps.common.admin_dashboard.dashboard_callback`
-   (wired via `UNFOLD["DASHBOARD_CALLBACK"]`).
-   Falls back to the stock unfold dashboard when the callback dict
-   is missing the expected keys. #}
 {% extends "admin/index.html" %}
+{% comment %}
+Bill Munshi admin dashboard override.
+Populated by `apps.common.admin_dashboard.dashboard_callback`
+(wired via UNFOLD DASHBOARD_CALLBACK).
+Falls back to the stock unfold dashboard when the callback dict
+is missing the expected keys.
+{% endcomment %}
 {% load i18n %}
 
 {% block content %}

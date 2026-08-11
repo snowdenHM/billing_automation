@@ -5,7 +5,24 @@ from ..models import TallyConfig, ParentLedger, GstRateLedgerMapping, Ledger
 
 
 class GstRateLedgerMappingSerializer(serializers.ModelSerializer):
-    """Per-org GST rate → CGST/SGST/IGST ledger mapping."""
+    """Per-org GST rate → CGST/SGST/IGST ledger mapping.
+
+    FKs are declared explicitly (PrimaryKeyRelatedField) rather than
+    left to ModelSerializer auto-introspection — certain DRF releases
+    throw "TypeError: cannot unpack non-iterable ForeignKey object"
+    when auto-building a relational field on some FK graphs. Explicit
+    declarations produce the identical wire shape without hitting the
+    buggy code path.
+    """
+    cgst_ledger = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.all(), allow_null=True, required=False,
+    )
+    sgst_ledger = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.all(), allow_null=True, required=False,
+    )
+    igst_ledger = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.all(), allow_null=True, required=False,
+    )
     cgst_ledger_name = serializers.CharField(source='cgst_ledger.name', read_only=True)
     sgst_ledger_name = serializers.CharField(source='sgst_ledger.name', read_only=True)
     igst_ledger_name = serializers.CharField(source='igst_ledger.name', read_only=True)

@@ -270,7 +270,15 @@ class BaseBillDetailSerializer(serializers.ModelSerializer):
     
     analyzed_bill_model = None  # Override in subclass
     analyzed_bill_serializer = None  # Override in subclass
-    
+
+    # Explicit FK declarations — bypass DRF's ModelSerializer auto-field
+    # introspection for FK/relational fields, which triggers a
+    # "TypeError: cannot unpack non-iterable ForeignKey object" on
+    # certain DRF releases when the target uses AUTH_USER_MODEL / a
+    # swappable model. Declaring them here keeps the wire shape
+    # identical (integer PK for uploaded_by, UUID for the bill FK) but
+    # short-circuits the buggy code path.
+    uploaded_by = serializers.PrimaryKeyRelatedField(read_only=True)
     uploaded_by_username = serializers.CharField(source='uploaded_by.username', read_only=True)
     organization_name = serializers.CharField(source='organization.name', read_only=True)
     analyzed_bill = serializers.SerializerMethodField()

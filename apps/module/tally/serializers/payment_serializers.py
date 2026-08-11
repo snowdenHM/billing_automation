@@ -40,6 +40,8 @@ class TallyPaymentBillSerializer(BaseTallyBillSerializer):
 
 class TallyPaymentAnalyzedProductSerializer(serializers.ModelSerializer):
     chart_of_accounts_name = serializers.CharField(source="chart_of_accounts.name", read_only=True)
+    # Explicit FK — bypass DRF auto-introspection bug on Ledger FKs.
+    chart_of_accounts = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
         model = TallyPaymentAnalyzedProduct
@@ -52,15 +54,22 @@ class TallyPaymentAnalyzedProductSerializer(serializers.ModelSerializer):
 
 class TallyPaymentAnalyzedBillSerializer(serializers.ModelSerializer):
     products = TallyPaymentAnalyzedProductSerializer(many=True, read_only=True)
-    # ``vendor`` here holds the Bank/Cash ledger for a payment voucher —
-    # kept named ``vendor_name`` so the shared frontend detail component
-    # doesn't need voucher-type-specific field switching.
+    # ``vendor`` here holds the identification picker; ``payment_mode``
+    # is the actual Bank/Cash ledger (Correction 26).
     vendor_name = serializers.CharField(source="vendor.name", read_only=True)
-    # ``payment_mode`` is the actual Bank/Cash ledger the payment is made
-    # through (Correction 26) — distinct from ``vendor`` above, which is
-    # now a plain identification picker.
     payment_mode_name = serializers.CharField(source="payment_mode.name", read_only=True)
     selected_bill_name = serializers.CharField(source="selected_bill.bill_munshi_name", read_only=True)
+
+    # Explicit FK declarations — see vendor_serializers.py for rationale.
+    selected_bill = serializers.PrimaryKeyRelatedField(read_only=True)
+    vendor = serializers.PrimaryKeyRelatedField(read_only=True)
+    payment_mode = serializers.PrimaryKeyRelatedField(read_only=True)
+    igst_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    cgst_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    sgst_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    tds_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    other_adjustment_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    round_off_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
 
     def get_consolidate_prod_data(self, obj):
         """Return consolidated line items if any exist."""
