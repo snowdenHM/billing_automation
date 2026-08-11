@@ -43,22 +43,28 @@ def get_tally_config(request, org_id):
     try:
         organization = get_object_or_404(Organization, id=org_id)
 
+        # Prefetch is tolerant of not-yet-migrated columns: the M2Ms
+        # cess/discount/freight_parents were added in migration 0038.
+        # If that migration hasn't been applied yet in the deployed env,
+        # skip those fields so the endpoint still serves the rest.
+        prefetch_fields = [
+            "igst_parents",
+            "cgst_parents",
+            "sgst_parents",
+            "vendor_parents",
+            "chart_of_accounts_parents",
+            "chart_of_accounts_expense_parents",
+            "tds_parents",
+            "payment_parents",
+            "round_off_parents",
+        ]
+        for _optional in ("cess_parents", "discount_parents", "freight_parents"):
+            if hasattr(TallyConfig, _optional):
+                prefetch_fields.append(_optional)
+
         tally_config = (
             TallyConfig.objects.filter(organization=organization)
-            .prefetch_related(
-                "igst_parents",
-                "cgst_parents",
-                "sgst_parents",
-                "vendor_parents",
-                "chart_of_accounts_parents",
-                "chart_of_accounts_expense_parents",
-                "tds_parents",
-                "payment_parents",
-                "round_off_parents",
-                "cess_parents",
-                "discount_parents",
-                "freight_parents",
-            )
+            .prefetch_related(*prefetch_fields)
             .first()
         )
 
@@ -104,10 +110,11 @@ def create_or_update_tally_config(request, org_id):
             "tds_parents",
             "payment_parents",
             "round_off_parents",
-            "cess_parents",
-            "discount_parents",
-            "freight_parents",
         ]
+        # Optional — only present after migration 0038 is applied.
+        for _optional in ("cess_parents", "discount_parents", "freight_parents"):
+            if hasattr(TallyConfig, _optional):
+                parent_fields.append(_optional)
 
         for field in parent_fields:
             if field in request.data:
@@ -180,22 +187,20 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         organization = self._get_organization()
+        # See get_tally_config: cess/discount/freight_parents may not
+        # exist yet if migration 0038 isn't applied on this env.
+        prefetch_fields = [
+            "igst_parents", "cgst_parents", "sgst_parents",
+            "vendor_parents", "chart_of_accounts_parents",
+            "chart_of_accounts_expense_parents",
+            "tds_parents", "payment_parents", "round_off_parents",
+        ]
+        for _optional in ("cess_parents", "discount_parents", "freight_parents"):
+            if hasattr(TallyConfig, _optional):
+                prefetch_fields.append(_optional)
         return (
             TallyConfig.objects.filter(organization=organization)
-            .prefetch_related(
-                "igst_parents",
-                "cgst_parents",
-                "sgst_parents",
-                "vendor_parents",
-                "chart_of_accounts_parents",
-                "chart_of_accounts_expense_parents",
-                "tds_parents",
-                "payment_parents",
-                "round_off_parents",
-                "cess_parents",
-                "discount_parents",
-                "freight_parents",
-            )
+            .prefetch_related(*prefetch_fields)
             .order_by("-id")
         )
 
@@ -371,14 +376,34 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
 @api_view(["GET"])
 @permission_classes([OrganizationAPIKeyOrBearerToken])
 def list_gst_rate_ledger_mappings(request, org_id):
-    """List per-rate CGST/SGST/IGST ledger mappings for an organization."""
-    organization = get_object_or_404(Organization, id=org_id)
-    mappings = GstRateLedgerMapping.objects.filter(organization=organization).order_by("rate")
-    serializer = GstRateLedgerMappingSerializer(mappings, many=True)
-    return Response(
-        {"success": True, "data": serializer.data},
-        status=status.HTTP_200_OK,
-    )
+    """List per-rate CGST/SGST/IGST ledger mappings for an organization.
+
+    Wrapped in a defensive try — the FE hits this on every voucher detail
+    page load, so a schema/DB issue here would 500 the whole detail
+    screen (client reported "Failed to load purchase voucher"). We
+    return an empty list on any exception and log the trace instead.
+    """
+    import logging
+    _log = logging.getLogger(__name__)
+    try:
+        organization = get_object_or_404(Organization, id=org_id)
+        mappings = (
+            GstRateLedgerMapping.objects
+            .filter(organization=organization)
+            .select_related("cgst_ledger", "sgst_ledger", "igst_ledger")
+            .order_by("rate")
+        )
+        serializer = GstRateLedgerMappingSerializer(mappings, many=True)
+        return Response(
+            {"success": True, "data": serializer.data},
+            status=status.HTTP_200_OK,
+        )
+    except Exception as exc:
+        _log.exception("list_gst_rate_ledger_mappings failed for org %s: %s", org_id, exc)
+        return Response(
+            {"success": False, "data": [], "error": str(exc)},
+            status=status.HTTP_200_OK,
+        )
 
 
 @extend_schema(tags=["Tally Config"])
