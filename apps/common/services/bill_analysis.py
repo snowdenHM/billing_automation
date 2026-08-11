@@ -416,7 +416,152 @@ _GST_EXTRACTION_PREAMBLE = """
     - Look for format: 2 digits + 10 alphanumeric characters + 1 digit + 2 characters
     
     ⚠️ FINAL REMINDER: The "gst_number" field MUST be present in both "from" and "to" sections, even if empty.
+
+    🔢 NUMERIC ACCURACY — CRITICAL FOR LARGE AMOUNTS (7+ DIGITS)
+    Numbers on Indian invoices routinely reach 6, 7 or 8 digits
+    (₹1,23,45,678 = ~₹1.2 crore). OCR frequently drops the leading
+    digit of large amounts because the image crop or bounding box
+    cuts it off. Every numeric field you extract MUST be verified.
+
+    STRICT digit rules — apply to EVERY amount field
+    (price, quantity, item amount, igst, cgst, sgst, tds,
+    round_off, discount, cess, freight, total):
+
+    1. Count the digits BEFORE the decimal / paise. If the printed
+       value on the invoice is written with Indian grouping
+       (₹1,23,45,678.90 or ₹5,82,338), count the digits between the
+       commas — that is authoritative. A value written as "5,82,338"
+       has exactly 6 digits (5 lakh 82 thousand 338), NOT 5 digits.
+    2. When the invoice prints both a per-line amount AND a
+       subtotal / grand total, ALWAYS verify that
+       Σ(line.amount) + (igst + cgst + sgst) + (freight + cess)
+                       − (discount) ≈ total to within ₹5. If it does
+       not, RE-READ the digits of every offending field. Prefer a
+       higher digit count when in doubt — a missed leading digit
+       (₹5,82,338 read as ₹82,338) is the #1 OCR failure mode on
+       this dataset.
+    3. Never smooth or "round" a figure to look plausible. Extract
+       the exact digits printed on the invoice. If the printed value
+       and the arithmetic don't match, extract the printed value AS-IS
+       and let the backend flag the drift — do not silently fix it.
+    4. Currency prefixes and separators ("₹", "Rs.", "INR", ",",
+       spaces) MUST be stripped from the returned JSON value —
+       return the raw number only.
+    5. For "Amount in Words" fields on the invoice ("Rupees Five
+       Lakh Eighty-Two Thousand Three Hundred Thirty-Eight Only"),
+       cross-check the words against the digit-count of your
+       extracted total. If they disagree, TRUST THE WORDS — they are
+       written by a human and are almost always correct — and
+       re-read the digits.
+    6. For any line item quantity, extract the exact printed value
+       (integer or decimal). Fractional quantities like "1.5 kg" are
+       real; do not truncate to 1.
+
+    Return a single JSON object matching the schema below. Do NOT
+    include commentary, markdown fences, or narration.
 """
+
+
+def check_ocr_totals_sanity(relevant_data):
+    """Cross-check Σ(items) + Σ(taxes) − discount vs the printed total.
+
+    OCR frequently drops the leading digit of a 7-8 digit amount
+    (client Corrections 14 + 24). If the extracted line-item total
+    plus taxes drift far from the printed grand total, it almost
+    always means a digit was misread — flag it so the operator can
+    re-enter that field on the verify screen instead of syncing a
+    wrong voucher into Tally.
+
+    Returns a dict:
+        {"ok": bool, "drift": float, "drift_pct": float, "message": str}
+    """
+    try:
+        def _f(v):
+            try:
+                return float(v or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        items = relevant_data.get('items') or relevant_data.get('expenses') or []
+        if not isinstance(items, list):
+            items = []
+
+        def _line_amount(row):
+            if not isinstance(row, dict):
+                return 0.0
+            # vendor-bill shape: price × quantity
+            price = _f(row.get('price'))
+            qty = _f(row.get('quantity'))
+            if price and qty:
+                return price * qty
+            # expense-bill shape: flat amount
+            return _f(row.get('amount'))
+
+        line_sum = sum(_line_amount(r) for r in items)
+        tax_sum = (
+            _f(relevant_data.get('igst'))
+            + _f(relevant_data.get('cgst'))
+            + _f(relevant_data.get('sgst'))
+        )
+        adjustments = (
+            _f(relevant_data.get('cess'))
+            + _f(relevant_data.get('freight'))
+            + _f(relevant_data.get('round_off'))
+            - _f(relevant_data.get('discount'))
+        )
+        computed = line_sum + tax_sum + adjustments
+        printed = _f(relevant_data.get('total'))
+
+        if not printed or not line_sum:
+            return {"ok": True, "drift": 0.0, "drift_pct": 0.0, "message": ""}
+
+        drift = abs(computed - printed)
+        drift_pct = (drift / printed) * 100.0 if printed else 0.0
+
+        # Threshold: >5% AND >₹100 drift is almost always a leading-digit
+        # OCR miss on either an item, a tax field, or the total itself.
+        if drift < 100 or drift_pct < 5.0:
+            return {"ok": True, "drift": drift, "drift_pct": drift_pct, "message": ""}
+
+        # Detect the most likely culprit: which single field, when its
+        # magnitude is multiplied by 10, brings the totals into alignment?
+        # A missed leading digit typically = printed_value × 10.
+        suspects = []
+        for label, val in (
+            ("total", printed),
+            ("igst", _f(relevant_data.get('igst'))),
+            ("cgst", _f(relevant_data.get('cgst'))),
+            ("sgst", _f(relevant_data.get('sgst'))),
+        ):
+            if val <= 0:
+                continue
+            # If val×10 aligns the totals, that field is a strong suspect.
+            if abs(computed - (printed - val + val * 10)) < 1.0:
+                suspects.append(label)
+        for idx, r in enumerate(items):
+            amt = _line_amount(r)
+            if amt <= 0:
+                continue
+            if abs(computed - amt + amt * 10 - printed) < 1.0:
+                suspects.append(f"item[{idx}]")
+
+        msg = (
+            f"OCR sanity check: computed ₹{computed:,.2f} vs printed ₹{printed:,.2f} "
+            f"(drift ₹{drift:,.2f} = {drift_pct:.1f}%)."
+        )
+        if suspects:
+            msg += f" Likely missed leading digit on: {', '.join(suspects)}."
+
+        return {
+            "ok": False,
+            "drift": drift,
+            "drift_pct": drift_pct,
+            "message": msg,
+            "suspects": suspects,
+        }
+    except Exception as e:
+        logger.warning("check_ocr_totals_sanity failed: %s", e)
+        return {"ok": True, "drift": 0.0, "drift_pct": 0.0, "message": ""}
 
 
 def get_vendor_bill_prompt():

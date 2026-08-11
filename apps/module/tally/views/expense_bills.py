@@ -160,6 +160,21 @@ def process_expense_analysis_data(bill, json_data, organization):
             logger.warning(f"Unexpected JSON data type: {type(json_data)}")
             raise Exception("Invalid JSON data format from OpenAI")
 
+        # OCR sanity check — flags leading-digit misses on 7-8 digit
+        # amounts (Corrections 14 + 24). Result stashed on the JSON
+        # blob so the FE can surface it on the verify screen.
+        try:
+            from apps.common.services.bill_analysis import check_ocr_totals_sanity
+            _sanity = check_ocr_totals_sanity(relevant_data)
+            relevant_data['_ocr_sanity'] = _sanity
+            if not _sanity.get('ok'):
+                logger.warning(
+                    "OCR sanity failed for expense bill %s: %s",
+                    bill.id, _sanity.get('message'),
+                )
+        except Exception as _san_err:
+            logger.warning("OCR sanity check errored on bill %s: %s", bill.id, _san_err)
+
         # Save analyzed data to bill
         bill.analysed_data = relevant_data
         bill.save(update_fields=['analysed_data'])
