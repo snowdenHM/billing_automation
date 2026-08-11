@@ -133,8 +133,17 @@ UNFOLD = {
             {
                 "title": "Zoho",
                 "items": [
-                    {"title": "Vendor bills", "icon": "receipt", "link": "/admin/zoho/zohovendorbill/"},
-                    {"title": "Expense bills", "icon": "book", "link": "/admin/zoho/zohoexpensebill/"},
+                    # Admin URLs are `/admin/<app_label>/<model_lowercase>/`.
+                    # Zoho classes are `VendorBill` / `ExpenseBill` /
+                    # `JournalBill`, not `Zoho...Bill` — old links 404'd.
+                    {"title": "Vendor bills", "icon": "receipt", "link": "/admin/zoho/vendorbill/"},
+                    {"title": "Expense bills", "icon": "book", "link": "/admin/zoho/expensebill/"},
+                    {"title": "Journal bills", "icon": "menu_book", "link": "/admin/zoho/journalbill/"},
+                    {"title": "Vendors (Zoho)", "icon": "person", "link": "/admin/zoho/zohovendor/"},
+                    {"title": "Chart of accounts", "icon": "list_alt", "link": "/admin/zoho/zohochartofaccount/"},
+                    {"title": "Taxes", "icon": "percent", "link": "/admin/zoho/zohotaxes/"},
+                    {"title": "TDS / TCS", "icon": "gavel", "link": "/admin/zoho/zohotdstcs/"},
+                    {"title": "Credentials", "icon": "key", "link": "/admin/zoho/zohocredentials/"},
                 ],
             },
             {
