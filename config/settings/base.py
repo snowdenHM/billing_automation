@@ -156,6 +156,11 @@ UNFOLD = {
 # ------------------------------------------------------------
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # WhiteNoise MUST sit directly after SecurityMiddleware. Serves every
+    # collected asset under STATIC_URL (admin, unfold, drf_spectacular,
+    # rest_framework, etc.) directly from the WSGI process — so we don't
+    # rely on nginx being configured to alias /static/ → STATIC_ROOT.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -266,6 +271,19 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"] if (BASE_DIR / "static").exists() else []
+# Compressed + hashed static storage via WhiteNoise. Emits assets with
+# a content-hash in the filename and long-cache headers — safe to CDN.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        # `CompressedStaticFilesStorage` (not Manifest) — no strict-hash
+        # requirement, so a template referencing an asset that wasn't
+        # collected won't 500 the request. Swap to
+        # `CompressedManifestStaticFilesStorage` once every static ref
+        # is known to resolve.
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+    },
+}
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"

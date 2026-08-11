@@ -19,6 +19,10 @@ django-filter
 django-redis
 django-rq
 django-unfold==0.44.0
+# WhiteNoise: prod-safe static serving via WSGI middleware. Prevents 404s
+# on /static/<admin|unfold|rest_framework|drf_spectacular>/... when nginx
+# isn't configured to alias STATIC_ROOT (or when a deploy changes STATIC_ROOT).
+whitenoise[brotli]==6.7.0
 django-waffle
 djangorestframework
 djangorestframework-api-key
