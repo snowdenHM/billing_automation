@@ -1,0 +1,122 @@
+{# Bill Munshi admin dashboard override.
+   Populated by `apps.common.admin_dashboard.dashboard_callback`
+   (wired via `UNFOLD["DASHBOARD_CALLBACK"]`).
+   Falls back to the stock unfold dashboard when the callback dict
+   is missing the expected keys. #}
+{% extends "admin/index.html" %}
+{% load i18n %}
+
+{% block content %}
+  {# --- KPI row --- #}
+  {% if kpi %}
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    {% for card in kpi %}
+      <div class="border border-base-200 dark:border-base-800 bg-white dark:bg-base-900 rounded-lg p-5 shadow-sm">
+        <div class="flex items-start justify-between">
+          <div class="min-w-0">
+            <div class="text-[11px] uppercase tracking-widest text-base-500 dark:text-base-400 font-semibold">
+              {{ card.title }}
+            </div>
+            <div class="mt-2 text-2xl font-extrabold text-base-900 dark:text-white">
+              {{ card.value }}
+            </div>
+            <div class="mt-1 text-xs text-base-500 dark:text-base-400 truncate">
+              {{ card.footer }}
+            </div>
+          </div>
+          <span class="material-symbols-outlined text-primary-600 dark:text-primary-400 text-2xl shrink-0 ml-2">
+            {{ card.icon|default:"insights" }}
+          </span>
+        </div>
+        {% if card.url %}
+          <a href="{{ card.url }}"
+             class="mt-3 inline-flex items-center gap-1 text-[12px] font-semibold text-primary-600 dark:text-primary-400 hover:underline">
+            Open
+            <span class="material-symbols-outlined text-sm">arrow_forward</span>
+          </a>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    {# --- Recent bills --- #}
+    <div class="lg:col-span-2 border border-base-200 dark:border-base-800 bg-white dark:bg-base-900 rounded-lg overflow-hidden">
+      <div class="px-5 py-3 border-b border-base-200 dark:border-base-800 flex items-center justify-between">
+        <div class="text-sm font-semibold text-base-900 dark:text-white">Recent bills</div>
+        <div class="text-[11px] uppercase tracking-widest text-base-400">Last 10</div>
+      </div>
+      <div class="divide-y divide-base-100 dark:divide-base-800">
+        {% for b in recent_bills %}
+          <div class="px-5 py-3 flex items-center justify-between gap-3">
+            <div class="min-w-0">
+              <div class="text-sm font-semibold text-base-900 dark:text-white truncate">
+                {{ b.name }}
+              </div>
+              <div class="mt-0.5 text-[11px] text-base-500 dark:text-base-400 truncate">
+                {{ b.kind }} · {{ b.org|default:"—" }} · {{ b.created_at|date:"d M Y H:i" }}
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <span class="inline-flex px-2 py-0.5 rounded text-[11px] font-semibold
+                {% if b.status == 'Synced' %}bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300
+                {% elif b.status == 'Verified' %}bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300
+                {% elif b.status == 'Analysed' %}bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300
+                {% else %}bg-base-100 text-base-600 dark:bg-base-800 dark:text-base-300{% endif %}">
+                {{ b.status|default:"—" }}
+              </span>
+              {% if b.tally_synced %}
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+                  <span class="material-symbols-outlined text-[11px]">check</span>
+                  Tally
+                </span>
+              {% endif %}
+            </div>
+          </div>
+        {% empty %}
+          <div class="px-5 py-8 text-center text-sm text-base-500 dark:text-base-400">
+            No bills yet.
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {# --- Open support tickets --- #}
+    <div class="border border-base-200 dark:border-base-800 bg-white dark:bg-base-900 rounded-lg overflow-hidden">
+      <div class="px-5 py-3 border-b border-base-200 dark:border-base-800 flex items-center justify-between">
+        <div class="text-sm font-semibold text-base-900 dark:text-white">Open tickets</div>
+        <a href="/admin/support/supportticket/" class="text-[11px] font-semibold text-primary-600 dark:text-primary-400 hover:underline">All</a>
+      </div>
+      <div class="divide-y divide-base-100 dark:divide-base-800">
+        {% for t in open_tickets %}
+          <a href="/admin/support/supportticket/{{ t.id }}/change/"
+             class="block px-5 py-3 hover:bg-base-50 dark:hover:bg-base-950 transition">
+            <div class="text-sm font-semibold text-base-900 dark:text-white truncate">
+              {{ t.subject }}
+            </div>
+            <div class="mt-0.5 text-[11px] text-base-500 dark:text-base-400 truncate">
+              {{ t.category|default:"—" }} · {{ t.org|default:"—" }} · {{ t.created_at|date:"d M H:i" }}
+            </div>
+            <div class="mt-1">
+              <span class="inline-flex px-2 py-0.5 rounded text-[10.5px] font-semibold
+                {% if t.status == 'open' %}bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300
+                {% else %}bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300{% endif %}">
+                {{ t.status }}
+              </span>
+            </div>
+          </a>
+        {% empty %}
+          <div class="px-5 py-8 text-center text-sm text-base-500 dark:text-base-400">
+            No open tickets.
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  {# Preserve unfold's "recent actions" pane below the custom widgets. #}
+  <div class="mt-8">
+    {{ block.super }}
+  </div>
+{% endblock %}

@@ -182,8 +182,32 @@ def bill_detail_base(request, org_id, bill_id, bill_model, serializer_class):
             status=status.HTTP_404_NOT_FOUND
         )
 
-    serializer = serializer_class(bill, context={'request': request})
-    return Response(serializer.data)
+    # Serializer wrapper — a broken analyzed_bill row (stale schema, corrupt
+    # analysed_data JSON, deleted FK) used to 500 the whole detail page.
+    # Log the trace and return the minimum viable payload so the FE detail
+    # screen can still render + let the operator delete/re-analyze.
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    try:
+        serializer = serializer_class(bill, context={'request': request})
+        return Response(serializer.data)
+    except Exception as exc:
+        _log.exception(
+            "bill_detail_base serialize failed for bill %s (org %s): %s",
+            bill_id, org_id, exc,
+        )
+        return Response(
+            {
+                'id': str(bill.id),
+                'bill_munshi_name': getattr(bill, 'bill_munshi_name', ''),
+                'status': getattr(bill, 'status', ''),
+                'file': getattr(bill, 'file', None) and str(bill.file),
+                'analyzed_bill': None,
+                'error': str(exc),
+                'error_code': 'BILL_DETAIL_SERIALIZE_FAILED',
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 # ============================================================================

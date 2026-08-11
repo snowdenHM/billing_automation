@@ -91,6 +91,9 @@ UNFOLD = {
     "SHOW_HISTORY": True,
     "SHOW_VIEW_ON_SITE": True,
     "THEME": None,  # let user toggle
+    # Custom root dashboard — see apps/common/admin_dashboard.py.
+    # Renders KPI tiles, recent bills, open support tickets.
+    "DASHBOARD_CALLBACK": "apps.common.admin_dashboard.dashboard_callback",
     "COLORS": {
         "primary": {
             "50": "255 247 237",

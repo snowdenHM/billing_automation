@@ -1,0 +1,216 @@
+{# Bill Munshi admin login — extends unfold's `admin/login.html`.
+   Overrides the branding blocks; keeps unfold's auth form intact. #}
+{% extends "admin/login.html" %}
+{% load i18n static %}
+
+{% block title %}Sign in — Bill Munshi Admin{% endblock %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <style>
+    /* Split screen: brand pane left, auth card right. Keeps working
+       on unfold's dark theme too — colors driven by CSS vars unfold
+       already exposes. */
+    body {
+      background: linear-gradient(135deg, #0b1220 0%, #1e293b 55%, #0b1220 100%);
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+    .bm-login-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 1fr;
+      align-items: stretch;
+    }
+    @media (min-width: 900px) {
+      .bm-login-shell {
+        grid-template-columns: minmax(360px, 1fr) minmax(380px, 460px);
+      }
+    }
+    .bm-brand-pane {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 48px 40px;
+      background:
+        radial-gradient(circle at 20% 20%, rgba(249,115,22,0.14) 0%, transparent 45%),
+        radial-gradient(circle at 80% 80%, rgba(59,130,246,0.10) 0%, transparent 40%);
+    }
+    .bm-brand-mark {
+      display: inline-flex; align-items: center; gap: 12px;
+      color: #fff; font-weight: 700; font-size: 20px; letter-spacing: -0.01em;
+    }
+    .bm-brand-mark .icon {
+      display: inline-flex; width: 40px; height: 40px;
+      background: #ffffff; border-radius: 10px;
+      align-items: center; justify-content: center; line-height: 0;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+    }
+    .bm-brand-headline {
+      max-width: 460px;
+      font-size: 32px; font-weight: 800; line-height: 1.2; letter-spacing: -0.02em;
+      color: #f8fafc; margin: 40px 0 12px;
+    }
+    .bm-brand-tag {
+      max-width: 460px; color: #94a3b8; font-size: 15px; line-height: 1.6;
+    }
+    .bm-brand-features {
+      margin-top: 32px; display: grid; gap: 12px;
+    }
+    .bm-brand-features li {
+      display: flex; gap: 10px; align-items: flex-start;
+      color: #cbd5e1; font-size: 13px; list-style: none;
+    }
+    .bm-brand-features .dot {
+      display: inline-block; width: 6px; height: 6px; margin-top: 8px;
+      background: #f97316; border-radius: 999px; flex-shrink: 0;
+    }
+    .bm-brand-footer {
+      font-size: 11px; color: #64748b; letter-spacing: 0.04em;
+    }
+    .bm-auth-pane {
+      display: flex; align-items: center; justify-content: center;
+      padding: 32px 24px;
+      background: #ffffff;
+      color: #0b1220;
+    }
+    .bm-auth-card {
+      width: 100%; max-width: 380px;
+    }
+    .bm-auth-card h1 {
+      margin: 0 0 6px; font-size: 24px; font-weight: 700; letter-spacing: -0.01em;
+      color: #0b1220;
+    }
+    .bm-auth-card .sub {
+      margin: 0 0 24px; color: #64748b; font-size: 14px;
+    }
+    /* Unfold's form fields — spacing tweaks for the framed pane. */
+    .bm-auth-card form input[type="text"],
+    .bm-auth-card form input[type="password"],
+    .bm-auth-card form input[type="email"] {
+      width: 100%; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px;
+      font-size: 14px; color: #0b1220; background: #ffffff;
+    }
+    .bm-auth-card form input:focus {
+      outline: none; border-color: #f97316; box-shadow: 0 0 0 3px rgba(249,115,22,0.15);
+    }
+    .bm-auth-card form label {
+      display: block; margin: 12px 0 6px; font-size: 12px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.08em; color: #64748b;
+    }
+    .bm-auth-card .submit-row {
+      margin-top: 20px;
+    }
+    .bm-auth-card input[type="submit"] {
+      width: 100%; padding: 11px 16px; background: #f97316;
+      color: #ffffff; font-weight: 700; font-size: 14px; letter-spacing: 0.01em;
+      border: none; border-radius: 8px; cursor: pointer;
+      box-shadow: 0 4px 12px rgba(249,115,22,0.28);
+    }
+    .bm-auth-card input[type="submit"]:hover { background: #ea580c; }
+    .bm-auth-card .errornote,
+    .bm-auth-card .form-row .errorlist {
+      color: #b91c1c; font-size: 12.5px; background: #fef2f2;
+      padding: 8px 10px; border-radius: 6px; margin: 8px 0 0;
+      border: 1px solid #fecaca; list-style: none;
+    }
+    @media (prefers-color-scheme: dark) {
+      .bm-auth-pane { background: #0b1220; color: #e2e8f0; }
+      .bm-auth-card h1 { color: #f8fafc; }
+      .bm-auth-card .sub { color: #94a3b8; }
+      .bm-auth-card form input[type="text"],
+      .bm-auth-card form input[type="password"],
+      .bm-auth-card form input[type="email"] {
+        background: #0f172a; border-color: #1e293b; color: #f1f5f9;
+      }
+    }
+  </style>
+{% endblock %}
+
+{% block bodyclass %}bm-login-body{% endblock %}
+
+{% block branding %}{% endblock %}
+{% block nav-global %}{% endblock %}
+{% block breadcrumbs %}{% endblock %}
+
+{% block content_title %}{% endblock %}
+
+{% block content %}
+<div class="bm-login-shell">
+  <div class="bm-brand-pane">
+    <div>
+      <div class="bm-brand-mark">
+        <span class="icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 40 40" aria-hidden="true">
+            <rect x="10" y="8" width="20" height="24" rx="3" fill="#0b1220"/>
+            <rect x="10" y="30" width="20" height="2" fill="#f97316"/>
+            <rect x="13" y="13" width="14" height="2" rx="1" fill="#ffffff"/>
+            <rect x="13" y="17" width="10" height="2" rx="1" fill="#ffffff"/>
+            <rect x="13" y="21" width="12" height="2" rx="1" fill="#ffffff"/>
+            <rect x="13" y="25" width="8" height="2" rx="1" fill="#ffffff"/>
+          </svg>
+        </span>
+        Bill Munshi
+      </div>
+
+      <div class="bm-brand-headline">Admin console for the Bill&nbsp;Munshi platform.</div>
+      <div class="bm-brand-tag">
+        Manage clients, tally configurations, ledgers, vouchers, and support
+        tickets across every organization from one workspace.
+      </div>
+
+      <ul class="bm-brand-features">
+        <li><span class="dot"></span> Organisations, users, subscriptions</li>
+        <li><span class="dot"></span> Tally / Zoho voucher pipeline &amp; sync</li>
+        <li><span class="dot"></span> Master-ledger onboarding &amp; audit</li>
+        <li><span class="dot"></span> Support-ticket triage</li>
+      </ul>
+    </div>
+
+    <div class="bm-brand-footer">© {% now "Y" %} Bill Munshi · Internal admin only</div>
+  </div>
+
+  <div class="bm-auth-pane">
+    <div class="bm-auth-card">
+      <h1>Sign in</h1>
+      <p class="sub">Enter your admin credentials to continue.</p>
+
+      {# Django's stock auth form, preserved. #}
+      {% if form.errors and not form.non_field_errors %}
+        <p class="errornote">
+          {% if form.errors.items|length == 1 %}{% translate "Please correct the error below." %}
+          {% else %}{% translate "Please correct the errors below." %}{% endif %}
+        </p>
+      {% endif %}
+      {% if form.non_field_errors %}
+        {% for error in form.non_field_errors %}
+          <p class="errornote">{{ error }}</p>
+        {% endfor %}
+      {% endif %}
+
+      <form action="{{ app_path }}" method="post" id="login-form">{% csrf_token %}
+        <div class="form-row">
+          {{ form.username.label_tag }}
+          {{ form.username }}
+        </div>
+        <div class="form-row">
+          {{ form.password.label_tag }}
+          {{ form.password }}
+          <input type="hidden" name="next" value="{{ next }}">
+        </div>
+        {% url 'admin_password_reset' as password_reset_url %}
+        {% if password_reset_url %}
+          <div class="password-reset-link" style="margin-top:10px;font-size:12px;">
+            <a href="{{ password_reset_url }}" style="color:#f97316;font-weight:600;text-decoration:none;">
+              {% translate 'Forgotten your password or username?' %}
+            </a>
+          </div>
+        {% endif %}
+        <div class="submit-row">
+          <input type="submit" value="{% translate 'Sign in' %}">
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
