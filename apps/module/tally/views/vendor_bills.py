@@ -2057,45 +2057,58 @@ def vendor_bill_sync(request, org_id):
             'error_code': 'BILL_NOT_VERIFIED'
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
-    # Master-sync guard (Option C — see docs/tally-master-sync.md).
-    # If the bill references any BM-created ledger that Tally hasn't
-    # imported yet, refuse the sync with a 409 so the frontend can
-    # show a "waiting for masters" spinner and retry after the next
-    # Tally poll cycle. XML shape stays unchanged.
-    from .bill_sync_guard import find_pending_masters, build_waiting_response_payload
+    # Master-sync check is now ADVISORY, not a hard block.
+    # Old behavior: 409 refused sync until every BM-created ledger was
+    # confirmed by Tally callback. That left users stuck when Tally TCP
+    # was offline or slow. New behavior: always accept the sync into
+    # BillMunshi's queue, mark bill status=SYNCED but keep
+    # tally_synced=False. The Tally TCP polls both master + bill
+    # queues; the callback flips tally_synced=True on success or writes
+    # an error message on failure. Frontend reads bill.tally_synced +
+    # bill.tally_sync_message to show the final state.
+    from .bill_sync_guard import find_pending_masters
     pending_masters = find_pending_masters(analyzed_bill)
-    if pending_masters:
-        return Response(
-            build_waiting_response_payload(pending_masters),
-            status=status.HTTP_409_CONFLICT,
-        )
 
     try:
-        # Get structured bill data in the same format as verify view
         sync_data = get_structured_bill_data(analyzed_bill, organization)
 
-        # Update bill status to synced
         bill.status = TallyVendorBill.BillStatus.SYNCED
         bill.save(update_fields=['status'])
 
-        # Send the payload to vendor_bill_sync_external
-        try:
-            # Create a new request-like object with the sync data
-            sync_response = vendor_bill_sync_external_handler(sync_data, org_id, organization)
+        # Compose a human-friendly status the FE surfaces:
+        #   "pending_tally"  → BillMunshi has queued the bill; Tally has not
+        #                      yet confirmed it (either masters pending or
+        #                      Tally TCP hasn't polled yet).
+        #   "confirmed"      → callback already fired (rare on the sync
+        #                      request itself; usually applies on later
+        #                      reads).
+        tally_state = "confirmed" if bill.tally_synced else "pending_tally"
 
+        try:
+            sync_response = vendor_bill_sync_external_handler(sync_data, org_id, organization)
             return Response({
-                "message": "Bill synced successfully",
+                "message": (
+                    "Bill queued for Tally sync"
+                    if tally_state == "pending_tally"
+                    else "Bill synced to Tally"
+                ),
                 "bill_id": str(bill_id),
                 "status": "Synced",
+                "tally_sync_status": tally_state,
+                "pending_masters": pending_masters,
+                "pending_masters_count": len(pending_masters),
                 "data": sync_response
             }, status=status.HTTP_200_OK)
 
         except Exception as sync_error:
             logger.warning(f"External sync failed but bill status updated: {str(sync_error)}")
             return Response({
-                "message": "Bill synced successfully but external sync failed",
+                "message": "Bill queued for Tally sync (external handler failed)",
                 "bill_id": str(bill_id),
                 "status": "Synced",
+                "tally_sync_status": tally_state,
+                "pending_masters": pending_masters,
+                "pending_masters_count": len(pending_masters),
                 "sync_data": sync_data,
                 "external_sync_error": str(sync_error)
             }, status=status.HTTP_200_OK)

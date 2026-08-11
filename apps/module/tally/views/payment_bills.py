@@ -1643,32 +1643,31 @@ def payment_bill_sync(request, org_id):
             'error_code': 'EXPENSE_BILL_NOT_VERIFIED'
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
-    # Master-sync guard — see bill_sync_guard.py for rationale.
-    from .bill_sync_guard import find_pending_masters, build_waiting_response_payload
+    # Master-sync check is advisory (see vendor_bills.py note).
+    from .bill_sync_guard import find_pending_masters
     pending_masters = find_pending_masters(analyzed_bill)
-    if pending_masters:
-        return Response(
-            build_waiting_response_payload(pending_masters),
-            status=status.HTTP_409_CONFLICT,
-        )
 
     try:
-        # Get structured bill data in the same format as verify view
         sync_data = get_structured_payment_bill_data(analyzed_bill, organization)
 
-        # Update bill status to synced
         bill.status = TallyPaymentBill.BillStatus.SYNCED
         bill.save(update_fields=['status'])
 
-        # Send the payload to payment_bill_sync_external
-        try:
-            # Create a new request-like object with the sync data
-            sync_response = payment_bill_sync_external_handler(sync_data, org_id, organization)
+        tally_state = "confirmed" if bill.tally_synced else "pending_tally"
 
+        try:
+            sync_response = payment_bill_sync_external_handler(sync_data, org_id, organization)
             return Response({
-                "message": "Payment bill synced successfully",
+                "message": (
+                    "Payment bill queued for Tally sync"
+                    if tally_state == "pending_tally"
+                    else "Payment bill synced to Tally"
+                ),
                 "bill_id": str(bill_id),
                 "status": "Synced",
+                "tally_sync_status": tally_state,
+                "pending_masters": pending_masters,
+                "pending_masters_count": len(pending_masters),
                 "sync_data": sync_data,
                 "external_sync": sync_response
             }, status=status.HTTP_200_OK)
@@ -1676,9 +1675,12 @@ def payment_bill_sync(request, org_id):
         except Exception as sync_error:
             logger.warning(f"External payment sync failed but bill status updated: {str(sync_error)}")
             return Response({
-                "message": "Payment bill synced successfully but external sync failed",
+                "message": "Payment bill queued for Tally sync (external handler failed)",
                 "bill_id": str(bill_id),
                 "status": "Synced",
+                "tally_sync_status": tally_state,
+                "pending_masters": pending_masters,
+                "pending_masters_count": len(pending_masters),
                 "sync_data": sync_data,
                 "external_sync_error": str(sync_error)
             }, status=status.HTTP_200_OK)
