@@ -339,18 +339,40 @@ def find_or_create_tally_tax_ledger(ledger_name, tax_type, organization):
         parent_ledger = None
 
         if tally_config:
+            # Normalise the tax_type key so both upper- and lower-case
+            # callers (`ROUND_OFF`, `round_off`, `COA`, `chart_of_accounts`)
+            # resolve to the same slot. Previously any type outside
+            # {IGST,CGST,SGST} silently landed under "Duties & Taxes".
+            key = (tax_type or '').strip().upper()
             type_map = {
                 'IGST': tally_config.igst_parents,
                 'CGST': tally_config.cgst_parents,
                 'SGST': tally_config.sgst_parents,
+                'TDS': tally_config.tds_parents,
+                'ROUND_OFF': tally_config.round_off_parents,
+                'ROUNDOFF': tally_config.round_off_parents,
+                'COA': tally_config.chart_of_accounts_parents,
+                'CHART_OF_ACCOUNTS': tally_config.chart_of_accounts_parents,
+                'PURCHASE': tally_config.chart_of_accounts_parents,
+                # Adjustments (discount/cess/freight/other) don't get a
+                # dedicated slot on TallyConfig — book them alongside the
+                # chart-of-accounts / purchase ledgers, which is where
+                # accountants typically expect line-level surcharges.
+                'DISCOUNT': tally_config.chart_of_accounts_parents,
+                'CESS': tally_config.chart_of_accounts_parents,
+                'FREIGHT': tally_config.chart_of_accounts_parents,
+                'OTHER': tally_config.chart_of_accounts_parents,
+                'PRODUCT TAX': tally_config.chart_of_accounts_parents,
             }
-            parent_rel = type_map.get(tax_type)
-            if parent_rel:
+            parent_rel = type_map.get(key)
+            if parent_rel is not None:
                 parents = parent_rel.all()
                 if parents.exists():
                     parent_ledger = parents.first()
-            else:
-                # Fallback: union of all tax parents
+            if parent_ledger is None:
+                # Last-resort fallback: union of GST parents so an unknown
+                # tax_type still lands in a Duties & Taxes group rather
+                # than orphaned under a new default.
                 combined = (tally_config.igst_parents.all() |
                             tally_config.cgst_parents.all() |
                             tally_config.sgst_parents.all())

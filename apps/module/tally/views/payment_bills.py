@@ -1059,6 +1059,26 @@ def update_analyzed_payment_bill_data(analyzed_bill, analyzed_data, organization
                 if vendor:
                     analyzed_bill.vendor = vendor
 
+        # Payment Mode — the Bank/Cash ledger the payment is actually made
+        # through (Correction 26). FE sends the UUID explicitly; it is
+        # scoped to TallyConfig.payment_parents on the frontend dropdown,
+        # but any org ledger is accepted here (mirrors the vendor_id
+        # handling above — trust the FE-picked UUID).
+        if 'payment_mode_id' in analyzed_data:
+            payment_mode_id = analyzed_data.get('payment_mode_id')
+            if payment_mode_id:
+                try:
+                    analyzed_bill.payment_mode = Ledger.objects.get(
+                        id=payment_mode_id, organization=organization,
+                    )
+                except (Ledger.DoesNotExist, ValueError, DjangoValidationError):
+                    logger.warning(
+                        "Payment verify: submitted payment_mode_id %s not found in org %s",
+                        payment_mode_id, organization.id,
+                    )
+            else:
+                analyzed_bill.payment_mode = None
+
         # Update vendor debit_or_credit if provided
         if 'vendor_debit_or_credit' in analyzed_data:
             analyzed_bill.vendor_debit_or_credit = analyzed_data['vendor_debit_or_credit']
@@ -1078,10 +1098,14 @@ def update_analyzed_payment_bill_data(analyzed_bill, analyzed_data, organization
             if bill_date:
                 analyzed_bill.bill_date = bill_date
         if 'due_date' in analyzed_data:
-            # Parse due date string (format: "31-12-2023")
-            due_date = parse_payment_bill_date(analyzed_data['due_date'])
-            if due_date:
-                analyzed_bill.due_date = due_date
+            # Empty string / null = explicit clear from the FE.
+            raw_due = analyzed_data['due_date']
+            if raw_due in (None, ''):
+                analyzed_bill.due_date = None
+            else:
+                due_date = parse_payment_bill_date(raw_due)
+                if due_date:
+                    analyzed_bill.due_date = due_date
         if 'total' in analyzed_data:
             analyzed_bill.total = _to_decimal(analyzed_data['total'])
 
@@ -1107,25 +1131,25 @@ def update_analyzed_payment_bill_data(analyzed_bill, analyzed_data, organization
                 if not isinstance(block, dict):
                     continue
                 if 'amount' in block:
-                    amt = _to_decimal(block['amount'])
-                    setattr(analyzed_bill, amount_field, amt)
-                    # Zero amount → clear the FK. Otherwise a lingering
-                    # BM-created ledger will block sync via the master guard
-                    # even after the user zeroed the line.
-                    if not amt or amt == 0:
-                        setattr(analyzed_bill, fk_field, None)
+                    setattr(analyzed_bill, amount_field, _to_decimal(block['amount']))
+                # Always resolve the ledger — user may pick a new ledger
+                # while amount is temporarily 0 during edit.
                 if 'ledger' in block or 'ledger_id' in block:
                     ledger = _resolve_payment_tax_ledger(block, tax_type, organization)
                     if ledger is not None:
                         setattr(analyzed_bill, fk_field, ledger)
                     elif _is_blank_payment_ledger(block.get('ledger')) and not block.get('ledger_id'):
-                        # Explicit blank sentinel wipes the FK.
                         setattr(analyzed_bill, fk_field, None)
                 if dc_field in ('igst_debit_or_credit', 'cgst_debit_or_credit',
                                 'sgst_debit_or_credit', 'tds_debit_or_credit',
                                 'other_adjustment_debit_or_credit',
                                 'round_off_debit_or_credit') and 'debit_or_credit' in block:
                     setattr(analyzed_bill, dc_field, block['debit_or_credit'])
+                # Final-state rule: null the FK when amount is 0/empty so
+                # the sync payload doesn't emit a ghost ledger row.
+                final_amt = getattr(analyzed_bill, amount_field, None)
+                if not final_amt or final_amt == 0:
+                    setattr(analyzed_bill, fk_field, None)
 
         # ------------------------------------------------------------------
         # Multi-rate GST lines — replaces the single bill-level CGST/SGST/IGST
@@ -1202,13 +1226,28 @@ def update_analyzed_payment_bill_data(analyzed_bill, analyzed_data, organization
             if ledgers_by_type['IGST']:
                 analyzed_bill.igst_taxes = ledgers_by_type['IGST']
 
-        # Determine GST type based on updated amounts
-        if analyzed_bill.igst and analyzed_bill.igst > 0:
+        # Determine GST type — bill-level first, gst_lines fallback.
+        _bill_igst = analyzed_bill.igst or 0
+        _bill_cgst = analyzed_bill.cgst or 0
+        _bill_sgst = analyzed_bill.sgst or 0
+        if _bill_igst > 0:
             analyzed_bill.gst_type = TallyPaymentAnalyzedBill.GSTType.IGST
-        elif (analyzed_bill.cgst and analyzed_bill.cgst > 0) or (analyzed_bill.sgst and analyzed_bill.sgst > 0):
+        elif _bill_cgst > 0 or _bill_sgst > 0:
             analyzed_bill.gst_type = TallyPaymentAnalyzedBill.GSTType.CGST_SGST
         else:
-            analyzed_bill.gst_type = TallyPaymentAnalyzedBill.GSTType.UNKNOWN
+            try:
+                _lines = TallyPaymentGstLine.objects.filter(payment_bill=analyzed_bill)
+                _line_igst = sum((ln.amount or Decimal('0')) for ln in _lines if ln.tax_type == 'IGST')
+                _line_cgst = sum((ln.amount or Decimal('0')) for ln in _lines if ln.tax_type == 'CGST')
+                _line_sgst = sum((ln.amount or Decimal('0')) for ln in _lines if ln.tax_type == 'SGST')
+            except Exception:
+                _line_igst = _line_cgst = _line_sgst = Decimal('0')
+            if _line_igst > 0:
+                analyzed_bill.gst_type = TallyPaymentAnalyzedBill.GSTType.IGST
+            elif _line_cgst > 0 or _line_sgst > 0:
+                analyzed_bill.gst_type = TallyPaymentAnalyzedBill.GSTType.CGST_SGST
+            else:
+                analyzed_bill.gst_type = TallyPaymentAnalyzedBill.GSTType.UNKNOWN
 
         # Save the analyzed bill
         analyzed_bill.save(skip_validation=True)
@@ -1465,10 +1504,26 @@ def update_analyzed_payment_products(analyzed_bill, payment_items, organization)
     # from the individual list but the DB kept them — reload showed stale
     # rows. Consolidate view now derives from `consolidated_products`, not
     # the individual list, so pruning here is safe.
-    products_to_delete = []
-    for existing_id, product in existing_products.items():
-        if existing_id not in updated_product_ids:
-            products_to_delete.append(product)
+    # Safety: in consolidate mode the FE may hold aggregated rows in
+    # `payment_items` state; saving in that state used to wipe every
+    # real individual product because none of the fake-ids matched.
+    is_consolidate_view_only = (
+        getattr(analyzed_bill, 'consolidate', False)
+        and existing_products
+        and not (updated_product_ids & set(existing_products.keys()))
+    )
+    if is_consolidate_view_only:
+        logger.info(
+            "Skipping individual-product delete on payment bill %s — payload "
+            "appears to be from the consolidated view (no incoming id matches).",
+            analyzed_bill.id,
+        )
+        products_to_delete = []
+    else:
+        products_to_delete = [
+            product for existing_id, product in existing_products.items()
+            if existing_id not in updated_product_ids
+        ]
     deletion_count = len(products_to_delete)
     if products_to_delete:
         for product in products_to_delete:
@@ -1502,6 +1557,7 @@ def get_structured_payment_bill_data(analyzed_bill, organization):
     reload that dropped these keys would leave the UI blank.
     """
     vendor_ledger = analyzed_bill.vendor
+    payment_mode_ledger = analyzed_bill.payment_mode
     analyzed_bill_products = analyzed_bill.products.all()
     bill_date_str = analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
     due_date_str = analyzed_bill.due_date.strftime('%d-%m-%Y') if analyzed_bill.due_date else None
@@ -1543,6 +1599,12 @@ def get_structured_payment_bill_data(analyzed_bill, organization):
             "vendor_name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "",
             "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "",
             "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "",
+        },
+        # Bank/Cash ledger the payment is made through (Correction 26).
+        # Emitted as the DEBIT entry in the sync XML.
+        "payment_mode": {
+            "id": str(payment_mode_ledger.id) if payment_mode_ledger else None,
+            "name": payment_mode_ledger.name if payment_mode_ledger and payment_mode_ledger.name else "",
         },
         "bill_details": {
             "voucher": analyzed_bill.voucher or "",
@@ -1641,6 +1703,23 @@ def payment_bill_sync(request, org_id):
             'current_status': bill.status,
             'required_status': 'Verified',
             'error_code': 'EXPENSE_BILL_NOT_VERIFIED'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    # Payment voucher needs a Vendor ledger picked before it can be synced.
+    if analyzed_bill.vendor is None:
+        return Response({
+            'error': 'Vendor Not Selected',
+            'message': 'This payment has no Vendor ledger picked. Select one before syncing to Tally.',
+            'error_code': 'VENDOR_MISSING',
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    # Payment Mode (the actual Bank/Cash ledger) is required too — the
+    # sync XML posts its DEBIT entry using this ledger (Correction 26).
+    if analyzed_bill.payment_mode is None:
+        return Response({
+            'error': 'Payment Mode Not Selected',
+            'message': 'This payment has no Payment Mode (Bank/Cash) ledger picked. Select one before syncing to Tally.',
+            'error_code': 'PAYMENT_MODE_MISSING',
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     # Master-sync check is advisory (see vendor_bills.py note).
@@ -1782,7 +1861,7 @@ def payment_bills_sync_list(request, org_id):
         # Never hand a trashed bill to the Tally TCP bridge.
         selected_bill__is_deleted=False,
     ).select_related(
-        'selected_bill', 'vendor', 'igst_taxes', 'cgst_taxes', 'sgst_taxes'
+        'selected_bill', 'vendor', 'payment_mode', 'igst_taxes', 'cgst_taxes', 'sgst_taxes'
     ).prefetch_related(
         'products__chart_of_accounts',
         'consolidated_products__chart_of_accounts',
@@ -1824,41 +1903,44 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         {
           "bill_no": str, "bill_date": "DD-MM-YYYY",
           "voucher_type": "Payment",
-          "vendor": str, "company": str,
+          "vendor": "", "company": str,
           "total_amount": "54500.00",
           "notes": str,
           "ledgers": [
             # Every posting that hits a Tally ledger, flat list.
             # Each entry: amount, ledger (name), debit_or_credit.
             # GST entries additionally carry "rate" for cross-check.
+            {"amount": "54500.00", "ledger": "HDFC Bank",
+             "debit_or_credit": "debit"},
             {"amount": "4500.00", "ledger": "CGST (ITC) @ 9%", "rate": "18%",
              "debit_or_credit": "debit"},
-            {"amount": "5000.00", "ledger": "TDS on Rent @ 10%",
+            {"amount": "50000.00", "ledger": "Office Rent",
              "debit_or_credit": "credit"},
             ...
-          ],
-          "items": [
-            # Pure journal-entry style — no price/quantity. Each line
-            # books an amount against a chart-of-accounts ledger with
-            # explicit DR/CR.
-            {"details": "Office rent — November",
-             "payment_ledger": "RENT EXPENSE",
-             "amount": "50000.00",
-             "debit_or_credit": "debit"},
           ]
         }
 
+    Client Correction 26: the picked "Vendor" ledger is identification
+    only and its name/GST is deliberately NOT sent — ``<vendor>`` is
+    always an empty string. The Payment Mode ledger (the actual
+    Bank/Cash account) is posted as a single DEBIT entry equal to
+    ``analyzed_bill.total``, and every expense/payment line is posted as
+    a CREDIT entry — the reverse of a purchase-side voucher, since a
+    Payment voucher debits the bank and credits the expense/vendor.
+
     Zero-amount entries are dropped. ``round_off`` may be negative.
     """
-    vendor_ledger = analyzed_bill.vendor
+    payment_mode_ledger = analyzed_bill.payment_mode
     bill_date_str = (
         analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
     )
     company_name = organization.name if hasattr(organization, 'name') else str(organization.id)
 
-    vendor_name = vendor_ledger.name if vendor_ledger and vendor_ledger.name else "Unknown Vendor"
-    bill_url = f"https://billmunshi.com/tally/payment-bill/{analyzed_bill.selected_bill.id}"
-    notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
+    # Base URL is configurable so staging/self-hosted deployments
+    # don't leak the production domain into Tally narration.
+    _base = getattr(settings, "SITE_URL", "https://billmunshi.com").rstrip("/")
+    bill_url = f"{_base}/tally/payment-bill/{analyzed_bill.selected_bill.id}"
+    notes_message = f"Payment voucher entered via BillMunshi {bill_url}"
 
     Q2 = Decimal('0.01')
 
@@ -1918,19 +2000,26 @@ def prepare_payment_sync_data(analyzed_bill, organization):
     # ------------------------------------------------------------------
     ledgers_payload = []
 
-    # Vendor itself (the balancing party on a journal voucher).
-    if vendor_ledger and _money(analyzed_bill.vendor_amount) > 0:
+    # Payment Mode — the Bank/Cash ledger the payment is made through.
+    # ALWAYS a DEBIT entry for ``analyzed_bill.total`` (Correction 26):
+    # the client wants the bank ledger debited and the expense/vendor
+    # side credited, which is the reverse of the vendor/purchase voucher.
+    # The old "vendor" FK is no longer posted here — it's identification
+    # only now (see module docstring / model comment).
+    if payment_mode_ledger and _money(analyzed_bill.total) > 0:
         ledgers_payload.append({
-            "amount": _fmt_money(analyzed_bill.vendor_amount),
-            "ledger": vendor_ledger.name or "Unknown Vendor",
-            "debit_or_credit": _dc(analyzed_bill.vendor_debit_or_credit or "credit"),
+            "amount": _fmt_money(analyzed_bill.total),
+            "ledger": payment_mode_ledger.name or "Unknown Payment Mode",
+            "debit_or_credit": "debit",
         })
 
-    # Payment item lines — booked against the chart-of-accounts ledger
-    # with explicit DR/CR. A row with a real amount but no COA would
-    # silently disappear from the voucher and leave DR/CR out of balance
-    # in Tally, so refuse to build a partial payload — the caller must
-    # fix the missing COA before sync.
+    # Payment item lines — booked against the chart-of-accounts ledger.
+    # ALWAYS a CREDIT entry (Correction 26) regardless of the line's own
+    # stored ``debit_or_credit`` — the Payment Mode debit above is the
+    # only debit side of the voucher. A row with a real amount but no
+    # COA would silently disappear from the voucher and leave DR/CR out
+    # of balance in Tally, so refuse to build a partial payload — the
+    # caller must fix the missing COA before sync.
     missing_coa = []
     for line in source_lines:
         amt = _money(getattr(line, 'amount', 0))
@@ -1945,7 +2034,7 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(coa),
-            "debit_or_credit": _dc(getattr(line, 'debit_or_credit', 'debit')),
+            "debit_or_credit": "credit",
         })
     if missing_coa:
         raise ValueError(
@@ -2005,7 +2094,9 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         "bill_no": analyzed_bill.bill_no or "",
         "bill_date": bill_date_str,
         "voucher_type": "Payment",
-        "vendor_name": vendor_name,
+        # Client Correction 26: never leak the picked vendor's name/GST
+        # into the sync XML — the tag is always emitted empty.
+        "vendor": "",
         "company": company_name,
         "total_amount": _fmt_money(analyzed_bill.total),
         "notes": notes_message,

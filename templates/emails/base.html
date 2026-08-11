@@ -4,70 +4,112 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
+    <meta name="supported-color-schemes" content="light dark" />
     <title>{% block subject %}Bill Munshi{% endblock %}</title>
   </head>
-  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:32px 12px;">
+  <body style="margin:0;padding:0;background:#eef1f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0b1220;-webkit-font-smoothing:antialiased;">
+
+    {# Preheader (invisible inbox-preview snippet). Override this block #}
+    {# in a child template to control the sender-preview line in Gmail. #}
+    <div style="display:none;max-height:0;overflow:hidden;font-size:1px;line-height:1px;color:#eef1f6;opacity:0;">
+      {% block preheader %}Bill Munshi — receipts, verified and posted.{% endblock %}&nbsp;&#847;&nbsp;&#847;&nbsp;&#847;&nbsp;&#847;&nbsp;&#847;&nbsp;&#847;
+    </div>
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef1f6;padding:40px 12px;">
       <tr>
         <td align="center">
-          <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#ffffff;border-radius:16px;box-shadow:0 6px 24px rgba(15,23,42,0.06);overflow:hidden;">
-            <!-- Header -->
+
+          {# ─── Brand row (outside the card, so it reads as sender identity) ─── #}
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;margin:0 0 18px;">
             <tr>
-              <td style="padding:28px 32px 0;">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <td style="vertical-align:middle;">
+                <table role="presentation" cellpadding="0" cellspacing="0">
                   <tr>
-                    <td style="vertical-align:middle;">
-                      <span style="display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;background:linear-gradient(135deg,#f97316 0%,#ea580c 100%);color:#ffffff;font-weight:800;font-size:18px;letter-spacing:0.4px;border-radius:12px;box-shadow:0 4px 12px rgba(249,115,22,0.35);">BM</span>
+                    <td style="vertical-align:middle;padding-right:12px;">
+                      {# Rounded-square mark: a stylised "receipt" fold + BM initial. #}
+                      {# Rendered as inline SVG so Gmail/Outlook show it without an image proxy. #}
+                      <span style="display:inline-block;width:40px;height:40px;background:#0b1220;border-radius:10px;line-height:0;box-shadow:0 2px 8px rgba(11,18,32,0.16);">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" aria-hidden="true" style="display:block;">
+                          <rect x="10" y="8" width="20" height="24" rx="3" fill="#ffffff"/>
+                          <rect x="10" y="30" width="20" height="2" fill="#f97316"/>
+                          <rect x="13" y="13" width="14" height="2" rx="1" fill="#0b1220"/>
+                          <rect x="13" y="17" width="10" height="2" rx="1" fill="#0b1220"/>
+                          <rect x="13" y="21" width="12" height="2" rx="1" fill="#0b1220"/>
+                          <rect x="13" y="25" width="8" height="2" rx="1" fill="#0b1220"/>
+                        </svg>
+                      </span>
                     </td>
-                    <td style="vertical-align:middle;text-align:right;">
-                      <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.16em;color:#64748b;">billmunshi.com</span>
+                    <td style="vertical-align:middle;">
+                      <div style="font-size:18px;font-weight:700;letter-spacing:-0.01em;color:#0b1220;line-height:1;">Bill Munshi</div>
+                      <div style="margin-top:4px;font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:#64748b;line-height:1;">Bills. Verified. Posted.</div>
                     </td>
                   </tr>
                 </table>
               </td>
             </tr>
+          </table>
 
-            <!-- Body -->
+          {# ─── Card ─── #}
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border:1px solid #e5e9f0;border-radius:14px;box-shadow:0 1px 2px rgba(11,18,32,0.04),0 8px 24px rgba(11,18,32,0.06);overflow:hidden;">
+
+            {# Accent bar #}
             <tr>
-              <td style="padding:24px 32px 8px;">
-                <h1 style="margin:0 0 8px;font-size:22px;line-height:1.3;font-weight:700;color:#0f172a;">
+              <td style="height:4px;background:linear-gradient(90deg,#f97316 0%,#fb923c 100%);line-height:0;font-size:0;">&nbsp;</td>
+            </tr>
+
+            {# Heading #}
+            <tr>
+              <td style="padding:32px 36px 4px;">
+                <h1 style="margin:0;font-size:22px;line-height:1.3;font-weight:700;letter-spacing:-0.01em;color:#0b1220;">
                   {% block heading %}Hello from Bill Munshi{% endblock %}
                 </h1>
-                {% block preheading %}{% endblock %}
               </td>
             </tr>
 
+            {# Content #}
             <tr>
-              <td style="padding:8px 32px 24px;font-size:15px;line-height:1.6;color:#334155;">
+              <td style="padding:12px 36px 32px;font-size:15px;line-height:1.65;color:#1f2937;">
                 {% block content %}{% endblock %}
               </td>
             </tr>
 
-            <!-- Divider -->
+            {# Divider #}
             <tr>
-              <td style="padding:0 32px;">
-                <hr style="border:none;border-top:1px solid #e2e8f0;margin:0;" />
+              <td style="padding:0 36px;">
+                <hr style="border:none;border-top:1px solid #eef1f6;margin:0;" />
               </td>
             </tr>
 
-            <!-- Footer -->
+            {# Footer inside card #}
             <tr>
-              <td style="padding:20px 32px 28px;font-size:12px;line-height:1.6;color:#94a3b8;">
+              <td style="padding:20px 36px 26px;font-size:12px;line-height:1.7;color:#64748b;">
                 <p style="margin:0 0 6px;">
-                  You are receiving this email because an action was taken on your
-                  <strong style="color:#475569;">billmunshi.com</strong> account.
+                  This email was sent because an action was taken on your
+                  <a href="https://billmunshi.com" style="color:#0b1220;font-weight:600;text-decoration:none;">Bill&nbsp;Munshi</a>
+                  account. If it wasn&rsquo;t you, please ignore this message.
                 </p>
                 <p style="margin:0;">
-                  Need help? Reply to this email or write to
+                  Need help? Reach us at
                   <a href="mailto:support@billmunshi.com" style="color:#f97316;text-decoration:none;font-weight:600;">support@billmunshi.com</a>.
                 </p>
               </td>
             </tr>
           </table>
 
-          <p style="margin:16px 0 0;font-size:11px;color:#94a3b8;letter-spacing:0.05em;">
-            &copy; {% now "Y" %} Bill Munshi. All rights reserved.
-          </p>
+          {# ─── Sub-footer (outside card) ─── #}
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;margin:18px 0 0;">
+            <tr>
+              <td align="center" style="font-size:11px;line-height:1.7;color:#94a3b8;letter-spacing:0.02em;">
+                &copy; {% now "Y" %} Bill Munshi &nbsp;·&nbsp;
+                <a href="https://billmunshi.com" style="color:#94a3b8;text-decoration:none;">billmunshi.com</a>
+                &nbsp;·&nbsp;
+                <a href="https://billmunshi.com/privacy-policy" style="color:#94a3b8;text-decoration:none;">Privacy</a>
+                &nbsp;·&nbsp;
+                <a href="https://billmunshi.com/terms" style="color:#94a3b8;text-decoration:none;">Terms</a>
+              </td>
+            </tr>
+          </table>
+
         </td>
       </tr>
     </table>

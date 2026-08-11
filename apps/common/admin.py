@@ -10,11 +10,17 @@ from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
+from unfold.admin import (
+    ModelAdmin as UnfoldModelAdmin,
+    TabularInline as UnfoldTabularInline,
+    StackedInline as UnfoldStackedInline,
+)
+
 from apps.common.models import DemoRequest, EmailSettings
 
 
 @admin.register(DemoRequest)
-class DemoRequestAdmin(admin.ModelAdmin):
+class DemoRequestAdmin(UnfoldModelAdmin):
     """Read-mostly view of public demo bookings."""
 
     list_display = (
@@ -48,7 +54,7 @@ class DemoRequestAdmin(admin.ModelAdmin):
 
 
 @admin.register(EmailSettings)
-class EmailSettingsAdmin(admin.ModelAdmin):
+class EmailSettingsAdmin(UnfoldModelAdmin):
     """Singleton admin — always edit the same row (pk=1)."""
 
     list_display = ("id", "is_enabled", "from_email", "from_name", "updated_at")
@@ -115,7 +121,7 @@ def admin_change_url(obj):
 # Organisation-scoped base
 # ---------------------------------------------------------------------------
 
-class BaseOrgAdmin(admin.ModelAdmin):
+class BaseOrgAdmin(UnfoldModelAdmin):
     """
     Shared base for any ``ModelAdmin`` whose model has an
     ``organization`` FK.

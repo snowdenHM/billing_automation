@@ -18,6 +18,7 @@ django-environ
 django-filter
 django-redis
 django-rq
+django-unfold==0.44.0
 django-waffle
 djangorestframework
 djangorestframework-api-key

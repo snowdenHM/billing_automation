@@ -54,6 +54,10 @@ def get_tally_config(request, org_id):
                 "chart_of_accounts_expense_parents",
                 "tds_parents",
                 "payment_parents",
+                "round_off_parents",
+                "cess_parents",
+                "discount_parents",
+                "freight_parents",
             )
             .first()
         )
@@ -99,6 +103,10 @@ def create_or_update_tally_config(request, org_id):
             "chart_of_accounts_expense_parents",
             "tds_parents",
             "payment_parents",
+            "round_off_parents",
+            "cess_parents",
+            "discount_parents",
+            "freight_parents",
         ]
 
         for field in parent_fields:
@@ -183,6 +191,10 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
                 "chart_of_accounts_expense_parents",
                 "tds_parents",
                 "payment_parents",
+                "round_off_parents",
+                "cess_parents",
+                "discount_parents",
+                "freight_parents",
             )
             .order_by("-id")
         )
@@ -224,6 +236,7 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
             "igst_parents", "cgst_parents", "sgst_parents", "vendor_parents",
             "chart_of_accounts_parents", "chart_of_accounts_expense_parents",
             "tds_parents", "payment_parents",
+            "round_off_parents", "cess_parents", "discount_parents", "freight_parents",
         ]
         if parent_type not in valid_parent_types:
             return Response(

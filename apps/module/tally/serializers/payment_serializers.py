@@ -56,6 +56,10 @@ class TallyPaymentAnalyzedBillSerializer(serializers.ModelSerializer):
     # kept named ``vendor_name`` so the shared frontend detail component
     # doesn't need voucher-type-specific field switching.
     vendor_name = serializers.CharField(source="vendor.name", read_only=True)
+    # ``payment_mode`` is the actual Bank/Cash ledger the payment is made
+    # through (Correction 26) — distinct from ``vendor`` above, which is
+    # now a plain identification picker.
+    payment_mode_name = serializers.CharField(source="payment_mode.name", read_only=True)
     selected_bill_name = serializers.CharField(source="selected_bill.bill_munshi_name", read_only=True)
 
     def get_consolidate_prod_data(self, obj):
@@ -126,6 +130,7 @@ class TallyPaymentAnalyzedBillSerializer(serializers.ModelSerializer):
         model = TallyPaymentAnalyzedBill
         fields = [
             "id", "selected_bill", "selected_bill_name", "vendor", "vendor_name",
+            "payment_mode", "payment_mode_name",
             "voucher", "bill_no", "bill_date", "due_date", "total",
             "vendor_amount", "vendor_debit_or_credit",
             "igst", "igst_taxes", "igst_debit_or_credit",
@@ -137,7 +142,10 @@ class TallyPaymentAnalyzedBillSerializer(serializers.ModelSerializer):
             "round_off", "round_off_taxes", "round_off_debit_or_credit",
             "note", "consolidate", "products", "created_at",
         ]
-        read_only_fields = ["id", "created_at", "vendor_name", "selected_bill_name", "products"]
+        read_only_fields = [
+            "id", "created_at", "vendor_name", "payment_mode_name",
+            "selected_bill_name", "products",
+        ]
 
 
 class PaymentBillUploadSerializer(BaseBillUploadSerializer):
@@ -154,6 +162,10 @@ class PaymentBillUploadSerializer(BaseBillUploadSerializer):
 class PaymentBillVerificationSerializer(serializers.Serializer):
     """Payment voucher verification payload (mirrors expense)."""
     vendor_id = serializers.UUIDField(required=False, allow_null=True)
+    # Bank/Cash ledger the payment is made through (Correction 26).
+    # Required at the FE level (see hasValidationErrors); accepted here
+    # as optional so a partial-save mid-edit doesn't 400.
+    payment_mode_id = serializers.UUIDField(required=False, allow_null=True)
     voucher = serializers.CharField(max_length=255, required=False)
     bill_no = serializers.CharField(max_length=50, required=False)
     bill_date = serializers.DateField(required=False, allow_null=True)

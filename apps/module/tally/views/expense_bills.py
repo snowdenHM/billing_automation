@@ -977,10 +977,14 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
             if bill_date:
                 analyzed_bill.bill_date = bill_date
         if 'due_date' in analyzed_data:
-            # Parse due date string (format: "31-12-2023")
-            due_date = parse_expense_bill_date(analyzed_data['due_date'])
-            if due_date:
-                analyzed_bill.due_date = due_date
+            # Empty string / null = explicit clear from the FE.
+            raw_due = analyzed_data['due_date']
+            if raw_due in (None, ''):
+                analyzed_bill.due_date = None
+            else:
+                due_date = parse_expense_bill_date(raw_due)
+                if due_date:
+                    analyzed_bill.due_date = due_date
         if 'total' in analyzed_data:
             analyzed_bill.total = _to_decimal(analyzed_data['total'])
 
@@ -1023,20 +1027,20 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
                 if not isinstance(block, dict):
                     continue
                 if 'amount' in block:
-                    amt = _to_decimal(block['amount'])
-                    setattr(analyzed_bill, amt_field, amt)
-                    if amt == 0:
-                        # Drop stale FK so the sync XML doesn't emit
-                        # a ghost ledger row.
-                        setattr(analyzed_bill, ledger_field, None)
-                        if 'debit_or_credit' in block:
-                            setattr(analyzed_bill, dc_field, block['debit_or_credit'])
-                        continue
-                resolved = _resolve_expense_ledger(block, tax_type)
-                if resolved:
-                    setattr(analyzed_bill, ledger_field, resolved)
+                    setattr(analyzed_bill, amt_field, _to_decimal(block['amount']))
+                # Always resolve the ledger (not only when amount>0) —
+                # user can change the pick while amount is 0 during edit.
+                if 'ledger' in block or 'ledger_id' in block:
+                    resolved = _resolve_expense_ledger(block, tax_type)
+                    if resolved is not None:
+                        setattr(analyzed_bill, ledger_field, resolved)
                 if 'debit_or_credit' in block:
                     setattr(analyzed_bill, dc_field, block['debit_or_credit'])
+                # Final-state rule: FK null when amount is 0/empty so the
+                # sync XML doesn't emit a ghost ledger row.
+                final_amt = getattr(analyzed_bill, amt_field, None)
+                if not final_amt or final_amt == 0:
+                    setattr(analyzed_bill, ledger_field, None)
 
         # ------------------------------------------------------------------
         # Multi-rate GST lines — replaces the single bill-level CGST/SGST/IGST
@@ -1113,13 +1117,30 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
             if ledgers_by_type['IGST']:
                 analyzed_bill.igst_taxes = ledgers_by_type['IGST']
 
-        # Determine GST type based on updated amounts
-        if analyzed_bill.igst and analyzed_bill.igst > 0:
+        # Determine GST type — bill-level first, gst_lines sum as fallback.
+        # A mixed-rate bill's bill-level fields may be zero while gst_lines
+        # carry real tax; without this fallback gst_type flips to UNKNOWN.
+        _bill_igst = analyzed_bill.igst or 0
+        _bill_cgst = analyzed_bill.cgst or 0
+        _bill_sgst = analyzed_bill.sgst or 0
+        if _bill_igst > 0:
             analyzed_bill.gst_type = TallyExpenseAnalyzedBill.GSTType.IGST
-        elif (analyzed_bill.cgst and analyzed_bill.cgst > 0) or (analyzed_bill.sgst and analyzed_bill.sgst > 0):
+        elif _bill_cgst > 0 or _bill_sgst > 0:
             analyzed_bill.gst_type = TallyExpenseAnalyzedBill.GSTType.CGST_SGST
         else:
-            analyzed_bill.gst_type = TallyExpenseAnalyzedBill.GSTType.UNKNOWN
+            try:
+                _lines = TallyExpenseGstLine.objects.filter(expense_bill=analyzed_bill)
+                _line_igst = sum((ln.amount or Decimal('0')) for ln in _lines if ln.tax_type == 'IGST')
+                _line_cgst = sum((ln.amount or Decimal('0')) for ln in _lines if ln.tax_type == 'CGST')
+                _line_sgst = sum((ln.amount or Decimal('0')) for ln in _lines if ln.tax_type == 'SGST')
+            except Exception:
+                _line_igst = _line_cgst = _line_sgst = Decimal('0')
+            if _line_igst > 0:
+                analyzed_bill.gst_type = TallyExpenseAnalyzedBill.GSTType.IGST
+            elif _line_cgst > 0 or _line_sgst > 0:
+                analyzed_bill.gst_type = TallyExpenseAnalyzedBill.GSTType.CGST_SGST
+            else:
+                analyzed_bill.gst_type = TallyExpenseAnalyzedBill.GSTType.UNKNOWN
 
         # Save the analyzed bill
         analyzed_bill.save(skip_validation=True)
@@ -1403,10 +1424,26 @@ def update_analyzed_expense_products(analyzed_bill, expense_items, organization)
     # consolidate mode — user's line removal would silently come back
     # on reload. If consolidate is on we ALSO clear the consolidated
     # aggregation so it doesn't drift.
-    products_to_delete = [
-        product for existing_id, product in existing_products.items()
-        if existing_id not in updated_product_ids
-    ]
+    # Safety: in consolidate mode the FE may temporarily hold the aggregated
+    # rows in `expense_items` state. Saving in that state used to wipe every
+    # real individual product because none of the aggregated fake-ids matched.
+    is_consolidate_view_only = (
+        getattr(analyzed_bill, 'consolidate', False)
+        and existing_products
+        and not (updated_product_ids & set(existing_products.keys()))
+    )
+    if is_consolidate_view_only:
+        logger.info(
+            "Skipping individual-product delete on expense bill %s — payload "
+            "appears to be from the consolidated view (no incoming id matches).",
+            analyzed_bill.id,
+        )
+        products_to_delete = []
+    else:
+        products_to_delete = [
+            product for existing_id, product in existing_products.items()
+            if existing_id not in updated_product_ids
+        ]
     if products_to_delete:
         for product in products_to_delete:
             logger.info(f"Deleting expense product {product.id}: {product.item_details or 'Unknown'}")
@@ -1614,6 +1651,15 @@ def expense_bill_sync(request, org_id):
             'error_code': 'EXPENSE_BILL_NOT_VERIFIED'
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
+    # Sync XML falls back to "Unknown Vendor" when vendor is null —
+    # posting that would create a literal "Unknown Vendor" ledger in Tally.
+    if analyzed_bill.vendor is None:
+        return Response({
+            'error': 'Vendor Not Selected',
+            'message': 'This bill has no vendor picked. Select an existing vendor or create a new one before syncing to Tally.',
+            'error_code': 'VENDOR_MISSING',
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
     # Master-sync check is advisory (see vendor_bills.py note).
     from .bill_sync_guard import find_pending_masters
     pending_masters = find_pending_masters(analyzed_bill)
@@ -1815,7 +1861,10 @@ def prepare_expense_sync_data(analyzed_bill, organization):
     company_name = organization.name if hasattr(organization, 'name') else str(organization.id)
 
     vendor_name = vendor_ledger.name if vendor_ledger and vendor_ledger.name else "Unknown Vendor"
-    bill_url = f"https://billmunshi.com/tally/expense-bill/{analyzed_bill.selected_bill.id}"
+    # Base URL is configurable so staging/self-hosted deployments
+    # don't leak the production domain into Tally narration.
+    _base = getattr(settings, "SITE_URL", "https://billmunshi.com").rstrip("/")
+    bill_url = f"{_base}/tally/expense-bill/{analyzed_bill.selected_bill.id}"
     notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
 
     Q2 = Decimal('0.01')

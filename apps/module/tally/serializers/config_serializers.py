@@ -67,6 +67,26 @@ class TallyConfigSerializer(serializers.ModelSerializer):
         queryset=ParentLedger.objects.none(),
         required=False
     )
+    round_off_parents = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=ParentLedger.objects.none(),
+        required=False
+    )
+    cess_parents = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=ParentLedger.objects.none(),
+        required=False
+    )
+    discount_parents = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=ParentLedger.objects.none(),
+        required=False
+    )
+    freight_parents = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=ParentLedger.objects.none(),
+        required=False
+    )
 
     # Read-only fields for displaying parent ledger names in response
     igst_parent_names = serializers.SerializerMethodField()
@@ -77,6 +97,10 @@ class TallyConfigSerializer(serializers.ModelSerializer):
     expense_coa_parent_names = serializers.SerializerMethodField()
     tds_parent_names = serializers.SerializerMethodField()
     payment_parent_names = serializers.SerializerMethodField()
+    round_off_parent_names = serializers.SerializerMethodField()
+    cess_parent_names = serializers.SerializerMethodField()
+    discount_parent_names = serializers.SerializerMethodField()
+    freight_parent_names = serializers.SerializerMethodField()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -95,7 +119,8 @@ class TallyConfigSerializer(serializers.ModelSerializer):
         # Set queryset for all ManyToMany fields
         for field_name in ['igst_parents', 'cgst_parents', 'sgst_parents',
                           'vendor_parents', 'chart_of_accounts_parents',
-                          'chart_of_accounts_expense_parents', 'tds_parents', 'payment_parents']:
+                          'chart_of_accounts_expense_parents', 'tds_parents', 'payment_parents',
+                          'round_off_parents', 'cess_parents', 'discount_parents', 'freight_parents']:
             if field_name in self.fields:
                 self.fields[field_name].queryset = org_queryset
 
@@ -108,14 +133,18 @@ class TallyConfigSerializer(serializers.ModelSerializer):
             'igst_parents', 'cgst_parents', 'sgst_parents',
             'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents',
             'tds_parents', 'payment_parents',
+            'round_off_parents', 'cess_parents', 'discount_parents', 'freight_parents',
             # Read-only name fields for output
             'igst_parent_names', 'cgst_parent_names', 'sgst_parent_names',
             'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names',
-            'tds_parent_names', 'payment_parent_names'
+            'tds_parent_names', 'payment_parent_names',
+            'round_off_parent_names', 'cess_parent_names', 'discount_parent_names', 'freight_parent_names',
         ]
         read_only_fields = ['id', 'igst_parent_names', 'cgst_parent_names', 'sgst_parent_names',
                            'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names',
-                           'tds_parent_names', 'payment_parent_names']
+                           'tds_parent_names', 'payment_parent_names',
+                           'round_off_parent_names', 'cess_parent_names', 'discount_parent_names',
+                           'freight_parent_names']
 
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_igst_parent_names(self, obj) -> List[str]:
@@ -148,4 +177,20 @@ class TallyConfigSerializer(serializers.ModelSerializer):
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_payment_parent_names(self, obj) -> List[str]:
         return [parent.parent for parent in obj.payment_parents.all()]
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_round_off_parent_names(self, obj) -> List[str]:
+        return [parent.parent for parent in obj.round_off_parents.all()]
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_cess_parent_names(self, obj) -> List[str]:
+        return [parent.parent for parent in obj.cess_parents.all()]
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_discount_parent_names(self, obj) -> List[str]:
+        return [parent.parent for parent in obj.discount_parents.all()]
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_freight_parent_names(self, obj) -> List[str]:
+        return [parent.parent for parent in obj.freight_parents.all()]
 

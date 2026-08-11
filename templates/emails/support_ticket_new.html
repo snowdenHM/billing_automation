@@ -1,0 +1,61 @@
+{% extends "emails/base.html" %}
+{% block subject %}New support ticket: {{ ticket.subject }}{% endblock %}
+{% block preheader %}New support ticket: {{ ticket.subject }}{% endblock %}
+{% block heading %}New Support Ticket{% endblock %}
+{% block content %}
+  <p style="margin:0 0 18px;">
+    A new support ticket was submitted on
+    <strong style="color:#0b1220;">Bill Munshi</strong>.
+  </p>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+         style="margin:0 0 22px;background:#f8fafc;border:1px solid #e5e9f0;border-radius:10px;">
+    <tr>
+      <td style="padding:16px 18px;font-size:13px;color:#334155;line-height:1.9;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td style="padding:4px 0;width:120px;color:#64748b;font-weight:600;vertical-align:top;">Subject</td>
+            <td style="padding:4px 0;color:#0b1220;">{{ ticket.subject }}</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 0;color:#64748b;font-weight:600;vertical-align:top;">Category</td>
+            <td style="padding:4px 0;color:#0b1220;">{{ ticket.get_category_display }}</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 0;color:#64748b;font-weight:600;vertical-align:top;">Priority</td>
+            <td style="padding:4px 0;color:#0b1220;">{{ ticket.get_priority_display }}</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 0;color:#64748b;font-weight:600;vertical-align:top;">Submitter</td>
+            <td style="padding:4px 0;color:#0b1220;">{% if ticket.user %}{{ ticket.user.email }}{% else %}Anonymous{% endif %}</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 0;color:#64748b;font-weight:600;vertical-align:top;">Organization</td>
+            <td style="padding:4px 0;color:#0b1220;">{% if ticket.organization %}{{ ticket.organization.name }}{% else %}&mdash;{% endif %}</td>
+          </tr>
+          {% if ticket.page_url %}
+          <tr>
+            <td style="padding:4px 0;color:#64748b;font-weight:600;vertical-align:top;">Page URL</td>
+            <td style="padding:4px 0;color:#0b1220;word-break:break-all;">{{ ticket.page_url }}</td>
+          </tr>
+          {% endif %}
+        </table>
+      </td>
+    </tr>
+  </table>
+
+  <p style="margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">Message</p>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+         style="margin:0 0 26px;background:#ffffff;border:1px solid #e5e9f0;border-radius:10px;">
+    <tr>
+      <td style="padding:16px 18px;font-size:14px;color:#1f2937;line-height:1.7;white-space:pre-wrap;">{{ ticket.message }}</td>
+    </tr>
+  </table>
+
+  <p style="margin:0;">
+    <a href="{{ admin_url }}"
+       style="display:inline-block;padding:12px 24px;background:#f97316;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;border-radius:8px;box-shadow:0 4px 12px rgba(249,115,22,0.28);letter-spacing:0.01em;">
+      View in admin
+    </a>
+  </p>
+{% endblock %}

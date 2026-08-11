@@ -3,6 +3,7 @@ from django.utils.html import format_html
 from django.http import JsonResponse
 from django.urls import path, reverse
 from django.utils.safestring import mark_safe
+from unfold.admin import ModelAdmin as UnfoldModelAdmin, TabularInline as UnfoldTabularInline
 
 from apps.common.admin import BaseOrgAdmin, FileDisplayMixin, OwnershipDisplayMixin
 
@@ -250,7 +251,7 @@ class TallyConfigAdmin(BaseOrgAdmin):
 # ============================================================================
 # Vendor Bill Related Admin
 # ============================================================================
-class TallyVendorAnalyzedProductInline(admin.TabularInline):
+class TallyVendorAnalyzedProductInline(UnfoldTabularInline):
     """Inline admin for Vendor Analyzed Products."""
     
     model = TallyVendorAnalyzedProduct
@@ -374,7 +375,7 @@ class TallyExpenseBillAdmin(_TallyBillAdminBase):
 # Expense Bill Related Admin
 # ============================================================================
 
-class TallyExpenseAnalyzedProductInline(admin.TabularInline):
+class TallyExpenseAnalyzedProductInline(UnfoldTabularInline):
     """Inline admin for Expense Analyzed Products."""
     
     model = TallyExpenseAnalyzedProduct
@@ -573,7 +574,7 @@ from .models import TallySetupStep
 
 
 @admin.register(TallySetupStep)
-class TallySetupStepAdmin(admin.ModelAdmin):
+class TallySetupStepAdmin(UnfoldModelAdmin):
     """
     Manage the Tally setup walkthrough that appears on the Account Info page.
     """
@@ -639,7 +640,7 @@ from .models import TallyTcpRelease
 
 
 @admin.register(TallyTcpRelease)
-class TallyTcpReleaseAdmin(admin.ModelAdmin):
+class TallyTcpReleaseAdmin(UnfoldModelAdmin):
     """
     Manage Tally TCP releases. Whichever release is marked 'is_active'
     is served to users on the Tally Account Info page.
@@ -734,7 +735,7 @@ class TallyPaymentBillAdmin(_TallyBillAdminBase):
     pass
 
 
-class TallyPaymentAnalyzedProductInline(admin.TabularInline):
+class TallyPaymentAnalyzedProductInline(UnfoldTabularInline):
     model = TallyPaymentAnalyzedProduct
     extra = 0
     fields = ("item_details", "chart_of_accounts", "amount", "debit_or_credit")

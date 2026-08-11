@@ -35,6 +35,11 @@ ZOHO_REDIRECT_URL = env("ZOHO_REDIRECT_URL", default="")
 # Applications
 # ------------------------------------------------------------
 DJANGO_APPS = [
+    "unfold",
+    "unfold.contrib.filters",
+    "unfold.contrib.forms",
+    "unfold.contrib.inlines",
+    "unfold.contrib.import_export",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -62,6 +67,7 @@ LOCAL_APPS = [
     "apps.organizations",
     "apps.subscriptions",
     "apps.dashboard",
+    "apps.support",
     "apps.api",  # your API router package
 ]
 
@@ -73,6 +79,77 @@ INTEGRATION_MODULES = [
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS + INTEGRATION_MODULES
 
 SITE_ID = 1
+
+# ------------------------------------------------------------
+# django-unfold admin theme
+# ------------------------------------------------------------
+UNFOLD = {
+    "SITE_TITLE": "Bill Munshi Admin",
+    "SITE_HEADER": "Bill Munshi",
+    "SITE_URL": "/",
+    "SITE_ICON": None,
+    "SHOW_HISTORY": True,
+    "SHOW_VIEW_ON_SITE": True,
+    "THEME": None,  # let user toggle
+    "COLORS": {
+        "primary": {
+            "50": "255 247 237",
+            "100": "255 237 213",
+            "200": "254 215 170",
+            "300": "253 186 116",
+            "400": "251 146 60",
+            "500": "249 115 22",
+            "600": "234 88 12",
+            "700": "194 65 12",
+            "800": "154 52 18",
+            "900": "124 45 18",
+            "950": "67 20 7",
+        },
+    },
+    "SIDEBAR": {
+        "show_search": True,
+        "show_all_applications": True,
+        "navigation": [
+            {
+                "title": "Users & Access",
+                "items": [
+                    {"title": "Users", "icon": "person", "link": "/admin/users/user/"},
+                    {"title": "Organizations", "icon": "domain", "link": "/admin/organizations/organization/"},
+                ],
+            },
+            {
+                "title": "Tally",
+                "items": [
+                    {"title": "Tally config", "icon": "settings", "link": "/admin/tally/tallyconfig/"},
+                    {"title": "Purchase vouchers", "icon": "receipt", "link": "/admin/tally/tallyvendorbill/"},
+                    {"title": "Journal entries", "icon": "book", "link": "/admin/tally/tallyexpensebill/"},
+                    {"title": "Payment vouchers", "icon": "payments", "link": "/admin/tally/tallypaymentbill/"},
+                    {"title": "Ledgers", "icon": "list", "link": "/admin/tally/ledger/"},
+                ],
+            },
+            {
+                "title": "Zoho",
+                "items": [
+                    {"title": "Vendor bills", "icon": "receipt", "link": "/admin/zoho/zohovendorbill/"},
+                    {"title": "Expense bills", "icon": "book", "link": "/admin/zoho/zohoexpensebill/"},
+                ],
+            },
+            {
+                "title": "Support",
+                "items": [
+                    {"title": "Tickets", "icon": "help", "link": "/admin/support/supportticket/"},
+                    {"title": "Recipients", "icon": "email", "link": "/admin/support/supportticketrecipient/"},
+                ],
+            },
+            {
+                "title": "Ops",
+                "items": [
+                    {"title": "Background jobs", "icon": "settings_backup_restore", "link": "/admin/rq/"},
+                ],
+            },
+        ],
+    },
+}
 
 # ------------------------------------------------------------
 # Middleware
@@ -253,6 +330,9 @@ SERVER_EMAIL = env("SERVER_EMAIL", default=DEFAULT_FROM_EMAIL)
 # Frontend base URL — links in emails (reset password, verify email)
 # resolve against this. MUST be set in production.
 FRONTEND_URL = env("FRONTEND_URL", default="https://billmunshi.com")
+# Public-facing base URL — used in emails/narrations that need a link
+# back into the app (bill viewer, admin ticket detail, etc.).
+SITE_URL = env("SITE_URL", default=FRONTEND_URL)
 
 # ------------------------------------------------------------
 # Cache / Redis (for rate limiting, general cache)

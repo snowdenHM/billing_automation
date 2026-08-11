@@ -84,9 +84,18 @@ def find_pending_masters(analyzed_bill) -> list[dict]:
 
     pending: list[dict] = []
     seen_ids: set[str] = set()
+    # Track every referenced ledger — pending or not — so the parent
+    # walk below can inspect all of them, not just those already pending.
+    # Previous behaviour missed a Tally-synced child whose parent was
+    # still BM-pending, so sync fired XML Tally rejected with
+    # "Parent not found".
+    referenced: list[tuple[object, str]] = []
 
     def _push(ledger, role):
-        if not ledger or str(ledger.id) in seen_ids:
+        if not ledger:
+            return
+        referenced.append((ledger, role))
+        if str(ledger.id) in seen_ids:
             return
         if _pending(ledger):
             seen_ids.add(str(ledger.id))
@@ -106,24 +115,29 @@ def find_pending_masters(analyzed_bill) -> list[dict]:
         _push(getattr(product, "chart_of_accounts", None), role="product_chart_of_accounts")
         _push(getattr(product, "taxes", None), role="product_taxes")
 
-    # Also include the FK's parent ledger if it's itself BM-created —
-    # Tally must create the parent before the child.
-    for entry in list(pending):
+    # Walk every referenced ledger's parent — a child can be Tally-synced
+    # while its parent is still BM-pending.
+    for ledger, role in referenced:
         try:
-            ledger = Ledger.objects.get(id=entry["id"])
-            parent = ledger.parent
-            if parent and getattr(parent, "source", None) == "billmunshi" and not parent.tally_synced:
-                key = f"parent-{parent.id}"
-                if key not in seen_ids:
-                    seen_ids.add(key)
-                    pending.append({
-                        "type": "parent_ledger",
-                        "id": str(parent.id),
-                        "name": parent.parent,
-                        "role": "parent_of_" + entry["role"],
-                        "message": parent.tally_sync_message or "Waiting for Tally to create this parent group.",
-                    })
-        except Ledger.DoesNotExist:
+            parent = getattr(ledger, "parent", None)
+            if not parent:
+                continue
+            if getattr(parent, "source", None) != "billmunshi":
+                continue
+            if getattr(parent, "tally_synced", True):
+                continue
+            key = f"parent-{parent.id}"
+            if key in seen_ids:
+                continue
+            seen_ids.add(key)
+            pending.append({
+                "type": "parent_ledger",
+                "id": str(parent.id),
+                "name": parent.parent,
+                "role": "parent_of_" + role,
+                "message": parent.tally_sync_message or "Waiting for Tally to create this parent group.",
+            })
+        except Exception:
             continue
 
     return pending

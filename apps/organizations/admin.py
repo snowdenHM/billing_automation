@@ -1,10 +1,11 @@
 from django.contrib import admin
 from django.utils.html import format_html
+from unfold.admin import ModelAdmin as UnfoldModelAdmin
 from .models import Organization, OrgMembership, OrganizationAPIKey, Module, OrganizationModule
 
 
 @admin.register(Organization)
-class OrganizationAdmin(admin.ModelAdmin):
+class OrganizationAdmin(UnfoldModelAdmin):
     """Admin interface for Organization model."""
     
     list_display = ("id", "name", "slug", "gst_number", "status", "owner", "created_by", "created_at")
@@ -30,7 +31,7 @@ class OrganizationAdmin(admin.ModelAdmin):
 
 
 @admin.register(OrgMembership)
-class OrgMembershipAdmin(admin.ModelAdmin):
+class OrgMembershipAdmin(UnfoldModelAdmin):
     """Admin interface for Organization Membership."""
     
     list_display = ("id", "organization", "user", "role", "is_active", "created_at")
@@ -53,7 +54,7 @@ class OrgMembershipAdmin(admin.ModelAdmin):
 
 
 @admin.register(OrganizationAPIKey)
-class OrganizationAPIKeyAdmin(admin.ModelAdmin):
+class OrganizationAPIKeyAdmin(UnfoldModelAdmin):
     """Admin interface for Organization API Keys."""
     
     list_display = ("id", "organization", "name", "api_key_prefix", "created_by", "created_at")
@@ -86,7 +87,7 @@ class OrganizationAPIKeyAdmin(admin.ModelAdmin):
 
 
 @admin.register(Module)
-class ModuleAdmin(admin.ModelAdmin):
+class ModuleAdmin(UnfoldModelAdmin):
     """Admin interface for Module model."""
     
     list_display = ("id", "code", "name", "created_at")
@@ -109,7 +110,7 @@ class ModuleAdmin(admin.ModelAdmin):
     
 
 @admin.register(OrganizationModule)
-class OrganizationModuleAdmin(admin.ModelAdmin):
+class OrganizationModuleAdmin(UnfoldModelAdmin):
     """Admin interface for Organization Module assignments."""
     
     list_display = ("id", "organization", "module", "is_active", "created_at")

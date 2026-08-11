@@ -341,12 +341,35 @@ def process_analysis_data(bill, json_data, organization):
             
             if isinstance(items, list):
                 logger.warning(f"🔄 Processing {len(items)} items for product creation...")
+                # Precompute Σ(line.amount) — used as the taxable base for
+                # proportional GST distribution. Prior code used
+                # `total - (igst+cgst+sgst)`, which broke on bills whose
+                # `total` included freight/round-off; a single freight-heavy
+                # line then inherited all GST.
+                _line_amount_sum = 0.0
+                for _it in items:
+                    if isinstance(_it, dict):
+                        _p = safe_float_convert(_it.get('price', 0))
+                        _q = safe_float_convert(_it.get('quantity', 0))
+                        _line_amount_sum += _p * _q
                 for idx, item in enumerate(items, 1):
                     if isinstance(item, dict):
-                        # Handle decimal precision for product amounts
+                        # Handle decimal precision for product amounts.
+                        # The DB field is PositiveIntegerField so quantity
+                        # itself must be an int; use a float when computing
+                        # the line amount so a fractional OCR quantity
+                        # ("1.5 kg") doesn't silently vanish from the total.
                         price_val = safe_float_convert(item.get('price', 0))
+                        quantity_float = safe_float_convert(item.get('quantity', 0))
                         quantity_val = safe_int_convert(item.get('quantity', 0))
-                        amount_val = price_val * quantity_val
+                        if quantity_float and abs(quantity_float - quantity_val) > 0.001:
+                            logger.warning(
+                                "Fractional quantity %s truncated to %d for item %r — "
+                                "line amount preserved via price*float(qty).",
+                                quantity_float, quantity_val,
+                                item.get('description', 'unknown'),
+                            )
+                        amount_val = price_val * quantity_float
 
                         # Round to 2 decimal places
                         price_rounded = Decimal(str(price_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
@@ -356,8 +379,11 @@ def process_analysis_data(bill, json_data, organization):
                         logger.warning(f"📋 Item {idx}: '{item.get('description', 'No description')}' - Price: {price_val}, Qty: {quantity_val}, Amount: {amount_val}")
 
                         # 🧮 CALCULATE PROPORTIONAL GST FOR THIS ITEM
-                        # Calculate this item's share of total GST based on its amount
-                        total_taxable_amount = total_val - (igst_val + cgst_val + sgst_val)
+                        # Base = Σ(line.amount) — using `total - taxes`
+                        # broke on bills whose total included freight/
+                        # round-off, so a freight-heavy single line
+                        # absorbed all GST.
+                        total_taxable_amount = _line_amount_sum
                         if total_taxable_amount > 0 and amount_val > 0:
                             # Proportional GST calculation
                             item_proportion = amount_val / total_taxable_amount
@@ -1209,13 +1235,29 @@ def vendor_bill_verify(request, org_id):
         breaches = {k: float(v) for k, v in diffs.items() if v >= TOL}
         if breaches:
             logger.warning(
-                "Tax reconciliation drift on bill %s (>= ₹%s) — verifying anyway. "
-                "diffs=%s line_totals={cgst:%s, sgst:%s, igst:%s} "
+                "Tax reconciliation drift on bill %s (>= ₹%s) — clamping bill-level "
+                "taxes to Σ(line). diffs=%s line_totals={cgst:%s, sgst:%s, igst:%s} "
                 "bill_totals={cgst:%s, sgst:%s, igst:%s}",
                 verified_bill.id, TOL, breaches,
                 line_cgst, line_sgst, line_igst,
                 bill_cgst, bill_sgst, bill_igst,
             )
+            # Clamp bill-level taxes to the line-sum so the sync payload is
+            # self-consistent — otherwise the Tally XML's ledger totals
+            # won't tie back to <total_amount> and Tally rejects it.
+            # Only clamp axes that actually breach; leave clean ones alone.
+            clamp_fields = []
+            if 'cgst' in breaches:
+                verified_bill.cgst = line_cgst
+                clamp_fields.append('cgst')
+            if 'sgst' in breaches:
+                verified_bill.sgst = line_sgst
+                clamp_fields.append('sgst')
+            if 'igst' in breaches:
+                verified_bill.igst = line_igst
+                clamp_fields.append('igst')
+            if clamp_fields:
+                verified_bill.save(update_fields=clamp_fields)
 
         # Recompute round-off after products & tax fields are persisted so the
         # XML sync payload can carry an accurate Round Off entry.
@@ -1337,7 +1379,12 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                 vendor_name = vendor_data.get('vendor_name')
                 if vendor_name:
                     current_vendor = analyzed_bill.vendor
-                    if not current_vendor or current_vendor.name != vendor_name.strip():
+                    # Case- and whitespace-insensitive compare — a differently-cased
+                    # or whitespace-padded name from the FE previously triggered a
+                    # find-or-create round-trip that duplicated the vendor ledger.
+                    current_name_norm = (current_vendor.name or "").strip().lower() if current_vendor else ""
+                    submitted_name_norm = vendor_name.strip().lower()
+                    if not current_vendor or current_name_norm != submitted_name_norm:
                         vendor = find_or_create_vendor_ledger(vendor_name, vendor_data, organization)
                         if vendor:
                             analyzed_bill.vendor = vendor
@@ -1359,10 +1406,16 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
             if bill_date:
                 analyzed_bill.bill_date = bill_date
         if 'due_date' in analyzed_data:
-            # Parse due date string (format: "08-03-2021")
-            due_date = parse_bill_date(analyzed_data['due_date'])
-            if due_date:
-                analyzed_bill.due_date = due_date
+            # Parse due date string (format: "08-03-2021" or ISO "YYYY-MM-DD").
+            # An empty string / null is an explicit clear from the FE — before,
+            # the field could never be unset once set.
+            raw_due = analyzed_data['due_date']
+            if raw_due in (None, ''):
+                analyzed_bill.due_date = None
+            else:
+                due_date = parse_bill_date(raw_due)
+                if due_date:
+                    analyzed_bill.due_date = due_date
         if 'total_amount' in analyzed_data:
             analyzed_bill.total = _money(analyzed_data['total_amount'])
 
@@ -1386,24 +1439,55 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                 if not isinstance(block, dict):
                     continue
                 if 'amount' in block:
-                    amt = _money(block['amount'])
-                    setattr(analyzed_bill, amount_field, amt)
-                    if amt == 0:
-                        # Amount cleared — drop the FK so the sync XML
-                        # doesn't emit a ghost ledger row.
-                        setattr(analyzed_bill, ledger_field, None)
-                        continue
-                resolved = _resolve_tax_ledger(block, tax_type)
-                if resolved:
-                    setattr(analyzed_bill, ledger_field, resolved)
+                    setattr(analyzed_bill, amount_field, _money(block['amount']))
+                # Resolve the ledger for every block (not only rows with a
+                # non-zero amount). A user can change the picked ledger
+                # while leaving the amount at 0 during editing; the FK
+                # still needs to update so a subsequent amount edit uses
+                # the new pick.
+                if 'ledger' in block or 'ledger_id' in block:
+                    resolved = _resolve_tax_ledger(block, tax_type)
+                    if resolved is not None:
+                        setattr(analyzed_bill, ledger_field, resolved)
+                # Final-state rule: if the resulting amount is 0/empty,
+                # drop the FK — the sync XML must not emit a ghost ledger
+                # row. This runs after resolve so an explicit clear
+                # (amount=0 + ledger_id=X) still wipes the FK.
+                final_amt = getattr(analyzed_bill, amount_field, None)
+                if not final_amt or final_amt == 0:
+                    setattr(analyzed_bill, ledger_field, None)
 
-        # Determine GST type based on updated amounts
-        if analyzed_bill.igst and analyzed_bill.igst > 0:
+        # Determine GST type — bill-level fields first, then per-line sum
+        # as a fallback. A mixed-rate bill can zero-out its bill-level
+        # summary (the source of truth is per-line) but still carry real
+        # tax on the lines; without this fallback, gst_type flips to
+        # UNKNOWN and calculate_product_gst then zeros every line.
+        _bill_igst = analyzed_bill.igst or 0
+        _bill_cgst = analyzed_bill.cgst or 0
+        _bill_sgst = analyzed_bill.sgst or 0
+        if _bill_igst > 0:
             analyzed_bill.gst_type = TallyVendorAnalyzedBill.GSTType.IGST
-        elif (analyzed_bill.cgst and analyzed_bill.cgst > 0) or (analyzed_bill.sgst and analyzed_bill.sgst > 0):
+        elif _bill_cgst > 0 or _bill_sgst > 0:
             analyzed_bill.gst_type = TallyVendorAnalyzedBill.GSTType.CGST_SGST
         else:
-            analyzed_bill.gst_type = TallyVendorAnalyzedBill.GSTType.UNKNOWN
+            try:
+                _line_igst = sum(
+                    (p.igst or Decimal('0')) for p in analyzed_bill.products.all()
+                )
+                _line_cgst = sum(
+                    (p.cgst or Decimal('0')) for p in analyzed_bill.products.all()
+                )
+                _line_sgst = sum(
+                    (p.sgst or Decimal('0')) for p in analyzed_bill.products.all()
+                )
+            except Exception:
+                _line_igst = _line_cgst = _line_sgst = Decimal('0')
+            if _line_igst > 0:
+                analyzed_bill.gst_type = TallyVendorAnalyzedBill.GSTType.IGST
+            elif _line_cgst > 0 or _line_sgst > 0:
+                analyzed_bill.gst_type = TallyVendorAnalyzedBill.GSTType.CGST_SGST
+            else:
+                analyzed_bill.gst_type = TallyVendorAnalyzedBill.GSTType.UNKNOWN
 
         # Save the analyzed bill
         # Persist optional note field if provided
@@ -1814,10 +1898,31 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
     # In consolidate mode we ALSO rebuild the ``consolidated_products``
     # aggregation from the fresh product set so the aggregation table
     # reflects the current line-item state.
-    products_to_delete = [
-        product for existing_id, product in existing.items()
-        if existing_id not in updated_ids
-    ]
+    # Safety guard: in consolidate mode the FE may temporarily hold the
+    # consolidated (aggregated) rows in `products` state. Saving in that
+    # state used to wipe every real individual product because none of
+    # the consolidated fake-ids matched. Rule: if consolidate=True AND
+    # not a single incoming id matches an existing individual product,
+    # treat the payload as coming from the consolidated view and skip
+    # the individual-product delete pass.
+    is_consolidate_view_only = (
+        getattr(analyzed_bill, 'consolidate', False)
+        and existing
+        and not (updated_ids & set(existing.keys()))
+    )
+    if is_consolidate_view_only:
+        logger.info(
+            "Skipping individual-product delete on bill %s — payload appears "
+            "to be from the consolidated view (no incoming id matches an "
+            "existing product).",
+            analyzed_bill.id,
+        )
+        products_to_delete = []
+    else:
+        products_to_delete = [
+            product for existing_id, product in existing.items()
+            if existing_id not in updated_ids
+        ]
     if products_to_delete:
         for product in products_to_delete:
             logger.info(f"Deleting product {product.id}: {product.item_name or 'Unknown'}")
@@ -2055,6 +2160,16 @@ def vendor_bill_sync(request, org_id):
             'current_status': bill.status,
             'required_status': 'Verified',
             'error_code': 'BILL_NOT_VERIFIED'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    # Sync XML falls back to "Unknown Vendor" when vendor is null —
+    # posting that would create a ledger literally named "Unknown Vendor"
+    # in Tally. Block the sync until the operator picks or creates a vendor.
+    if analyzed_bill.vendor is None:
+        return Response({
+            'error': 'Vendor Not Selected',
+            'message': 'This bill has no vendor picked. Select an existing vendor or create a new one before syncing to Tally.',
+            'error_code': 'VENDOR_MISSING',
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     # Master-sync check is now ADVISORY, not a hard block.
@@ -2410,7 +2525,10 @@ def prepare_sync_data(analyzed_bill, organization):
     company_name = organization.name if hasattr(organization, 'name') else str(organization.id)
 
     vendor_name = vendor_ledger.name if vendor_ledger and vendor_ledger.name else "Unknown Vendor"
-    bill_url = f"https://billmunshi.com/tally/vendor-bill/{analyzed_bill.selected_bill.id}"
+    # Base URL is configurable so staging/self-hosted deployments
+    # don't leak the production domain into Tally narration.
+    _base = getattr(settings, "SITE_URL", "https://billmunshi.com").rstrip("/")
+    bill_url = f"{_base}/tally/vendor-bill/{analyzed_bill.selected_bill.id}"
     notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
 
     Q2 = Decimal('0.01')

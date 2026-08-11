@@ -7,12 +7,19 @@ from django.contrib import messages
 from django.http import HttpResponseRedirect
 from django.urls import path
 
+from unfold.admin import ModelAdmin as UnfoldModelAdmin
+from unfold.forms import AdminPasswordChangeForm, UserChangeForm, UserCreationForm
+
 User = get_user_model()
 
 
 @admin.register(User)
-class UserAdmin(BaseUserAdmin):
+class UserAdmin(BaseUserAdmin, UnfoldModelAdmin):
     """Enhanced admin interface for the custom User model."""
+
+    form = UserChangeForm
+    add_form = UserCreationForm
+    change_password_form = AdminPasswordChangeForm
 
     list_display = ("id", "email", "first_name", "last_name", "is_active", "is_staff", "is_superuser", "date_joined")
     search_fields = ("email", "first_name", "last_name")

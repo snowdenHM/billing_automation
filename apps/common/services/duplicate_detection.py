@@ -137,7 +137,12 @@ def check_duplicate_bill(bill, organization, bill_model, analysed_statuses=None)
                     similarity_score += 25.0 * vendor_sim
                     match_reasons.append("vendor_name_match")
 
-            # Total amount match (20 pts exact / 10 pts close)
+            # Total amount match (20 pts exact / 10 pts close / -20 pts conflict).
+            # A conflicting amount is strong evidence the two bills are
+            # NOT the same — even if invoice numbers coincidentally match
+            # (annual counter reset, OCR misread). Penalising here prevents
+            # a false-positive "duplicate" flag from triggering on same
+            # vendor + same invoice number + different amount.
             if current_total and other_total:
                 try:
                     cur_amt = float(current_total)
@@ -145,16 +150,23 @@ def check_duplicate_bill(bill, organization, bill_model, analysed_statuses=None)
                     if abs(cur_amt - oth_amt) < 0.01:
                         similarity_score += 20.0
                         match_reasons.append("exact_amount")
-                    elif abs(cur_amt - oth_amt) / max(cur_amt, oth_amt) < 0.05:
+                    elif max(cur_amt, oth_amt) > 0 and abs(cur_amt - oth_amt) / max(cur_amt, oth_amt) < 0.05:
                         similarity_score += 10.0
                         match_reasons.append("similar_amount")
+                    else:
+                        similarity_score -= 20.0
+                        match_reasons.append("conflicting_amount")
                 except (ValueError, TypeError):
                     pass
 
-            # Date match (15 pts)
-            if current_date and other_date and current_date == other_date:
-                similarity_score += 15.0
-                match_reasons.append("same_date")
+            # Date match (15 pts / -10 pts conflict).
+            if current_date and other_date:
+                if current_date == other_date:
+                    similarity_score += 15.0
+                    match_reasons.append("same_date")
+                else:
+                    similarity_score -= 10.0
+                    match_reasons.append("conflicting_date")
 
             if similarity_score >= 60.0:
                 duplicate_bills.append({

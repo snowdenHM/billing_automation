@@ -8,5 +8,6 @@ urlpatterns = [
     path("zoho/", include("apps.module.zoho.urls")),
     path("tally/", include("apps.module.tally.urls")),
     path("", include("apps.dashboard.urls", namespace="dashboard")),
+    path("support/", include("apps.support.urls")),
 
 ]

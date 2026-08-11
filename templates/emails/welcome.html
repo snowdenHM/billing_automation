@@ -1,44 +1,49 @@
 {% extends "emails/base.html" %}
 {% block subject %}Welcome to Bill Munshi{% endblock %}
-{% block heading %}Welcome aboard, {{ display_name }} 👋{% endblock %}
+{% block preheader %}Your Bill Munshi account is ready. Here&rsquo;s how to get started.{% endblock %}
+{% block heading %}Welcome, {{ display_name }}{% endblock %}
 {% block content %}
   <p style="margin:0 0 14px;">
-    We&rsquo;re thrilled to have you at
-    <strong style="color:#0f172a;">Bill Munshi</strong> — the fastest way to
-    scan, understand and sync bills into Tally &amp; Zoho.
+    Your <strong style="color:#0b1220;">Bill Munshi</strong> account is ready —
+    scan bills, verify once, post straight to Tally and Zoho Books.
   </p>
 
-  <p style="margin:0 0 20px;">
-    Your account has been created with
-    <span style="display:inline-block;padding:2px 8px;background:#f1f5f9;border-radius:6px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:13px;color:#0f172a;">{{ user.email }}</span>.
+  <p style="margin:0 0 22px;">
+    Signed in as
+    <span style="display:inline-block;padding:2px 8px;background:#f1f5f9;border-radius:6px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:13px;color:#0b1220;">{{ user.email }}</span>.
   </p>
 
   {% if verify_url %}
-  <p style="margin:0 0 20px;">
-    Please confirm your email address so we can keep your account secure:
+  <p style="margin:0 0 12px;">
+    Please confirm your email so we can keep your account secure:
   </p>
 
-  <p style="margin:0 0 28px;text-align:center;">
+  <p style="margin:0 0 26px;">
     <a href="{{ verify_url }}"
-       style="display:inline-block;padding:14px 28px;background:#f97316;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;border-radius:10px;box-shadow:0 6px 18px rgba(249,115,22,0.35);letter-spacing:0.02em;">
+       style="display:inline-block;padding:12px 24px;background:#f97316;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;border-radius:8px;box-shadow:0 4px 12px rgba(249,115,22,0.28);letter-spacing:0.01em;">
       Verify my email
     </a>
   </p>
 
-  <p style="margin:0 0 16px;font-size:13px;color:#64748b;">
-    Or paste this link into your browser:<br />
-    <a href="{{ verify_url }}" style="color:#f97316;word-break:break-all;">{{ verify_url }}</a>
+  <p style="margin:0 0 18px;font-size:13px;color:#64748b;">
+    Or copy this link into your browser:<br />
+    <a href="{{ verify_url }}" style="color:#f97316;word-break:break-all;text-decoration:none;">{{ verify_url }}</a>
   </p>
   {% endif %}
 
-  <div style="margin:24px 0 0;padding:16px 18px;background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;">
-    <p style="margin:0 0 6px;font-weight:700;color:#9a3412;font-size:13px;text-transform:uppercase;letter-spacing:0.08em;">
-      What&rsquo;s next
-    </p>
-    <ul style="margin:0;padding-left:20px;color:#7c2d12;font-size:14px;line-height:1.7;">
-      <li>Snap a photo or drop a PDF &mdash; we auto-enhance it for OCR.</li>
-      <li>We extract vendor, GST, amounts &amp; line items in seconds.</li>
-      <li>Verify once, then sync straight into Tally or Zoho Books.</li>
-    </ul>
-  </div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+         style="margin:20px 0 0;background:#f8fafc;border:1px solid #e5e9f0;border-radius:10px;">
+    <tr>
+      <td style="padding:16px 18px;font-size:13px;color:#334155;line-height:1.7;">
+        <strong style="display:block;margin-bottom:8px;color:#0b1220;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;">
+          Get started in three steps
+        </strong>
+        <ol style="margin:0;padding-left:20px;">
+          <li>Upload a photo or PDF — we auto-enhance it for OCR.</li>
+          <li>We extract vendor, GST, amounts and line items in seconds.</li>
+          <li>Verify once and sync directly into Tally or Zoho Books.</li>
+        </ol>
+      </td>
+    </tr>
+  </table>
 {% endblock %}

@@ -1,10 +1,11 @@
 from django.contrib import admin
 from django.utils.html import format_html
+from unfold.admin import ModelAdmin as UnfoldModelAdmin
 from .models import Plan, Subscription
 
 
 @admin.register(Plan)
-class PlanAdmin(admin.ModelAdmin):
+class PlanAdmin(UnfoldModelAdmin):
     """Admin interface for Subscription Plans."""
     
     list_display = ("id", "code", "name", "max_users", "billing_cycle", "price_display", "is_active", "created_at")
@@ -37,7 +38,7 @@ class PlanAdmin(admin.ModelAdmin):
 
 
 @admin.register(Subscription)
-class SubscriptionAdmin(admin.ModelAdmin):
+class SubscriptionAdmin(UnfoldModelAdmin):
     """Admin interface for Organization Subscriptions."""
     
     list_display = ("id", "organization", "plan", "status", "starts_at", "ends_at", "assigned_by", "created_at")

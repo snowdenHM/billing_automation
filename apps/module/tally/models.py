@@ -284,6 +284,30 @@ class TallyConfig(BaseOrgModel):
         help_text="Parent ledgers (typically 'Indirect Expenses') used to source the Round Off ledger.",
         db_table='tally_config_round_off_parents'
     )
+    cess_parents = models.ManyToManyField(
+        'ParentLedger',
+        blank=True,
+        related_name="cess_tally_configs",
+        verbose_name="Cess Parent Ledgers",
+        help_text="Parent ledgers (typically 'Indirect Expenses') used to source the Cess ledger.",
+        db_table='tally_config_cess_parents'
+    )
+    discount_parents = models.ManyToManyField(
+        'ParentLedger',
+        blank=True,
+        related_name="discount_tally_configs",
+        verbose_name="Discount Parent Ledgers",
+        help_text="Parent ledgers (typically 'Indirect Expenses') used to source the Discount ledger.",
+        db_table='tally_config_discount_parents'
+    )
+    freight_parents = models.ManyToManyField(
+        'ParentLedger',
+        blank=True,
+        related_name="freight_tally_configs",
+        verbose_name="Freight Charges Parent Ledgers",
+        help_text="Parent ledgers (typically 'Indirect Expenses') used to source the Freight Charges ledger.",
+        db_table='tally_config_freight_parents'
+    )
 
     class Meta:
         verbose_name = "Tally Configuration"
@@ -1377,6 +1401,18 @@ class TallyPaymentAnalyzedBill(BaseOrgModel):
     )
     vendor_amount = models.DecimalField(
         max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"),
+    )
+
+    # Client Correction 26: the "Vendor" slot above is now a plain vendor
+    # ledger picker used for identification only — it is deliberately
+    # NOT posted to the sync XML (no name/GST leak into <vendor>). The
+    # actual Bank/Cash ledger the payment is made *through* lives here,
+    # populated from a dropdown scoped to ``TallyConfig.payment_parents``.
+    # It is required for verify + sync and is emitted as the DEBIT entry
+    # in ``prepare_payment_sync_data`` — see payment_bills.py.
+    payment_mode = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="payment_mode_tally_payment_analysed_bills",
     )
 
     voucher = models.CharField(max_length=255, blank=True, null=True)

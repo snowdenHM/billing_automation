@@ -1,0 +1,47 @@
+{% extends "emails/base.html" %}
+{% block subject %}New reply on: {{ ticket.subject }}{% endblock %}
+{% block preheader %}New reply on support ticket: {{ ticket.subject }}{% endblock %}
+{% block heading %}New Reply on Your Support Ticket{% endblock %}
+{% block content %}
+  <p style="margin:0 0 18px;">
+    There&rsquo;s a new reply on the support ticket
+    <strong style="color:#0b1220;">&ldquo;{{ ticket.subject }}&rdquo;</strong>.
+  </p>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+         style="margin:0 0 22px;background:#f8fafc;border:1px solid #e5e9f0;border-radius:10px;">
+    <tr>
+      <td style="padding:16px 18px;font-size:13px;color:#334155;line-height:1.9;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td style="padding:4px 0;width:120px;color:#64748b;font-weight:600;vertical-align:top;">Ticket</td>
+            <td style="padding:4px 0;color:#0b1220;">{{ ticket.subject }}</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 0;color:#64748b;font-weight:600;vertical-align:top;">Status</td>
+            <td style="padding:4px 0;color:#0b1220;">{{ ticket.get_status_display }}</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 0;color:#64748b;font-weight:600;vertical-align:top;">From</td>
+            <td style="padding:4px 0;color:#0b1220;">{% if message.author_user %}{{ message.author_user.email }}{% else %}{{ message.author_email }}{% endif %}</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+
+  <p style="margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">Reply</p>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+         style="margin:0 0 26px;background:#ffffff;border:1px solid #e5e9f0;border-radius:10px;">
+    <tr>
+      <td style="padding:16px 18px;font-size:14px;color:#1f2937;line-height:1.7;white-space:pre-wrap;">{{ message.body }}</td>
+    </tr>
+  </table>
+
+  <p style="margin:0;">
+    <a href="{{ admin_url }}"
+       style="display:inline-block;padding:12px 24px;background:#f97316;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;border-radius:8px;box-shadow:0 4px 12px rgba(249,115,22,0.28);letter-spacing:0.01em;">
+      View in admin
+    </a>
+  </p>
+{% endblock %}

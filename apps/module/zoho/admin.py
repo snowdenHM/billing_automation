@@ -3,6 +3,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
+from unfold.admin import TabularInline as UnfoldTabularInline
 
 from apps.common.admin import BaseOrgAdmin, FKLinkMixin, admin_change_url
 
@@ -124,7 +125,7 @@ class ZohoTDSTCSAdmin(BaseOrgAdmin):
 # Journal Bills & Products
 # -----------------------------
 
-class JournalZohoProductInline(admin.TabularInline):
+class JournalZohoProductInline(UnfoldTabularInline):
     """Inline admin for Journal Zoho Products."""
     
     model = JournalZohoProduct
@@ -204,7 +205,7 @@ class JournalZohoBillAdmin(BaseOrgAdmin):
 # Vendor Bills & Products
 # -----------------------------
 
-class VendorZohoProductInline(admin.TabularInline):
+class VendorZohoProductInline(UnfoldTabularInline):
     """Inline admin for Vendor Zoho Products."""
     
     model = VendorZohoProduct
@@ -341,7 +342,7 @@ class VendorZohoBillAdmin(BaseOrgAdmin):
 # Expense Bills & Products
 # -----------------------------
 
-class ExpenseZohoProductInline(admin.TabularInline):
+class ExpenseZohoProductInline(UnfoldTabularInline):
     """Inline admin for Expense Zoho Products."""
     
     model = ExpenseZohoProduct
