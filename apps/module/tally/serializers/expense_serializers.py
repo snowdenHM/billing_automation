@@ -70,8 +70,28 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
             logger.error(f"Error getting consolidated products for {type(obj)}: {str(e)}")
             return []
 
+    def get_gst_lines_data(self, obj):
+        """Serialise multi-rate GST lines for the FE detail page."""
+        try:
+            return [
+                {
+                    "id": str(line.id),
+                    "rate": line.rate or "",
+                    "tax_type": line.tax_type,
+                    "amount": float(line.amount or 0),
+                    "ledger_id": str(line.ledger_id) if line.ledger_id else None,
+                    "ledger": str(line.ledger_id) if line.ledger_id else None,  # legacy
+                    "ledger_name": line.ledger.name if line.ledger else "",
+                    "debit_or_credit": line.debit_or_credit or "debit",
+                }
+                for line in obj.gst_lines.all()
+            ]
+        except Exception as e:
+            logger.error("Error serialising gst_lines for %s: %s", type(obj), e)
+            return []
+
     def to_representation(self, instance):
-        """Override to include consolidate_prod array like Zoho pattern"""
+        """Override to include consolidate_prod + gst_lines arrays."""
         try:
             data = super().to_representation(instance)
 
@@ -79,12 +99,17 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
             consolidated_data = self.get_consolidate_prod_data(instance)
             data['consolidate_prod'] = consolidated_data
 
+            # Multi-rate GST lines — previously omitted from Meta.fields,
+            # so the FE detail page never saw them on reload.
+            data['gst_lines'] = self.get_gst_lines_data(instance)
+
             return data
         except Exception as e:
             logger.error(f"Error in TallyExpenseAnalyzedBillSerializer.to_representation for {type(instance)}: {str(e)}")
             # Return basic data without consolidated_products if there's an error
             data = super().to_representation(instance)
             data['consolidate_prod'] = []
+            data['gst_lines'] = []
             return data
 
     class Meta:

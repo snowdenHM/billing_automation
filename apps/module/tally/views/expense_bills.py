@@ -330,6 +330,16 @@ def process_expense_analysis_data(bill, json_data, organization):
 
                         logger.info(f"✅ Created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
 
+                        # Flip analyzed_bill.consolidate on since we
+                        # populated the consolidated_products table.
+                        # Without this, next verify treats the rows we
+                        # just created as orphans and deletes them.
+                        analyzed_bill.consolidate = True
+                        analyzed_bill.save(
+                            skip_validation=True,
+                            update_fields=["consolidate"],
+                        )
+
                     except Exception as e:
                         logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")
                 else:
@@ -555,6 +565,16 @@ def expense_bill_analyze(request, org_id):
         # Check for duplicate bills after analysis
         is_duplicate, duplicate_bills, max_similarity = check_duplicate_tally_expense_bill(bill, organization)
 
+        # Persist duplicate metadata (was imported but never called;
+        # duplicate badge on list stayed empty). Mirror of vendor bill fix.
+        try:
+            update_bill_duplicate_metadata(bill, duplicate_bills or [], max_similarity or 0)
+        except Exception as meta_err:
+            logger.warning(
+                "Failed to persist duplicate metadata for expense bill %s: %s",
+                bill.id, meta_err,
+            )
+
         response_data = {
             "detail": "Tally expense bill analyzed successfully",
             "analyzed_bill": TallyExpenseAnalyzedBillSerializer(analyzed_bill).data
@@ -752,6 +772,16 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
 
                         logger.info(f"✅ Created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
 
+                        # Flip analyzed_bill.consolidate on since we
+                        # populated the consolidated_products table.
+                        # Without this, next verify treats the rows we
+                        # just created as orphans and deletes them.
+                        analyzed_bill.consolidate = True
+                        analyzed_bill.save(
+                            skip_validation=True,
+                            update_fields=["consolidate"],
+                        )
+
                     except Exception as e:
                         logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")
                 else:
@@ -905,13 +935,28 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
         raise ValueError(f"Invalid analyzed_bill type: {type(analyzed_bill)}")
 
     with transaction.atomic():
-        # Update vendor information - handle flattened structure
-        vendor_name = analyzed_data.get('name')
-        if vendor_name and vendor_name != "No Ledger":
-            # Try to find existing vendor or create if needed
-            vendor = find_or_create_expense_vendor_ledger(vendor_name, {}, organization)
-            if vendor:
-                analyzed_bill.vendor = vendor
+        # Prefer explicit ``vendor_id`` UUID over name-based fuzzy
+        # match (mirrors vendor_bills.py fix). Name-only lookup could
+        # silently pick the wrong vendor across parent groups.
+        vendor_id = analyzed_data.get('vendor_id') or analyzed_data.get('vendor')
+        if vendor_id:
+            try:
+                from ..models import Ledger as _Ledger
+                analyzed_bill.vendor = _Ledger.objects.get(
+                    id=vendor_id, organization=organization,
+                )
+            except (_Ledger.DoesNotExist, ValueError):
+                logger.warning(
+                    "Expense verify: vendor_id %s not in org %s — name fallback",
+                    vendor_id, organization.id,
+                )
+                vendor_id = None
+        if not vendor_id:
+            vendor_name = analyzed_data.get('name')
+            if vendor_name and vendor_name != "No Ledger":
+                vendor = find_or_create_expense_vendor_ledger(vendor_name, {}, organization)
+                if vendor:
+                    analyzed_bill.vendor = vendor
 
         # Update vendor debit_or_credit if provided
         if 'vendor_debit_or_credit' in analyzed_data:
@@ -939,73 +984,59 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
         if 'total' in analyzed_data:
             analyzed_bill.total = _to_decimal(analyzed_data['total'])
 
-        # Update tax information
+        # Update tax information. All 6 blocks share shape → one loop.
+        # ID-first ledger resolve, case-insensitive blank guard (mirrors
+        # vendor_bills.py). Clears FK on zero amount so stale ledger
+        # doesn't leak into sync XML.
+        from ..models import Ledger as _Ledger
+        _BLANK_LEDGER = {"", "no tax ledger", "no coa ledger", "no purchase ledger", "none", "null"}
+
+        def _resolve_expense_ledger(payload, tax_type):
+            if not isinstance(payload, dict):
+                return None
+            ledger_id = payload.get('ledger_id') or payload.get('id')
+            if ledger_id:
+                try:
+                    return _Ledger.objects.get(id=ledger_id, organization=organization)
+                except (_Ledger.DoesNotExist, ValueError):
+                    logger.warning(
+                        "Expense verify: ledger_id %s not in org %s — name fallback",
+                        ledger_id, organization.id,
+                    )
+            name = (payload.get('ledger') or "").strip()
+            if name and name.lower() not in _BLANK_LEDGER:
+                return find_or_create_expense_tax_ledger(name, tax_type, organization)
+            return None
+
         taxes_data = analyzed_data.get('taxes', {})
         if taxes_data:
-            # Update tax amounts with proper decimal conversion
-            igst_data = taxes_data.get('igst', {})
-            if 'amount' in igst_data:
-                analyzed_bill.igst = _to_decimal(igst_data['amount'])
-            if 'ledger' in igst_data and igst_data['ledger'] != "No Tax Ledger":
-                igst_ledger = find_or_create_expense_tax_ledger(igst_data['ledger'], 'IGST', organization)
-                if igst_ledger:
-                    analyzed_bill.igst_taxes = igst_ledger
-            if 'debit_or_credit' in igst_data:
-                analyzed_bill.igst_debit_or_credit = igst_data['debit_or_credit']
-
-            cgst_data = taxes_data.get('cgst', {})
-            if 'amount' in cgst_data:
-                analyzed_bill.cgst = _to_decimal(cgst_data['amount'])
-            if 'ledger' in cgst_data and cgst_data['ledger'] != "No Tax Ledger":
-                cgst_ledger = find_or_create_expense_tax_ledger(cgst_data['ledger'], 'CGST', organization)
-                if cgst_ledger:
-                    analyzed_bill.cgst_taxes = cgst_ledger
-            if 'debit_or_credit' in cgst_data:
-                analyzed_bill.cgst_debit_or_credit = cgst_data['debit_or_credit']
-
-            sgst_data = taxes_data.get('sgst', {})
-            if 'amount' in sgst_data:
-                analyzed_bill.sgst = _to_decimal(sgst_data['amount'])
-            if 'ledger' in sgst_data and sgst_data['ledger'] != "No Tax Ledger":
-                sgst_ledger = find_or_create_expense_tax_ledger(sgst_data['ledger'], 'SGST', organization)
-                if sgst_ledger:
-                    analyzed_bill.sgst_taxes = sgst_ledger
-            if 'debit_or_credit' in sgst_data:
-                analyzed_bill.sgst_debit_or_credit = sgst_data['debit_or_credit']
-
-            # Handle TDS data
-            tds_data = taxes_data.get('tds', {})
-            if 'amount' in tds_data:
-                analyzed_bill.tds = _to_decimal(tds_data['amount'])
-            if 'ledger' in tds_data and tds_data['ledger'] != "No Tax Ledger":
-                tds_ledger = find_or_create_expense_tax_ledger(tds_data['ledger'], 'TDS', organization)
-                if tds_ledger:
-                    analyzed_bill.tds_taxes = tds_ledger
-            if 'debit_or_credit' in tds_data:
-                analyzed_bill.tds_debit_or_credit = tds_data['debit_or_credit']
-
-            # Handle Other Adjustment data
-            other_adjustment_data = taxes_data.get('other_adjustment', {})
-            if 'amount' in other_adjustment_data:
-                analyzed_bill.other_adjustment = _to_decimal(other_adjustment_data['amount'])
-            if 'ledger' in other_adjustment_data and other_adjustment_data['ledger'] != "No Tax Ledger":
-                other_adj_ledger = find_or_create_expense_tax_ledger(other_adjustment_data['ledger'], 'OTHER', organization)
-                if other_adj_ledger:
-                    analyzed_bill.other_adjustment_taxes = other_adj_ledger
-            if 'debit_or_credit' in other_adjustment_data:
-                analyzed_bill.other_adjustment_debit_or_credit = other_adjustment_data['debit_or_credit']
-
-            # Handle Round Off (mirror of vendor-bill fix — amount was
-            # never persisted on verify, so re-opening a bill lost it).
-            round_off_data = taxes_data.get('round_off', {})
-            if 'amount' in round_off_data:
-                analyzed_bill.round_off = _to_decimal(round_off_data['amount'])
-            if 'ledger' in round_off_data and round_off_data['ledger'] != "No Tax Ledger":
-                round_off_ledger = find_or_create_expense_tax_ledger(round_off_data['ledger'], 'ROUND_OFF', organization)
-                if round_off_ledger:
-                    analyzed_bill.round_off_taxes = round_off_ledger
-            if 'debit_or_credit' in round_off_data:
-                analyzed_bill.round_off_debit_or_credit = round_off_data['debit_or_credit']
+            _EXPENSE_TAX_FIELDS = (
+                ('igst',             'igst',             'igst_taxes',             'igst_debit_or_credit',             'IGST'),
+                ('cgst',             'cgst',             'cgst_taxes',             'cgst_debit_or_credit',             'CGST'),
+                ('sgst',             'sgst',             'sgst_taxes',             'sgst_debit_or_credit',             'SGST'),
+                ('tds',              'tds',              'tds_taxes',              'tds_debit_or_credit',              'TDS'),
+                ('other_adjustment', 'other_adjustment', 'other_adjustment_taxes', 'other_adjustment_debit_or_credit', 'OTHER'),
+                ('round_off',        'round_off',        'round_off_taxes',        'round_off_debit_or_credit',        'ROUND_OFF'),
+            )
+            for payload_key, amt_field, ledger_field, dc_field, tax_type in _EXPENSE_TAX_FIELDS:
+                block = taxes_data.get(payload_key)
+                if not isinstance(block, dict):
+                    continue
+                if 'amount' in block:
+                    amt = _to_decimal(block['amount'])
+                    setattr(analyzed_bill, amt_field, amt)
+                    if amt == 0:
+                        # Drop stale FK so the sync XML doesn't emit
+                        # a ghost ledger row.
+                        setattr(analyzed_bill, ledger_field, None)
+                        if 'debit_or_credit' in block:
+                            setattr(analyzed_bill, dc_field, block['debit_or_credit'])
+                        continue
+                resolved = _resolve_expense_ledger(block, tax_type)
+                if resolved:
+                    setattr(analyzed_bill, ledger_field, resolved)
+                if 'debit_or_credit' in block:
+                    setattr(analyzed_bill, dc_field, block['debit_or_credit'])
 
         # ------------------------------------------------------------------
         # Multi-rate GST lines — replaces the single bill-level CGST/SGST/IGST
@@ -1118,10 +1149,14 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
                     for idx, consolidated_data in enumerate(consolidate_prod_array):
                         logger.info(f"Creating consolidated expense product {idx + 1}: {consolidated_data.get('item_details', 'Unnamed')}")
                         
-                        # Find chart of accounts ledger if specified
+                        # Find chart of accounts ledger if specified.
+                        # Case-insensitive blank-sentinel guard mirrors
+                        # vendor_bills.py — prevents user typing
+                        # "no coa ledger" from creating a bogus ledger.
                         chart_ledger = None
-                        chart_ledger_identifier = consolidated_data.get('chart_of_accounts')
-                        if chart_ledger_identifier and chart_ledger_identifier != "No COA Ledger":
+                        chart_ledger_identifier = (consolidated_data.get('chart_of_accounts') or "").strip() if isinstance(consolidated_data.get('chart_of_accounts'), str) else consolidated_data.get('chart_of_accounts')
+                        _cid_str = str(chart_ledger_identifier or "").strip().lower()
+                        if chart_ledger_identifier and _cid_str not in {"", "no coa ledger", "no tax ledger", "none", "null"}:
                             try:
                                 # Check if it's a UUID (ledger ID)
                                 import uuid
@@ -1323,34 +1358,81 @@ def update_analyzed_expense_products(analyzed_bill, expense_items, organization)
         if 'debit_or_credit' in item_data:
             product.debit_or_credit = item_data['debit_or_credit']
 
-        # Handle chart of accounts ledger
-        if 'chart_of_accounts' in item_data and item_data['chart_of_accounts'] != "No COA Ledger":
-            coa_ledger = find_or_create_expense_tax_ledger(item_data['chart_of_accounts'], 'COA', organization)
-            if coa_ledger:
-                product.chart_of_accounts = coa_ledger
+        # Handle chart of accounts ledger — prefer UUID (from FE
+        # dropdown) over name; case-insensitive blank/sentinel guard
+        # so a stale "No COA Ledger" doesn't create a bogus ledger.
+        coa_id = item_data.get('chart_of_accounts_id') or item_data.get('chart_of_accounts_uuid')
+        if coa_id:
+            try:
+                from ..models import Ledger as _Ledger
+                product.chart_of_accounts = _Ledger.objects.get(
+                    id=coa_id, organization=organization,
+                )
+            except (_Ledger.DoesNotExist, ValueError):
+                logger.warning(
+                    "Expense update_products: chart_of_accounts_id %s not "
+                    "found in org %s — falling back to name.",
+                    coa_id, organization.id,
+                )
+                coa_id = None
+        if not coa_id and 'chart_of_accounts' in item_data:
+            raw = str(item_data.get('chart_of_accounts') or "").strip()
+            if raw and raw.lower() not in {
+                "", "no coa ledger", "no tax ledger", "none", "null",
+            }:
+                # Value might itself be a UUID string (older FE payloads).
+                try:
+                    import uuid as _uuid
+                    _uuid.UUID(raw)
+                    from ..models import Ledger as _Ledger
+                    coa_ledger = _Ledger.objects.filter(
+                        id=raw, organization=organization,
+                    ).first()
+                    if coa_ledger:
+                        product.chart_of_accounts = coa_ledger
+                except (ValueError, TypeError):
+                    coa_ledger = find_or_create_expense_tax_ledger(raw, 'COA', organization)
+                    if coa_ledger:
+                        product.chart_of_accounts = coa_ledger
 
         product.save()
 
-    # ✅ CRITICAL: Only delete expense products if we're NOT in consolidation mode
-    # In consolidation mode, individual products are PRESERVED for layout switching
-    if not getattr(analyzed_bill, 'consolidate', False):
-        products_to_delete = []
-        for existing_id, product in existing_products.items():
-            if existing_id not in updated_product_ids:
-                products_to_delete.append(product)
-        
-        if products_to_delete:
-            deleted_count = len(products_to_delete)
-            for product in products_to_delete:
-                logger.info(f"Deleting expense product {product.id}: {product.item_details or 'Unknown'}")
-                product.delete()
-            logger.info(f"Deleted {deleted_count} expense products not present in frontend payload")
-    else:
-        logger.info("✅ CONSOLIDATION MODE: Individual products PRESERVED for layout switching")
-        logger.info("✅ Users can switch between individual and consolidated layouts")
-    
-    # Calculate deletion count for summary  
-    deletion_count = 0 if getattr(analyzed_bill, 'consolidate', False) else len([existing_id for existing_id in existing_products.keys() if existing_id not in updated_product_ids])
+    # Frontend is source of truth: any existing product whose id isn't
+    # in the incoming list gets deleted in BOTH consolidate and
+    # non-consolidate mode. Previous behaviour preserved stale rows in
+    # consolidate mode — user's line removal would silently come back
+    # on reload. If consolidate is on we ALSO clear the consolidated
+    # aggregation so it doesn't drift.
+    products_to_delete = [
+        product for existing_id, product in existing_products.items()
+        if existing_id not in updated_product_ids
+    ]
+    if products_to_delete:
+        for product in products_to_delete:
+            logger.info(f"Deleting expense product {product.id}: {product.item_details or 'Unknown'}")
+            product.delete()
+        logger.info(
+            "Deleted %d expense products not present in frontend payload (consolidate=%s)",
+            len(products_to_delete), getattr(analyzed_bill, 'consolidate', False),
+        )
+
+    if products_to_delete and getattr(analyzed_bill, 'consolidate', False):
+        try:
+            TallyExpenseConsolidatedProduct.objects.filter(
+                expense_bill=analyzed_bill,
+            ).delete()
+            logger.info(
+                "Cleared consolidated aggregation for expense bill %s — "
+                "will regenerate on next consolidate toggle / verify.",
+                analyzed_bill.id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to clear consolidated aggregation for expense bill %s: %s",
+                analyzed_bill.id, exc,
+            )
+
+    deletion_count = len(products_to_delete)
     
     logger.info(
         f"Expense product update summary: {len(updated_product_ids)} updated, "
@@ -1360,80 +1442,126 @@ def update_analyzed_expense_products(analyzed_bill, expense_items, organization)
 
 
 def get_structured_expense_bill_data(analyzed_bill, organization):
-    """Get structured expense bill data in the same format as detail view"""
+    """Get structured expense bill data in the same format as detail view.
+
+    Response shape mirrors vendor_bills fix: nested ``bill_details``
+    kept for sync consumers, PLUS flat mirror keys the FE reads on
+    verify (``bill_no``/``bill_date``/``due_date``/``total_amount``/
+    ``consolidate``/``consolidate_prod``). Tax and product rows also
+    ship ``ledger_id`` UUIDs so the FE can re-select the exact dropdown
+    option on reload without name-collision guessing.
+    """
     vendor_ledger = analyzed_bill.vendor
     analyzed_bill_products = analyzed_bill.products.all()
     bill_date_str = analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
+    due_date_str = analyzed_bill.due_date.strftime('%d-%m-%Y') if analyzed_bill.due_date else None
     team_slug = organization.name if hasattr(organization, 'name') else str(organization.id)
+
+    consolidated_rows = []
+    try:
+        for cp in analyzed_bill.consolidated_products.all():
+            consolidated_rows.append({
+                "id": str(cp.id),
+                "item_id": str(cp.id),
+                "item_details": cp.item_details,
+                "chart_of_accounts": cp.chart_of_accounts.name if cp.chart_of_accounts else "",
+                "chart_of_accounts_id": str(cp.chart_of_accounts.id) if cp.chart_of_accounts else None,
+                "amount": float(cp.amount or 0),
+                "debit_or_credit": cp.debit_or_credit or "debit",
+                "original_entries_count": cp.original_entries_count or 0,
+            })
+    except Exception:
+        consolidated_rows = []
 
     return {
         "vendor": {
-            "master_id": vendor_ledger.master_id if vendor_ledger and vendor_ledger.master_id else "No Ledger",
-            "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
-            "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
-            "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "No Ledger",
+            "master_id": vendor_ledger.master_id if vendor_ledger and vendor_ledger.master_id else "",
+            "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "",
+            "vendor_name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "",
+            "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "",
+            "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "",
+            "id": str(vendor_ledger.id) if vendor_ledger else None,
         },
         "bill_details": {
             "voucher": analyzed_bill.voucher or "",
             "bill_number": analyzed_bill.bill_no,
             "date": bill_date_str,
-            "due_date": analyzed_bill.due_date.strftime('%d-%m-%Y') if analyzed_bill.due_date else None,
+            "due_date": due_date_str,
             "total_amount": float(analyzed_bill.total or 0),
             "company_id": team_slug,
         },
+        # ---- flat mirror keys the FE reads on verify response ----
+        "bill_no": analyzed_bill.bill_no or "",
+        "bill_date": bill_date_str,
+        "due_date": due_date_str,
+        "total_amount": float(analyzed_bill.total or 0),
+        "consolidate": bool(getattr(analyzed_bill, "consolidate", False)),
+        "consolidate_prod": consolidated_rows,
+        "note": analyzed_bill.note or "",
         "taxes": {
             "igst": {
                 "amount": float(analyzed_bill.igst or 0),
-                "ledger": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "No Tax Ledger",
+                "ledger": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "",
+                "ledger_id": str(analyzed_bill.igst_taxes.id) if analyzed_bill.igst_taxes else None,
                 "debit_or_credit": analyzed_bill.igst_debit_or_credit or "debit",
             },
             "cgst": {
                 "amount": float(analyzed_bill.cgst or 0),
-                "ledger": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "No Tax Ledger",
+                "ledger": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "",
+                "ledger_id": str(analyzed_bill.cgst_taxes.id) if analyzed_bill.cgst_taxes else None,
                 "debit_or_credit": analyzed_bill.cgst_debit_or_credit or "debit",
             },
             "sgst": {
                 "amount": float(analyzed_bill.sgst or 0),
-                "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
+                "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "",
+                "ledger_id": str(analyzed_bill.sgst_taxes.id) if analyzed_bill.sgst_taxes else None,
                 "debit_or_credit": analyzed_bill.sgst_debit_or_credit or "debit",
             },
             "tds": {
                 "amount": float(analyzed_bill.tds or 0),
-                "ledger": str(analyzed_bill.tds_taxes) if analyzed_bill.tds_taxes else "No Tax Ledger",
+                "ledger": str(analyzed_bill.tds_taxes) if analyzed_bill.tds_taxes else "",
+                "ledger_id": str(analyzed_bill.tds_taxes.id) if analyzed_bill.tds_taxes else None,
                 "debit_or_credit": analyzed_bill.tds_debit_or_credit or "debit",
             },
             "other_adjustment": {
                 "amount": float(analyzed_bill.other_adjustment or 0),
-                "ledger": str(analyzed_bill.other_adjustment_taxes) if analyzed_bill.other_adjustment_taxes else "No Tax Ledger",
+                "ledger": str(analyzed_bill.other_adjustment_taxes) if analyzed_bill.other_adjustment_taxes else "",
+                "ledger_id": str(analyzed_bill.other_adjustment_taxes.id) if analyzed_bill.other_adjustment_taxes else None,
                 "debit_or_credit": analyzed_bill.other_adjustment_debit_or_credit or "debit",
             },
             "round_off": {
                 "amount": float(analyzed_bill.round_off or 0),
-                "ledger": str(analyzed_bill.round_off_taxes) if analyzed_bill.round_off_taxes else "No Tax Ledger",
+                "ledger": str(analyzed_bill.round_off_taxes) if analyzed_bill.round_off_taxes else "",
+                "ledger_id": str(analyzed_bill.round_off_taxes.id) if analyzed_bill.round_off_taxes else None,
                 "debit_or_credit": analyzed_bill.round_off_debit_or_credit or "debit",
             }
         },
         "expense_items": [
             {
-                "id": str(item.id),  # Include ID for future updates
+                "id": str(item.id),
+                "item_id": str(item.id),
                 "item_details": item.item_details,
-                "chart_of_accounts": str(item.chart_of_accounts) if item.chart_of_accounts else "No COA Ledger",
+                # Name for display + explicit UUID for dropdown reselect
+                # (was returning stringified ledger which sometimes read
+                # as ``"None"`` — hunted a non-existent ledger).
+                "chart_of_accounts": item.chart_of_accounts.name if item.chart_of_accounts else "",
+                "chart_of_accounts_id": str(item.chart_of_accounts.id) if item.chart_of_accounts else None,
                 "amount": float(item.amount or 0),
                 "debit_or_credit": item.debit_or_credit,
             }
             for item in analyzed_bill_products
         ],
-        # Multi-rate GST lines — the new source of truth (the ``taxes``
-        # block's cgst/sgst/igst entries above are kept for backwards
-        # compat readers, and reflect the sum of these lines).
+        # Multi-rate GST lines. ``ledger_id`` is the UUID for FE
+        # re-select; ``ledger_name`` is the display label.
         "gst_lines": [
             {
                 "id": str(line.id),
                 "rate": line.rate or "",
                 "tax_type": line.tax_type,
                 "amount": float(line.amount or 0),
-                "ledger": str(line.ledger_id) if line.ledger_id else None,
-                "ledger_name": str(line.ledger) if line.ledger else "",
+                "ledger_id": str(line.ledger_id) if line.ledger_id else None,
+                "ledger": str(line.ledger_id) if line.ledger_id else None,  # legacy key
+                "ledger_name": line.ledger.name if line.ledger else "",
                 "debit_or_credit": line.debit_or_credit or "debit",
             }
             for line in analyzed_bill.gst_lines.all()

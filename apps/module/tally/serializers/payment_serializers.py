@@ -68,7 +68,10 @@ class TallyPaymentAnalyzedBillSerializer(serializers.ModelSerializer):
                 "id": str(cp.id),
                 "item_details": cp.item_details,
                 "chart_of_accounts": (
-                    str(cp.chart_of_accounts.name) if cp.chart_of_accounts else "No COA Ledger"
+                    str(cp.chart_of_accounts.name) if cp.chart_of_accounts else ""
+                ),
+                "chart_of_accounts_id": (
+                    str(cp.chart_of_accounts_id) if cp.chart_of_accounts_id else None
                 ),
                 "amount": float(cp.amount or 0),
                 "debit_or_credit": cp.debit_or_credit or "debit",
@@ -83,10 +86,31 @@ class TallyPaymentAnalyzedBillSerializer(serializers.ModelSerializer):
             )
             return []
 
+    def get_gst_lines_data(self, obj):
+        """Serialise multi-rate GST lines for the FE detail page."""
+        try:
+            return [
+                {
+                    "id": str(line.id),
+                    "rate": line.rate or "",
+                    "tax_type": line.tax_type,
+                    "amount": float(line.amount or 0),
+                    "ledger_id": str(line.ledger_id) if line.ledger_id else None,
+                    "ledger": str(line.ledger_id) if line.ledger_id else None,
+                    "ledger_name": line.ledger.name if line.ledger else "",
+                    "debit_or_credit": line.debit_or_credit or "debit",
+                }
+                for line in obj.gst_lines.all()
+            ]
+        except Exception as e:
+            logger.error("Error serialising payment gst_lines for %s: %s", type(obj), e)
+            return []
+
     def to_representation(self, instance):
         try:
             data = super().to_representation(instance)
             data["consolidate_prod"] = self.get_consolidate_prod_data(instance)
+            data["gst_lines"] = self.get_gst_lines_data(instance)
             return data
         except Exception as e:
             logger.error(
@@ -95,6 +119,7 @@ class TallyPaymentAnalyzedBillSerializer(serializers.ModelSerializer):
             )
             data = super().to_representation(instance)
             data["consolidate_prod"] = []
+            data["gst_lines"] = []
             return data
 
     class Meta:

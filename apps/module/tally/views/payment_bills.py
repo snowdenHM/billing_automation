@@ -80,6 +80,48 @@ safe_int_convert = to_int
 parse_payment_bill_date = parse_bill_date
 
 
+# Sentinel strings the FE historically sent when a ledger slot was left blank.
+# Backend guard is case-insensitive — a "no tax ledger" round-trip must not
+# spawn a bogus ledger on re-verify.
+_BLANK_LEDGER_SENTINELS = frozenset({
+    "", "no tax ledger", "no coa ledger", "no purchase ledger", "none", "null",
+})
+
+
+def _is_blank_payment_ledger(value):
+    return not value or str(value).strip().lower() in _BLANK_LEDGER_SENTINELS
+
+
+def _resolve_payment_tax_ledger(entry, tax_type, organization):
+    """UUID-first ledger resolve for Payment vouchers.
+
+    Order:
+      1. explicit ``ledger_id`` UUID (FE dropdown value)
+      2. ``ledger`` string that parses as an existing UUID
+      3. ``ledger`` string treated as a name (case-insensitive sentinel skip)
+
+    Returns None when the slot should be cleared (blank sentinel) or when
+    the identifier does not resolve.
+    """
+    if not isinstance(entry, dict):
+        return None
+    ledger_id = entry.get("ledger_id")
+    if ledger_id:
+        try:
+            return Ledger.objects.get(id=ledger_id, organization=organization)
+        except (Ledger.DoesNotExist, ValueError, DjangoValidationError):
+            pass
+    raw = entry.get("ledger")
+    if _is_blank_payment_ledger(raw):
+        return None
+    # Try UUID first if the string parses.
+    try:
+        return Ledger.objects.get(id=str(raw).strip(), organization=organization)
+    except (Ledger.DoesNotExist, ValueError, DjangoValidationError):
+        pass
+    return find_or_create_payment_tax_ledger(str(raw).strip(), tax_type, organization)
+
+
 def check_duplicate_tally_payment_bill(bill, organization):
     """Wrapper: delegates to apps.common.services.duplicate_detection.check_duplicate_bill."""
     return check_duplicate_bill(bill, organization, TallyPaymentBill)
@@ -385,6 +427,13 @@ def process_payment_analysis_data(bill, json_data, organization):
 
                         logger.info(f"✅ Created consolidated payment product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
 
+                        # Initial analysis with 2+ items — flip to consolidate
+                        # mode so the FE opens with the aggregated view (mirrors
+                        # vendor/expense behaviour).
+                        if not analyzed_bill.consolidate:
+                            analyzed_bill.consolidate = True
+                            analyzed_bill.save(update_fields=['consolidate'])
+
                     except Exception as e:
                         logger.error(f"❌ Error creating consolidated payment product for bill {analyzed_bill.id}: {str(e)}")
                 else:
@@ -615,6 +664,12 @@ def payment_bill_analyze(request, org_id):
 
         # Check for duplicate bills after analysis
         is_duplicate, duplicate_bills, max_similarity = check_duplicate_tally_payment_bill(bill, organization)
+        # Persist duplicate metadata so subsequent list/detail reads
+        # surface the warning without re-running the fuzzy check.
+        try:
+            update_bill_duplicate_metadata(bill, duplicate_bills, max_similarity)
+        except Exception as meta_err:
+            logger.warning(f"Failed to persist payment duplicate metadata: {meta_err}")
 
         response_data = {
             "detail": "Tally payment bill analyzed successfully",
@@ -825,6 +880,10 @@ def process_existing_payment_analysis_data(bill, existing_data, organization):
 
                         logger.info(f"✅ Created consolidated payment product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
 
+                        if not analyzed_bill.consolidate:
+                            analyzed_bill.consolidate = True
+                            analyzed_bill.save(update_fields=['consolidate'])
+
                     except Exception as e:
                         logger.error(f"❌ Error creating consolidated payment product for bill {analyzed_bill.id}: {str(e)}")
                 else:
@@ -1026,72 +1085,47 @@ def update_analyzed_payment_bill_data(analyzed_bill, analyzed_data, organization
         if 'total' in analyzed_data:
             analyzed_bill.total = _to_decimal(analyzed_data['total'])
 
-        # Update tax information
+        # Update tax information — unified 6-block loop.
+        # Each block: (payload key, amount field, FK field, tax_type,
+        #              debit/credit field). Zero amount clears the FK so a
+        #              re-verify with a cleared row does not keep the stale
+        #              ledger + trip the master-sync guard.
         taxes_data = analyzed_data.get('taxes', {})
         if taxes_data:
-            # Update tax amounts with proper decimal conversion
-            igst_data = taxes_data.get('igst', {})
-            if 'amount' in igst_data:
-                analyzed_bill.igst = _to_decimal(igst_data['amount'])
-            if 'ledger' in igst_data and igst_data['ledger'] != "No Tax Ledger":
-                igst_ledger = find_or_create_payment_tax_ledger(igst_data['ledger'], 'IGST', organization)
-                if igst_ledger:
-                    analyzed_bill.igst_taxes = igst_ledger
-            if 'debit_or_credit' in igst_data:
-                analyzed_bill.igst_debit_or_credit = igst_data['debit_or_credit']
-
-            cgst_data = taxes_data.get('cgst', {})
-            if 'amount' in cgst_data:
-                analyzed_bill.cgst = _to_decimal(cgst_data['amount'])
-            if 'ledger' in cgst_data and cgst_data['ledger'] != "No Tax Ledger":
-                cgst_ledger = find_or_create_payment_tax_ledger(cgst_data['ledger'], 'CGST', organization)
-                if cgst_ledger:
-                    analyzed_bill.cgst_taxes = cgst_ledger
-            if 'debit_or_credit' in cgst_data:
-                analyzed_bill.cgst_debit_or_credit = cgst_data['debit_or_credit']
-
-            sgst_data = taxes_data.get('sgst', {})
-            if 'amount' in sgst_data:
-                analyzed_bill.sgst = _to_decimal(sgst_data['amount'])
-            if 'ledger' in sgst_data and sgst_data['ledger'] != "No Tax Ledger":
-                sgst_ledger = find_or_create_payment_tax_ledger(sgst_data['ledger'], 'SGST', organization)
-                if sgst_ledger:
-                    analyzed_bill.sgst_taxes = sgst_ledger
-            if 'debit_or_credit' in sgst_data:
-                analyzed_bill.sgst_debit_or_credit = sgst_data['debit_or_credit']
-
-            # Handle TDS data
-            tds_data = taxes_data.get('tds', {})
-            if 'amount' in tds_data:
-                analyzed_bill.tds = _to_decimal(tds_data['amount'])
-            if 'ledger' in tds_data and tds_data['ledger'] != "No Tax Ledger":
-                tds_ledger = find_or_create_payment_tax_ledger(tds_data['ledger'], 'TDS', organization)
-                if tds_ledger:
-                    analyzed_bill.tds_taxes = tds_ledger
-            if 'debit_or_credit' in tds_data:
-                analyzed_bill.tds_debit_or_credit = tds_data['debit_or_credit']
-
-            # Handle Other Adjustment data
-            other_adjustment_data = taxes_data.get('other_adjustment', {})
-            if 'amount' in other_adjustment_data:
-                analyzed_bill.other_adjustment = _to_decimal(other_adjustment_data['amount'])
-            if 'ledger' in other_adjustment_data and other_adjustment_data['ledger'] != "No Tax Ledger":
-                other_adj_ledger = find_or_create_payment_tax_ledger(other_adjustment_data['ledger'], 'OTHER', organization)
-                if other_adj_ledger:
-                    analyzed_bill.other_adjustment_taxes = other_adj_ledger
-            if 'debit_or_credit' in other_adjustment_data:
-                analyzed_bill.other_adjustment_debit_or_credit = other_adjustment_data['debit_or_credit']
-
-            # Handle Round Off (mirror of vendor/expense fix).
-            round_off_data = taxes_data.get('round_off', {})
-            if 'amount' in round_off_data:
-                analyzed_bill.round_off = _to_decimal(round_off_data['amount'])
-            if 'ledger' in round_off_data and round_off_data['ledger'] != "No Tax Ledger":
-                round_off_ledger = find_or_create_payment_tax_ledger(round_off_data['ledger'], 'ROUND_OFF', organization)
-                if round_off_ledger:
-                    analyzed_bill.round_off_taxes = round_off_ledger
-            if 'debit_or_credit' in round_off_data:
-                analyzed_bill.round_off_debit_or_credit = round_off_data['debit_or_credit']
+            _TAX_BLOCKS = (
+                ('igst', 'igst', 'igst_taxes', 'IGST', 'igst_debit_or_credit'),
+                ('cgst', 'cgst', 'cgst_taxes', 'CGST', 'cgst_debit_or_credit'),
+                ('sgst', 'sgst', 'sgst_taxes', 'SGST', 'sgst_debit_or_credit'),
+                ('tds', 'tds', 'tds_taxes', 'TDS', 'tds_debit_or_credit'),
+                ('other_adjustment', 'other_adjustment', 'other_adjustment_taxes',
+                 'OTHER', 'other_adjustment_debit_or_credit'),
+                ('round_off', 'round_off', 'round_off_taxes',
+                 'ROUND_OFF', 'round_off_debit_or_credit'),
+            )
+            for key, amount_field, fk_field, tax_type, dc_field in _TAX_BLOCKS:
+                block = taxes_data.get(key) or {}
+                if not isinstance(block, dict):
+                    continue
+                if 'amount' in block:
+                    amt = _to_decimal(block['amount'])
+                    setattr(analyzed_bill, amount_field, amt)
+                    # Zero amount → clear the FK. Otherwise a lingering
+                    # BM-created ledger will block sync via the master guard
+                    # even after the user zeroed the line.
+                    if not amt or amt == 0:
+                        setattr(analyzed_bill, fk_field, None)
+                if 'ledger' in block or 'ledger_id' in block:
+                    ledger = _resolve_payment_tax_ledger(block, tax_type, organization)
+                    if ledger is not None:
+                        setattr(analyzed_bill, fk_field, ledger)
+                    elif _is_blank_payment_ledger(block.get('ledger')) and not block.get('ledger_id'):
+                        # Explicit blank sentinel wipes the FK.
+                        setattr(analyzed_bill, fk_field, None)
+                if dc_field in ('igst_debit_or_credit', 'cgst_debit_or_credit',
+                                'sgst_debit_or_credit', 'tds_debit_or_credit',
+                                'other_adjustment_debit_or_credit',
+                                'round_off_debit_or_credit') and 'debit_or_credit' in block:
+                    setattr(analyzed_bill, dc_field, block['debit_or_credit'])
 
         # ------------------------------------------------------------------
         # Multi-rate GST lines — replaces the single bill-level CGST/SGST/IGST
@@ -1204,35 +1238,29 @@ def update_analyzed_payment_bill_data(analyzed_bill, analyzed_data, organization
                     for idx, consolidated_data in enumerate(consolidate_prod_array):
                         logger.info(f"Creating consolidated payment product {idx + 1}: {consolidated_data.get('item_details', 'Unnamed')}")
                         
-                        # Find chart of accounts ledger if specified
+                        # Find chart of accounts ledger — UUID first, name fallback.
                         chart_ledger = None
-                        chart_ledger_identifier = consolidated_data.get('chart_of_accounts')
-                        if chart_ledger_identifier and chart_ledger_identifier != "No COA Ledger":
+                        chart_id = consolidated_data.get('chart_of_accounts_id')
+                        chart_raw = consolidated_data.get('chart_of_accounts')
+                        if chart_id:
                             try:
-                                # Check if it's a UUID (ledger ID)
-                                import uuid
-                                uuid.UUID(str(chart_ledger_identifier))
-                                # It's a UUID, find ledger by ID
                                 chart_ledger = Ledger.objects.filter(
-                                    id=chart_ledger_identifier,
-                                    organization=organization
+                                    id=chart_id, organization=organization,
                                 ).first()
-                                if chart_ledger:
-                                    logger.info(f"Found chart of accounts ledger by UUID: {chart_ledger.name}")
-                                else:
-                                    logger.warning(f"Chart of accounts ledger not found for UUID: {chart_ledger_identifier}")
-                            except (ValueError, TypeError):
-                                # It's a name, find by name
+                            except (ValueError, DjangoValidationError):
+                                chart_ledger = None
+                        if chart_ledger is None and chart_raw and not _is_blank_payment_ledger(chart_raw):
+                            try:
                                 chart_ledger = Ledger.objects.filter(
-                                    name=chart_ledger_identifier,
-                                    organization=organization
+                                    id=str(chart_raw).strip(), organization=organization,
                                 ).first()
-                                if chart_ledger:
-                                    logger.info(f"Found chart of accounts ledger by name: {chart_ledger.name}")
-                                else:
-                                    logger.warning(f"Chart of accounts ledger not found by name: {chart_ledger_identifier}")
-                            except Exception as e:
-                                logger.error(f"Error finding chart of accounts ledger: {e}")
+                            except (ValueError, DjangoValidationError):
+                                chart_ledger = None
+                            if chart_ledger is None:
+                                chart_ledger = Ledger.objects.filter(
+                                    name=str(chart_raw).strip(),
+                                    organization=organization,
+                                ).first()
 
                         # Create new consolidated product
                         consolidated_product = TallyPaymentConsolidatedProduct.objects.create(
@@ -1407,34 +1435,56 @@ def update_analyzed_payment_products(analyzed_bill, payment_items, organization)
         if 'debit_or_credit' in item_data:
             product.debit_or_credit = item_data['debit_or_credit']
 
-        # Handle chart of accounts ledger
-        if 'chart_of_accounts' in item_data and item_data['chart_of_accounts'] != "No COA Ledger":
-            coa_ledger = find_or_create_payment_tax_ledger(item_data['chart_of_accounts'], 'COA', organization)
-            if coa_ledger:
-                product.chart_of_accounts = coa_ledger
+        # Handle chart of accounts ledger — UUID first, name fallback.
+        # BE guard is now case-insensitive; a "no coa ledger" round-trip
+        # no longer spawns a bogus ledger.
+        coa_id = item_data.get('chart_of_accounts_id')
+        coa_raw = item_data.get('chart_of_accounts')
+        coa_ledger = None
+        if coa_id:
+            try:
+                coa_ledger = Ledger.objects.get(id=coa_id, organization=organization)
+            except (Ledger.DoesNotExist, ValueError, DjangoValidationError):
+                coa_ledger = None
+        if coa_ledger is None and coa_raw and not _is_blank_payment_ledger(coa_raw):
+            try:
+                coa_ledger = Ledger.objects.get(id=str(coa_raw).strip(), organization=organization)
+            except (Ledger.DoesNotExist, ValueError, DjangoValidationError):
+                coa_ledger = find_or_create_payment_tax_ledger(
+                    str(coa_raw).strip(), 'COA', organization,
+                )
+        if coa_ledger is not None:
+            product.chart_of_accounts = coa_ledger
+        elif coa_id is None and _is_blank_payment_ledger(coa_raw):
+            product.chart_of_accounts = None
 
         product.save()
 
-    # ✅ CRITICAL: Only delete payment products if we're NOT in consolidation mode
-    # In consolidation mode, individual products are PRESERVED for layout switching
-    if not getattr(analyzed_bill, 'consolidate', False):
-        products_to_delete = []
-        for existing_id, product in existing_products.items():
-            if existing_id not in updated_product_ids:
-                products_to_delete.append(product)
-        
-        if products_to_delete:
-            deleted_count = len(products_to_delete)
-            for product in products_to_delete:
-                logger.info(f"Deleting payment product {product.id}: {product.item_details or 'Unknown'}")
-                product.delete()
-            logger.info(f"Deleted {deleted_count} payment products not present in frontend payload")
-    else:
-        logger.info("✅ CONSOLIDATION MODE: Individual products PRESERVED for layout switching")
-        logger.info("✅ Users can switch between individual and consolidated layouts")
-    
-    # Calculate deletion count for summary  
-    deletion_count = 0 if getattr(analyzed_bill, 'consolidate', False) else len([existing_id for existing_id in existing_products.keys() if existing_id not in updated_product_ids])
+    # Delete removed products in BOTH modes. Previously gated on
+    # `consolidate=False` so a user in consolidate mode could remove rows
+    # from the individual list but the DB kept them — reload showed stale
+    # rows. Consolidate view now derives from `consolidated_products`, not
+    # the individual list, so pruning here is safe.
+    products_to_delete = []
+    for existing_id, product in existing_products.items():
+        if existing_id not in updated_product_ids:
+            products_to_delete.append(product)
+    deletion_count = len(products_to_delete)
+    if products_to_delete:
+        for product in products_to_delete:
+            logger.info(f"Deleting payment product {product.id}: {product.item_details or 'Unknown'}")
+            product.delete()
+        # A line change invalidates the consolidated aggregation — wipe it
+        # so the next reload does not surface stale consolidated rows.
+        stale_consolidated = TallyPaymentConsolidatedProduct.objects.filter(
+            payment_bill=analyzed_bill,
+        )
+        if stale_consolidated.exists():
+            stale_count = stale_consolidated.count()
+            stale_consolidated.delete()
+            logger.info(
+                f"Wiped {stale_count} stale consolidated rows after line change"
+            )
     
     logger.info(
         f"Payment product update summary: {len(updated_product_ids)} updated, "
@@ -1444,80 +1494,103 @@ def update_analyzed_payment_products(analyzed_bill, payment_items, organization)
 
 
 def get_structured_payment_bill_data(analyzed_bill, organization):
-    """Get structured payment bill data in the same format as detail view"""
+    """Get structured payment bill data in the same format as detail view.
+
+    The FE detail page reads *flat* keys (``bill_no``, ``bill_date``,
+    ``total_amount``, ...) so the same fields are mirrored at the top
+    level in addition to the legacy nested ``bill_details`` block. A
+    reload that dropped these keys would leave the UI blank.
+    """
     vendor_ledger = analyzed_bill.vendor
     analyzed_bill_products = analyzed_bill.products.all()
     bill_date_str = analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
+    due_date_str = analyzed_bill.due_date.strftime('%d-%m-%Y') if analyzed_bill.due_date else None
     team_slug = organization.name if hasattr(organization, 'name') else str(organization.id)
 
+    def _tax_block(amount, ledger_fk, dc):
+        return {
+            "amount": float(amount or 0),
+            "ledger": str(ledger_fk) if ledger_fk else "",
+            "ledger_id": str(ledger_fk.id) if ledger_fk else None,
+            "debit_or_credit": dc or "debit",
+        }
+
+    consolidated_prod = [
+        {
+            "id": str(cp.id),
+            "item_details": cp.item_details,
+            "chart_of_accounts": str(cp.chart_of_accounts.name) if cp.chart_of_accounts else "",
+            "chart_of_accounts_id": str(cp.chart_of_accounts_id) if cp.chart_of_accounts_id else None,
+            "amount": float(cp.amount or 0),
+            "debit_or_credit": cp.debit_or_credit or "debit",
+        }
+        for cp in analyzed_bill.consolidated_products.all()
+    ]
+
     return {
+        # Flat mirror keys the FE detail hydration reads.
+        "bill_no": analyzed_bill.bill_no or "",
+        "bill_date": bill_date_str,
+        "due_date": due_date_str,
+        "total_amount": float(analyzed_bill.total or 0),
+        "note": analyzed_bill.note or "",
+        "consolidate": bool(getattr(analyzed_bill, "consolidate", False)),
+
         "vendor": {
-            "master_id": vendor_ledger.master_id if vendor_ledger and vendor_ledger.master_id else "No Ledger",
-            "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
-            "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
-            "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "No Ledger",
+            "id": str(vendor_ledger.id) if vendor_ledger else None,
+            "master_id": vendor_ledger.master_id if vendor_ledger and vendor_ledger.master_id else "",
+            "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "",
+            "vendor_name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "",
+            "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "",
+            "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "",
         },
         "bill_details": {
             "voucher": analyzed_bill.voucher or "",
             "bill_number": analyzed_bill.bill_no,
             "date": bill_date_str,
-            "due_date": analyzed_bill.due_date.strftime('%d-%m-%Y') if analyzed_bill.due_date else None,
+            "due_date": due_date_str,
             "total_amount": float(analyzed_bill.total or 0),
             "company_id": team_slug,
         },
         "taxes": {
-            "igst": {
-                "amount": float(analyzed_bill.igst or 0),
-                "ledger": str(analyzed_bill.igst_taxes) if analyzed_bill.igst_taxes else "No Tax Ledger",
-                "debit_or_credit": analyzed_bill.igst_debit_or_credit or "debit",
-            },
-            "cgst": {
-                "amount": float(analyzed_bill.cgst or 0),
-                "ledger": str(analyzed_bill.cgst_taxes) if analyzed_bill.cgst_taxes else "No Tax Ledger",
-                "debit_or_credit": analyzed_bill.cgst_debit_or_credit or "debit",
-            },
-            "sgst": {
-                "amount": float(analyzed_bill.sgst or 0),
-                "ledger": str(analyzed_bill.sgst_taxes) if analyzed_bill.sgst_taxes else "No Tax Ledger",
-                "debit_or_credit": analyzed_bill.sgst_debit_or_credit or "debit",
-            },
-            "tds": {
-                "amount": float(analyzed_bill.tds or 0),
-                "ledger": str(analyzed_bill.tds_taxes) if analyzed_bill.tds_taxes else "No Tax Ledger",
-                "debit_or_credit": analyzed_bill.tds_debit_or_credit or "debit",
-            },
-            "other_adjustment": {
-                "amount": float(analyzed_bill.other_adjustment or 0),
-                "ledger": str(analyzed_bill.other_adjustment_taxes) if analyzed_bill.other_adjustment_taxes else "No Tax Ledger",
-                "debit_or_credit": analyzed_bill.other_adjustment_debit_or_credit or "debit",
-            },
-            "round_off": {
-                "amount": float(analyzed_bill.round_off or 0),
-                "ledger": str(analyzed_bill.round_off_taxes) if analyzed_bill.round_off_taxes else "No Tax Ledger",
-                "debit_or_credit": analyzed_bill.round_off_debit_or_credit or "debit",
-            }
+            "igst": _tax_block(analyzed_bill.igst, analyzed_bill.igst_taxes, analyzed_bill.igst_debit_or_credit),
+            "cgst": _tax_block(analyzed_bill.cgst, analyzed_bill.cgst_taxes, analyzed_bill.cgst_debit_or_credit),
+            "sgst": _tax_block(analyzed_bill.sgst, analyzed_bill.sgst_taxes, analyzed_bill.sgst_debit_or_credit),
+            "tds": _tax_block(analyzed_bill.tds, analyzed_bill.tds_taxes, analyzed_bill.tds_debit_or_credit),
+            "other_adjustment": _tax_block(
+                analyzed_bill.other_adjustment,
+                analyzed_bill.other_adjustment_taxes,
+                analyzed_bill.other_adjustment_debit_or_credit,
+            ),
+            "round_off": _tax_block(
+                analyzed_bill.round_off,
+                analyzed_bill.round_off_taxes,
+                analyzed_bill.round_off_debit_or_credit,
+            ),
         },
         "payment_items": [
             {
-                "id": str(item.id),  # Include ID for future updates
+                "id": str(item.id),
                 "item_details": item.item_details,
-                "chart_of_accounts": str(item.chart_of_accounts) if item.chart_of_accounts else "No COA Ledger",
+                "chart_of_accounts": str(item.chart_of_accounts.name) if item.chart_of_accounts else "",
+                "chart_of_accounts_id": str(item.chart_of_accounts_id) if item.chart_of_accounts_id else None,
                 "amount": float(item.amount or 0),
                 "debit_or_credit": item.debit_or_credit,
             }
             for item in analyzed_bill_products
         ],
-        # Multi-rate GST lines — the new source of truth (the ``taxes``
-        # block's cgst/sgst/igst entries above are kept for backwards
-        # compat readers, and reflect the sum of these lines).
+        "consolidate_prod": consolidated_prod,
+        # Multi-rate GST lines — new source of truth. The `taxes` block
+        # above keeps the legacy single-value readers working.
         "gst_lines": [
             {
                 "id": str(line.id),
                 "rate": line.rate or "",
                 "tax_type": line.tax_type,
                 "amount": float(line.amount or 0),
+                "ledger_id": str(line.ledger_id) if line.ledger_id else None,
                 "ledger": str(line.ledger_id) if line.ledger_id else None,
-                "ledger_name": str(line.ledger) if line.ledger else "",
+                "ledger_name": line.ledger.name if line.ledger else "",
                 "debit_or_credit": line.debit_or_credit or "debit",
             }
             for line in analyzed_bill.gst_lines.all()
@@ -1715,9 +1788,23 @@ def payment_bills_sync_list(request, org_id):
     ).order_by('-created_at')
 
     bills_data = []
+    skipped = []
     for analyzed_bill in analyzed_bills:
-        sync_data = prepare_payment_sync_data(analyzed_bill, organization)
+        try:
+            sync_data = prepare_payment_sync_data(analyzed_bill, organization)
+        except ValueError as ve:
+            # Bill has a missing-COA balancing issue. Skip it — the FE
+            # detail page for that bill will surface the same error on
+            # its manual sync attempt.
+            skipped.append({"bill_no": analyzed_bill.bill_no, "reason": str(ve)})
+            logger.warning(
+                "Skipping payment bill %s from sync-list: %s",
+                analyzed_bill.bill_no, ve,
+            )
+            continue
         bills_data.append(sync_data["data"])
+    if skipped:
+        logger.info("Payment sync-list skipped %d bill(s): %s", len(skipped), skipped)
 
     # Tally TCP/TDL consumes XML natively (see vendor_bills.py for the
     # reasoning). Payment voucher payload has the SAME shape as journal
@@ -1838,19 +1925,33 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         })
 
     # Payment item lines — booked against the chart-of-accounts ledger
-    # with explicit DR/CR. Skip rows with zero amount or no ledger.
+    # with explicit DR/CR. A row with a real amount but no COA would
+    # silently disappear from the voucher and leave DR/CR out of balance
+    # in Tally, so refuse to build a partial payload — the caller must
+    # fix the missing COA before sync.
+    missing_coa = []
     for line in source_lines:
         amt = _money(getattr(line, 'amount', 0))
         if amt == 0:
             continue
         coa = getattr(line, 'chart_of_accounts', None)
         if not coa:
+            missing_coa.append(
+                getattr(line, 'item_details', None) or str(getattr(line, 'id', 'unknown'))
+            )
             continue
         ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(coa),
             "debit_or_credit": _dc(getattr(line, 'debit_or_credit', 'debit')),
         })
+    if missing_coa:
+        raise ValueError(
+            "Cannot build payment sync payload — the following line(s) "
+            "have an amount but no Chart of Accounts ledger picked, which "
+            "would leave the Tally voucher unbalanced: "
+            + ", ".join(missing_coa)
+        )
 
     # GST lines — multi-rate support. Each ``TallyPaymentGstLine`` row
     # becomes one ``<ledger>`` entry inside ``<ledgers>``. Mixed-rate

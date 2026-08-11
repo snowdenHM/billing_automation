@@ -31,7 +31,24 @@ _LEDGER_FIELDS_ON_ANALYZED_BILL = (
     "tds_taxes",
     "other_adjustment_taxes",
     "round_off_taxes",
+    # Vendor bill (Purchase Voucher) also carries these — a BM-created
+    # ledger picked here was previously bypassing the guard, letting
+    # sync fire with a ledger Tally doesn't know about yet.
+    "discount_taxes",
+    "cess_taxes",
+    "freight_taxes",
 )
+
+
+def _safe_getattr(obj, attr):
+    """Return getattr(obj, attr) or None. Some models don't have every field
+    (expense-side models lack discount/cess/freight), so a plain getattr
+    with default None keeps the walker generic across bill types.
+    """
+    try:
+        return getattr(obj, attr, None)
+    except Exception:
+        return None
 
 
 def _pending(ledger) -> bool:
@@ -77,7 +94,7 @@ def find_pending_masters(analyzed_bill) -> list[dict]:
 
     # Bill-level ledger references
     for field in _LEDGER_FIELDS_ON_ANALYZED_BILL:
-        _push(getattr(analyzed_bill, field, None), role=field)
+        _push(_safe_getattr(analyzed_bill, field), role=field)
 
     # Product-level references (vendor bills carry both chart_of_accounts
     # and taxes; expense/payment bills carry only chart_of_accounts).

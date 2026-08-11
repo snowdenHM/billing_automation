@@ -700,6 +700,19 @@ def vendor_bill_analyze(request, org_id):
         is_duplicate, duplicate_bills, max_similarity = check_duplicate_tally_vendor_bill(bill, organization)
         logger.warning(f"🔍 Duplicate check complete - is_duplicate: {is_duplicate}, count: {len(duplicate_bills) if duplicate_bills else 0}")
 
+        # Persist duplicate metadata on the bill row so the list page's
+        # duplicate badge + detail modal have data to render. Was
+        # previously imported but never called — badge stayed empty.
+        try:
+            update_bill_duplicate_metadata(
+                bill, duplicate_bills or [], max_similarity or 0,
+            )
+        except Exception as meta_err:
+            logger.warning(
+                "Failed to persist duplicate metadata for bill %s: %s",
+                bill.id, meta_err,
+            )
+
         response_data = {
             "detail": "Tally vendor bill analyzed successfully",
             "analyzed_bill": TallyVendorAnalyzedBillSerializer(analyzed_bill).data
@@ -1278,8 +1291,13 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                     "Verify: ledger_id %s not in org %s — falling back to name",
                     ledger_id, organization.id,
                 )
-        name = payload.get('ledger')
-        if name and name != "No Tax Ledger":
+        name = (payload.get('ledger') or "").strip()
+        # Case-insensitive sentinel guard — matches ``_BLANK_LEDGER_SENTINELS``
+        # used in the product tax-ledger path below. Prevents accidental
+        # creation of a bogus ledger literally named "no tax ledger".
+        if name and name.lower() not in {
+            "", "no tax ledger", "no purchase ledger", "none", "null",
+        }:
             return find_or_create_tax_ledger(name, tax_type, organization)
         return None
 
@@ -1697,6 +1715,21 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 if fk_field in item:
                     raw_id = item.get(fk_field)
                     new_id = str(raw_id) if raw_id else None
+                    # Validate the UUID before write so a stray value
+                    # doesn't crash save() with an IntegrityError.
+                    if new_id:
+                        try:
+                            from ..models import Ledger as _Ledger
+                            _Ledger.objects.only('id').get(
+                                id=new_id, organization=organization,
+                            )
+                        except (_Ledger.DoesNotExist, ValueError):
+                            logger.warning(
+                                "Skipping %s=%s on product update — ledger "
+                                "not found in org %s.",
+                                fk_field, new_id, organization.id,
+                            )
+                            continue
                     current_id = str(getattr(product, f'{fk_field}_id') or '') or None
                     if current_id != new_id:
                         setattr(product, f'{fk_field}_id', new_id)
@@ -1749,32 +1782,75 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
 
             for fk_field in ('cgst_ledger', 'sgst_ledger', 'igst_ledger'):
                 raw_id = item.get(fk_field)
-                if raw_id:
+                if not raw_id:
+                    continue
+                # Validate the UUID belongs to an org ledger before
+                # assigning — a bad ``fk_field_id`` write would crash
+                # on save() with an integrity error otherwise.
+                try:
+                    from ..models import Ledger as _Ledger
+                    _Ledger.objects.only('id').get(
+                        id=str(raw_id), organization=organization,
+                    )
                     setattr(product, f'{fk_field}_id', str(raw_id))
+                except (_Ledger.DoesNotExist, ValueError):
+                    logger.warning(
+                        "Skipping %s=%s on product create — ledger not "
+                        "found in org %s.",
+                        fk_field, raw_id, organization.id,
+                    )
             product.save()
             logger.info(
                 f"Created new product (client item_id: {item.get('item_id')}) name={item.get('item_name') or 'Unknown'} "
                 f"with GST type: {analyzed_bill.gst_type} (IGST: {calc_igst}, CGST: {calc_cgst}, SGST: {calc_sgst})")
 
-    # Only delete products if we're NOT in consolidation mode
-    # In consolidation mode, individual products should be preserved unless explicitly cleared
-    if not getattr(analyzed_bill, 'consolidate', False):
-        products_to_delete = []
-        for existing_id, product in existing.items():
-            if existing_id not in updated_ids:
-                products_to_delete.append(product)
+    # Frontend is source of truth for what should exist: any existing
+    # product whose id isn't in the incoming list gets deleted, in
+    # BOTH consolidate and non-consolidate mode. The old "preserve
+    # individual products in consolidate mode" rule left stale rows
+    # after the user removed a line item — reload showed the deleted
+    # line back on screen.
+    #
+    # In consolidate mode we ALSO rebuild the ``consolidated_products``
+    # aggregation from the fresh product set so the aggregation table
+    # reflects the current line-item state.
+    products_to_delete = [
+        product for existing_id, product in existing.items()
+        if existing_id not in updated_ids
+    ]
+    if products_to_delete:
+        for product in products_to_delete:
+            logger.info(f"Deleting product {product.id}: {product.item_name or 'Unknown'}")
+            product.delete()
+        logger.info(
+            "Deleted %d products not present in frontend payload (consolidate=%s)",
+            len(products_to_delete),
+            getattr(analyzed_bill, 'consolidate', False),
+        )
 
-        if products_to_delete:
-            deleted_count = len(products_to_delete)
-            for product in products_to_delete:
-                logger.info(f"Deleting product {product.id}: {product.item_name or 'Unknown'}")
-                product.delete()
-            logger.info(f"Deleted {deleted_count} products not present in frontend payload")
-    else:
-        logger.info("Consolidation mode active - preserving individual products")
+    # Refresh consolidated aggregation if any change happened AND
+    # consolidate mode is on. Simple approach: wipe + let the
+    # verify path's consolidation build run on next open. Keeps the
+    # aggregation table honest without duplicating consolidation
+    # logic here.
+    if products_to_delete and getattr(analyzed_bill, 'consolidate', False):
+        try:
+            TallyVendorConsolidatedProduct.objects.filter(
+                vendor_bill_analyzed=analyzed_bill,
+            ).delete()
+            logger.info(
+                "Cleared consolidated aggregation for bill %s — will "
+                "regenerate on next consolidate toggle / verify.",
+                analyzed_bill.id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to clear consolidated aggregation for bill %s: %s",
+                analyzed_bill.id, exc,
+            )
 
     # Calculate deletion count for summary
-    deletion_count = 0 if getattr(analyzed_bill, 'consolidate', False) else len([existing_id for existing_id in existing.keys() if existing_id not in updated_ids])
+    deletion_count = len(products_to_delete)
 
     logger.info(
         f"Product update summary: {len(updated_ids)} updated, "
@@ -1789,16 +1865,46 @@ def get_structured_bill_data(analyzed_bill, organization):
     bill_date_str = analyzed_bill.bill_date.strftime('%d-%m-%Y') if analyzed_bill.bill_date else None
     team_slug = organization.name if hasattr(organization, 'name') else str(organization.id)
 
+    # Consolidated aggregation rows — mirrored to top-level
+    # ``consolidate_prod`` so the FE can pre-populate the consolidated
+    # products table on verify response without a second fetch.
+    consolidated_rows = []
+    try:
+        for cp in analyzed_bill.consolidated_products.all():
+            consolidated_rows.append({
+                "id": str(cp.id),
+                "item_id": str(cp.id),
+                "item_name": cp.item_name,
+                "item_details": cp.item_details,
+                "tax_ledger": cp.taxes.name if cp.taxes else "",
+                "tax_ledger_id": str(cp.taxes.id) if cp.taxes else None,
+                "price": float(cp.price or 0),
+                "quantity": int(cp.quantity or 0),
+                "amount": float(cp.amount or 0),
+                "product_gst": cp.product_gst,
+                "igst": float(cp.igst or 0),
+                "cgst": float(cp.cgst or 0),
+                "sgst": float(cp.sgst or 0),
+                "original_items_count": cp.original_items_count or 0,
+            })
+    except Exception:
+        consolidated_rows = []
+
     return {
         "vendor": {
-            "master_id": vendor_ledger.master_id if vendor_ledger and vendor_ledger.master_id else "No Ledger",
-            "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "No Ledger",
-            "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "No Ledger",
-            "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "No Ledger",
+            "master_id": vendor_ledger.master_id if vendor_ledger and vendor_ledger.master_id else "",
+            "name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "",
+            # Alias so old FE (reads vendor_name) keeps working alongside
+            # newer FE (reads .name).
+            "vendor_name": vendor_ledger.name if vendor_ledger and vendor_ledger.name else "",
+            "gst_in": vendor_ledger.gst_in if vendor_ledger and vendor_ledger.gst_in else "",
+            "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "",
             # UUID so the frontend can re-select the exact ledger row
             # on reload instead of guessing by name.
             "id": str(vendor_ledger.id) if vendor_ledger else None,
         },
+        # Nested block kept for Tally-sync consumers that already read
+        # from ``bill_details``. Never removed here for backward compat.
         "bill_details": {
             "bill_number": analyzed_bill.bill_no,
             "date": bill_date_str,
@@ -1806,6 +1912,20 @@ def get_structured_bill_data(analyzed_bill, organization):
             "total_amount": float(analyzed_bill.total or 0),
             "company_id": team_slug,
         },
+        # ---- flat mirror keys ----
+        # FE detail page reads these top-level keys on verify response
+        # to re-hydrate its form state. Introduced alongside the nested
+        # ``bill_details`` (which stays for sync compat) so no reader
+        # breaks either way.
+        "bill_no": analyzed_bill.bill_no or "",
+        "bill_date": bill_date_str,
+        "due_date": (
+            analyzed_bill.due_date.strftime('%d-%m-%Y')
+            if analyzed_bill.due_date else None
+        ),
+        "total_amount": float(analyzed_bill.total or 0),
+        "consolidate": bool(getattr(analyzed_bill, "consolidate", False)),
+        "consolidate_prod": consolidated_rows,
         # Notes were saved but not returned — reload of a bill showed
         # blank notes even though the user had entered text.
         "note": analyzed_bill.note or "",
@@ -2455,9 +2575,22 @@ def prepare_sync_data(analyzed_bill, organization):
     # When inventory sync is OFF we prepend a <ledger> row per distinct
     # purchase ledger — this is what makes the payload valid for
     # Tally's "Accounting Invoice" voucher mode (no stock update).
+    #
+    # ``"No Purchase Ledger"`` is a sentinel from lines that had no
+    # taxes FK — sending it as a real ledger name gets rejected by
+    # Tally ("Ledger not found"). Skip those rows and log so the
+    # operator can fix the mapping.
     if not use_inventory:
+        _BLANK = {"", "no purchase ledger", "no tax ledger", "none"}
         for pledger_name, total in purchase_rollup.items():
             if total == 0:
+                continue
+            if (pledger_name or "").strip().lower() in _BLANK:
+                logger.warning(
+                    "Sync inventory-OFF: skipping ₹%s with blank purchase ledger "
+                    "for bill %s — configure a purchase ledger on the line item.",
+                    _fmt_money(total), analyzed_bill.bill_no,
+                )
                 continue
             ledgers_payload.append({
                 "amount": _fmt_money(total),
@@ -2517,6 +2650,11 @@ def prepare_sync_data(analyzed_bill, organization):
         "bill_no": analyzed_bill.bill_no,
         "bill_date": bill_date_str,
         "voucher_type": "Purchase",
+        # ``vendor`` is the tag the TDL contract documents (see
+        # docs/tally-master-sync.md). ``vendor_name`` was the legacy
+        # key — kept as an alias so an older TDL parsing that value
+        # doesn't break during rollout.
+        "vendor": vendor_name,
         "vendor_name": vendor_name,
         "company": company_name,
         "total_amount": _fmt_money(analyzed_bill.total),
