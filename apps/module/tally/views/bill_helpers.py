@@ -629,73 +629,54 @@ def bills_upload_base(
 
 
 def _check_file_duplicates(uploaded_file, organization, bill_model, bill_type_label=""):
-    """Check for potential file-level duplicates."""
+    """Check for potential file-level duplicates.
+
+    Historical shape: also matched on basename (filename minus extension)
+    and file-size within 5%. Both produced constant false positives —
+    phone photos of different bills routinely share a name pattern
+    (``IMG_20240115_113045.jpg``) or land within a 5% size window, and
+    the FE surfaced the flag as if the two invoices were the same bill.
+    Kept only the hard signal: byte-for-byte identical filename. The
+    real dedup (byte-identical file content) is handled separately by
+    ``compute_file_hash`` in the caller.
+    """
     warnings = []
-    
-    # A trashed bill must not be reported as a duplicate — otherwise a
-    # re-upload of something the user just deleted gets flagged against
-    # a document they can no longer see.
+
     similar_files = bill_model.objects.alive().filter(
         organization=organization,
-        file__isnull=False
+        file__isnull=False,
     ).exclude(status=bill_model.BillStatus.DRAFT)
 
-    potential_duplicates = []
     uploaded_filename = uploaded_file.name.lower()
-    uploaded_basename = uploaded_filename.replace('.pdf', '').replace('.jpg', '').replace('.png', '')
 
+    potential_duplicates = []
     for existing_bill in similar_files:
         if not (existing_bill.file and existing_bill.file.name):
             continue
-            
         existing_filename = os.path.basename(existing_bill.file.name).lower()
-        existing_basename = existing_filename.replace('.pdf', '').replace('.jpg', '').replace('.png', '')
-
         if existing_filename == uploaded_filename:
             potential_duplicates.append({
                 'bill': existing_bill,
                 'match_type': 'exact_filename',
-                'reason': 'Same filename detected'
+                'reason': 'Same filename detected',
             })
-        elif existing_basename == uploaded_basename:
-            potential_duplicates.append({
-                'bill': existing_bill,
-                'match_type': 'similar_filename',
-                'reason': 'Similar filename detected'
-            })
-        else:
-            # Check file size similarity
-            try:
-                if (hasattr(existing_bill.file.storage, 'exists') and
-                    existing_bill.file.storage.exists(existing_bill.file.name) and
-                    hasattr(existing_bill.file, 'size') and hasattr(uploaded_file, 'size')):
-                    
-                    existing_size = existing_bill.file.size
-                    uploaded_size = uploaded_file.size
-                    
-                    if (existing_size > 0 and uploaded_size > 0 and
-                        abs(existing_size - uploaded_size) / max(existing_size, uploaded_size) < 0.05):
-                        potential_duplicates.append({
-                            'bill': existing_bill,
-                            'match_type': 'similar_size',
-                            'reason': 'Similar file size detected'
-                        })
-            except (FileNotFoundError, OSError):
-                continue
 
     if potential_duplicates:
         warnings.append({
             'uploaded_file': uploaded_file.name,
             'potential_duplicates': len(potential_duplicates),
-            'warning': f'File "{uploaded_file.name}" may be a duplicate of existing {bill_type_label} bills',
+            'warning': (
+                f'File "{uploaded_file.name}" has the same filename as an '
+                f'existing {bill_type_label} bill in this workspace.'
+            ),
             'existing_bills': [
                 {
                     'bill_name': dup['bill'].bill_munshi_name,
                     'bill_id': str(dup['bill'].id),
                     'match_type': dup['match_type'],
-                    'reason': dup['reason']
+                    'reason': dup['reason'],
                 } for dup in potential_duplicates[:3]
-            ]
+            ],
         })
 
     return warnings
