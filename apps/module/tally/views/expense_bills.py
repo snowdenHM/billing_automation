@@ -1682,8 +1682,12 @@ def expense_bill_sync(request, org_id):
     try:
         sync_data = get_structured_expense_bill_data(analyzed_bill, organization)
 
+        # Reset sync flags on every fresh attempt so the Tally Sync Status
+        # modal doesn't show a stale error from the previous try.
         bill.status = TallyExpenseBill.BillStatus.SYNCED
-        bill.save(update_fields=['status'])
+        bill.tally_synced = False
+        bill.tally_sync_message = ""
+        bill.save(update_fields=['status', 'tally_synced', 'tally_sync_message'])
 
         tally_state = "confirmed" if bill.tally_synced else "pending_tally"
 

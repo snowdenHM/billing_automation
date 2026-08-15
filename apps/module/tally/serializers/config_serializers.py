@@ -105,6 +105,29 @@ class TallyConfigSerializer(serializers.ModelSerializer):
         required=False
     )
 
+    # Direct Ledger FKs for the Additional Adjustments Mapping — one
+    # concrete Ledger row per adjustment type (source of truth on verify).
+    cess_ledger = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.none(), required=False, allow_null=True,
+    )
+    discount_ledger = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.none(), required=False, allow_null=True,
+    )
+    freight_ledger = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.none(), required=False, allow_null=True,
+    )
+    round_off_ledger = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.none(), required=False, allow_null=True,
+    )
+    tds_ledger = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.none(), required=False, allow_null=True,
+    )
+    cess_ledger_name = serializers.CharField(source='cess_ledger.name', read_only=True)
+    discount_ledger_name = serializers.CharField(source='discount_ledger.name', read_only=True)
+    freight_ledger_name = serializers.CharField(source='freight_ledger.name', read_only=True)
+    round_off_ledger_name = serializers.CharField(source='round_off_ledger.name', read_only=True)
+    tds_ledger_name = serializers.CharField(source='tds_ledger.name', read_only=True)
+
     # Read-only fields for displaying parent ledger names in response
     igst_parent_names = serializers.SerializerMethodField()
     cgst_parent_names = serializers.SerializerMethodField()
@@ -141,6 +164,21 @@ class TallyConfigSerializer(serializers.ModelSerializer):
             if field_name in self.fields:
                 self.fields[field_name].queryset = org_queryset
 
+        # New adjustment FKs pick from the org's full Chart of Accounts.
+        org = None
+        if self.instance and hasattr(self.instance, 'organization'):
+            org = self.instance.organization
+        elif self.context.get('organization'):
+            org = self.context['organization']
+        elif hasattr(self, 'context') and 'request' in self.context:
+            request = self.context['request']
+            org = getattr(getattr(request, 'user', None), 'organization', None)
+        ledger_qs = Ledger.objects.filter(organization=org) if org is not None else Ledger.objects.none()
+        for field_name in ('cess_ledger', 'discount_ledger', 'freight_ledger',
+                           'round_off_ledger', 'tds_ledger'):
+            if field_name in self.fields:
+                self.fields[field_name].queryset = ledger_qs
+
     class Meta:
         model = TallyConfig
         fields = [
@@ -151,6 +189,10 @@ class TallyConfigSerializer(serializers.ModelSerializer):
             'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents',
             'tds_parents', 'payment_parents',
             'round_off_parents', 'cess_parents', 'discount_parents', 'freight_parents',
+            # Direct Ledger FKs for Additional Adjustments Mapping
+            'cess_ledger', 'discount_ledger', 'freight_ledger', 'round_off_ledger', 'tds_ledger',
+            'cess_ledger_name', 'discount_ledger_name', 'freight_ledger_name',
+            'round_off_ledger_name', 'tds_ledger_name',
             # Read-only name fields for output
             'igst_parent_names', 'cgst_parent_names', 'sgst_parent_names',
             'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names',
@@ -161,7 +203,9 @@ class TallyConfigSerializer(serializers.ModelSerializer):
                            'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names',
                            'tds_parent_names', 'payment_parent_names',
                            'round_off_parent_names', 'cess_parent_names', 'discount_parent_names',
-                           'freight_parent_names']
+                           'freight_parent_names',
+                           'cess_ledger_name', 'discount_ledger_name', 'freight_ledger_name',
+                           'round_off_ledger_name', 'tds_ledger_name']
 
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_igst_parent_names(self, obj) -> List[str]:

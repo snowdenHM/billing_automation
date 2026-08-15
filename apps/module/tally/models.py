@@ -309,6 +309,49 @@ class TallyConfig(BaseOrgModel):
         db_table='tally_config_freight_parents'
     )
 
+    # ------------------------------------------------------------------
+    # Additional Adjustments Mapping — direct LEDGER pick per adjustment.
+    # The *_parents M2Ms above pick candidate PARENT ledgers; those are
+    # kept for backfill/import defaults. These FKs are what actually
+    # gets stamped onto a bill on verify / sync, chosen from every
+    # Ledger in the org (Chart of Accounts).
+    # ------------------------------------------------------------------
+    cess_ledger = models.ForeignKey(
+        'Ledger', on_delete=models.SET_NULL,
+        blank=True, null=True,
+        related_name="cess_tally_configs",
+        verbose_name="Cess ledger",
+        help_text="Specific ledger applied when a bill has Cess.",
+    )
+    discount_ledger = models.ForeignKey(
+        'Ledger', on_delete=models.SET_NULL,
+        blank=True, null=True,
+        related_name="discount_tally_configs",
+        verbose_name="Discount ledger",
+        help_text="Specific ledger applied when a bill has Discount.",
+    )
+    freight_ledger = models.ForeignKey(
+        'Ledger', on_delete=models.SET_NULL,
+        blank=True, null=True,
+        related_name="freight_tally_configs_direct",
+        verbose_name="Freight ledger",
+        help_text="Specific ledger applied when a bill has Freight Charges.",
+    )
+    round_off_ledger = models.ForeignKey(
+        'Ledger', on_delete=models.SET_NULL,
+        blank=True, null=True,
+        related_name="round_off_tally_configs",
+        verbose_name="Round Off ledger",
+        help_text="Specific ledger applied for Round Off entries.",
+    )
+    tds_ledger = models.ForeignKey(
+        'Ledger', on_delete=models.SET_NULL,
+        blank=True, null=True,
+        related_name="tds_tally_configs",
+        verbose_name="TDS ledger",
+        help_text="Specific ledger applied when TDS is deducted.",
+    )
+
     class Meta:
         verbose_name = "Tally Configuration"
         verbose_name_plural = "Tally Configurations"
