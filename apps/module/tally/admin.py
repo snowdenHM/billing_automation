@@ -293,7 +293,7 @@ class TallyVendorAnalyzedBillAdmin(BaseOrgAdmin):
         }),
         ('Round Off', {
             'fields': ('round_off', 'round_off_taxes'),
-            'description': 'Auto-computed during verify when |total − (subtotal + GST + cess + freight − discount)| < ₹1.'
+            'description': 'Auto-computed during verify when |total − (subtotal + GST + cess + discount + freight)| < ₹1.'
         }),
         ('Metadata', {
             'fields': ('organization', 'created_at'),

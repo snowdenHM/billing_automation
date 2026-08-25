@@ -434,8 +434,8 @@ _GST_EXTRACTION_PREAMBLE = """
        has exactly 6 digits (5 lakh 82 thousand 338), NOT 5 digits.
     2. When the invoice prints both a per-line amount AND a
        subtotal / grand total, ALWAYS verify that
-       Σ(line.amount) + (igst + cgst + sgst) + (freight + cess)
-                       − (discount) ≈ total to within ₹5. If it does
+       Σ(line.amount) + (igst + cgst + sgst) + (cess + discount
+                       + freight) ≈ total to within ₹5. If it does
        not, RE-READ the digits of every offending field. Prefer a
        higher digit count when in doubt — a missed leading digit
        (₹5,82,338 read as ₹82,338) is the #1 OCR failure mode on
@@ -463,7 +463,7 @@ _GST_EXTRACTION_PREAMBLE = """
 
 
 def check_ocr_totals_sanity(relevant_data):
-    """Cross-check Σ(items) + Σ(taxes) − discount vs the printed total.
+    """Cross-check Σ(items) + Σ(taxes) + adjustments vs the printed total.
 
     OCR frequently drops the leading digit of a 7-8 digit amount
     (client Corrections 14 + 24). If the extracted line-item total
@@ -503,11 +503,13 @@ def check_ocr_totals_sanity(relevant_data):
             + _f(relevant_data.get('cgst'))
             + _f(relevant_data.get('sgst'))
         )
+        # Every adjustment is signed and simply added — a discount that
+        # reduces the bill arrives as a negative amount.
         adjustments = (
             _f(relevant_data.get('cess'))
+            + _f(relevant_data.get('discount'))
             + _f(relevant_data.get('freight'))
             + _f(relevant_data.get('round_off'))
-            - _f(relevant_data.get('discount'))
         )
         computed = line_sum + tax_sum + adjustments
         printed = _f(relevant_data.get('total'))
@@ -607,7 +609,10 @@ def get_vendor_bill_prompt():
         "ROUND OFF VALUE (₹)", "Rounded Off", "R/O" — put that
         signed amount in ``round_off`` (may be negative).
       - If the invoice prints "Discount", "Trade Discount",
-        "Less: Discount" — put the amount (positive) in ``discount``.
+        "Less: Discount" — put the amount in ``discount`` as a SIGNED
+        value: a discount that reduces the bill is NEGATIVE
+        (e.g. "Less: Discount 82.00" → -82.00). Only use a positive
+        value if the invoice genuinely adds the amount to the total.
       - "Cess", "GST Cess" → ``cess``. "Freight", "Shipping",
         "Delivery Charges" → ``freight``.
       - If the field is absent on the invoice, return 0. Do NOT

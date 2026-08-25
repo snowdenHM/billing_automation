@@ -157,7 +157,7 @@ def process_analysis_data(bill, json_data, organization):
             logger.warning(f"Unexpected JSON data type: {type(json_data)}")
             raise Exception("Invalid JSON data format from OpenAI")
 
-        # OCR sanity — Σ(items) + Σ(taxes) − discount vs printed total.
+        # OCR sanity — Σ(items) + Σ(taxes) + adjustments vs printed total.
         # Frequent OCR failure mode: leading digit of a 7-8 digit amount
         # is missed. Stash the diagnosis on the JSON blob so the FE can
         # surface it on the verify screen (Corrections 14 + 24).
@@ -2764,10 +2764,10 @@ def prepare_sync_data(analyzed_bill, organization):
     # No ``rate`` for these — they are flat values, classified by the
     # ledger name on the Tally side.
     #
-    # ``discount`` is emitted with a NEGATED amount (e.g. -100.00) so
-    # the Tally side can post it directly without flipping the sign in
-    # TDL. The model stores discount as a positive number representing
-    # "amount taken off the bill", so the wire format inverts it.
+    # ``discount`` is emitted exactly as stored. It used to be negated here
+    # because the model kept it as a positive "amount taken off the bill";
+    # discount is now signed like ``round_off`` (a reduction is already
+    # negative), so inverting it again would post it the wrong way round.
     # ------------------------------------------------------------------
     extras = (
         ("discount", analyzed_bill.discount, analyzed_bill.discount_taxes),
@@ -2781,8 +2781,6 @@ def prepare_sync_data(analyzed_bill, organization):
         amt = _money(amount)
         if amt == 0:
             continue
-        if tax_type == "discount":
-            amt = -amt
         ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(ledger) if ledger else "No Tax Ledger",

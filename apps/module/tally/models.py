@@ -598,9 +598,14 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
     def compute_round_off(self, save=True):
         """Recompute the round_off amount for this vendor bill.
 
-        Formula: subtotal(items) + igst + cgst + sgst + cess + freight - discount
-                 + round_off  ==  total
-        ⇒ round_off = total - (subtotal + igst + cgst + sgst + cess + freight - discount)
+        Formula: subtotal(items) + igst + cgst + sgst + cess + discount
+                 + freight + round_off  ==  total
+        ⇒ round_off = total - (subtotal + igst + cgst + sgst + cess + discount + freight)
+
+        ``discount`` is signed: a discount that reduces the bill is stored as a
+        negative amount, the same way ``round_off`` already is. It used to be
+        stored positive and subtracted here, which made the sign convention
+        differ from every other adjustment on the same bill.
 
         Only applied when |round_off| < ROUND_OFF_THRESHOLD (≤ ₹1). Beyond that
         the residual indicates an OCR or entry mismatch and round_off stays 0.
@@ -620,7 +625,7 @@ class TallyVendorAnalyzedBill(BaseOrgModel):
         discount = self.discount or _D("0")
         total = self.total or _D("0")
 
-        expected = subtotal + igst + cgst + sgst + cess + freight - discount
+        expected = subtotal + igst + cgst + sgst + cess + discount + freight
         diff = (total - expected).quantize(_D("0.01"))
 
         if abs(diff) < self.ROUND_OFF_THRESHOLD:
