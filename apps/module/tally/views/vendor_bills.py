@@ -2203,8 +2203,13 @@ def vendor_bill_sync(request, org_id):
     try:
         sync_data = get_structured_bill_data(analyzed_bill, organization)
 
+        # Reset the sync flags on every fresh attempt so the Tally
+        # Sync Status modal doesn't show a stale error from the previous
+        # try. Tally's callback will populate the message when it responds.
         bill.status = TallyVendorBill.BillStatus.SYNCED
-        bill.save(update_fields=['status'])
+        bill.tally_synced = False
+        bill.tally_sync_message = ""
+        bill.save(update_fields=['status', 'tally_synced', 'tally_sync_message'])
 
         # Compose a human-friendly status the FE surfaces:
         #   "pending_tally"  → BillMunshi has queued the bill; Tally has not

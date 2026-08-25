@@ -65,6 +65,15 @@ def get_tally_config(request, org_id):
         tally_config = (
             TallyConfig.objects.filter(organization=organization)
             .prefetch_related(*prefetch_fields)
+            .select_related(
+                *[
+                    f for f in (
+                        'cess_ledger', 'discount_ledger', 'freight_ledger',
+                        'round_off_ledger', 'tds_ledger',
+                    )
+                    if hasattr(TallyConfig, f)
+                ]
+            )
             .first()
         )
 
@@ -147,6 +156,32 @@ def create_or_update_tally_config(request, org_id):
                 parent_ledgers = ParentLedger.objects.filter(id__in=parent_ids, organization=organization)
                 getattr(tally_config, field).set(parent_ledgers)
 
+        # Direct adjustment-ledger FKs (added in migration 0040). Each
+        # accepts a single Ledger UUID scoped to this org, or null to
+        # clear. Skipped silently if the migration hasn't been applied.
+        from ..models import Ledger as _Ledger
+        for field in (
+            'cess_ledger', 'discount_ledger', 'freight_ledger',
+            'round_off_ledger', 'tds_ledger',
+        ):
+            if field not in request.data:
+                continue
+            if not hasattr(TallyConfig, field):
+                continue
+            ledger_id = request.data.get(field)
+            if not ledger_id:
+                setattr(tally_config, field, None)
+                continue
+            try:
+                ledger = _Ledger.objects.get(id=ledger_id, organization=organization)
+                setattr(tally_config, field, ledger)
+            except _Ledger.DoesNotExist:
+                logger.warning(
+                    "Ignoring %s=%s — no such Ledger in org %s",
+                    field, ledger_id, organization.id,
+                )
+        tally_config.save()
+
         tally_config.refresh_from_db()
 
         context = {"request": request, "organization": organization}
@@ -201,6 +236,15 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
         return (
             TallyConfig.objects.filter(organization=organization)
             .prefetch_related(*prefetch_fields)
+            .select_related(
+                *[
+                    f for f in (
+                        'cess_ledger', 'discount_ledger', 'freight_ledger',
+                        'round_off_ledger', 'tds_ledger',
+                    )
+                    if hasattr(TallyConfig, f)
+                ]
+            )
             .order_by("-id")
         )
 

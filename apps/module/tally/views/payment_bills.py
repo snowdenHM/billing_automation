@@ -88,6 +88,32 @@ _BLANK_LEDGER_SENTINELS = frozenset({
 })
 
 
+def _classify_payment_mode(ledger):
+    """Return the plain-terms payment-mode category for a picked ledger.
+
+    Payment vouchers only care about Bank vs Cash at the abstract level
+    (the specific ledger is inside ``<ledgers>``). Derived from the
+    ledger's parent-group name:
+      * parent contains ``bank``          → ``"Bank"``
+      * parent contains ``cash``          → ``"Cash"``
+      * anything else / no parent / null  → raw parent name, or ``""``
+    """
+    if ledger is None:
+        return ""
+    parent = getattr(ledger, 'parent', None)
+    if parent is None:
+        return ""
+    # ``ParentLedger`` stores the group name on its own ``.parent`` attr
+    # (yes, awkward naming). Fall back to str() for any other shape.
+    parent_name = getattr(parent, 'parent', None) or str(parent)
+    lowered = (parent_name or "").lower()
+    if 'bank' in lowered:
+        return "Bank"
+    if 'cash' in lowered:
+        return "Cash"
+    return parent_name or ""
+
+
 def _is_blank_payment_ledger(value):
     return not value or str(value).strip().lower() in _BLANK_LEDGER_SENTINELS
 
@@ -1743,8 +1769,12 @@ def payment_bill_sync(request, org_id):
     try:
         sync_data = get_structured_payment_bill_data(analyzed_bill, organization)
 
+        # Reset sync flags on every fresh attempt so the Tally Sync Status
+        # modal doesn't show a stale error from the previous try.
         bill.status = TallyPaymentBill.BillStatus.SYNCED
-        bill.save(update_fields=['status'])
+        bill.tally_synced = False
+        bill.tally_sync_message = ""
+        bill.save(update_fields=['status', 'tally_synced', 'tally_sync_message'])
 
         tally_state = "confirmed" if bill.tally_synced else "pending_tally"
 
@@ -2111,6 +2141,13 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         # Client Correction 26: never leak the picked vendor's name/GST
         # into the sync XML — the tag is always emitted empty.
         "vendor": "",
+        # Top-level Payment Mode — the CATEGORY of the payment, in
+        # plain terms: "Bank" or "Cash". Derived from the picked
+        # ledger's parent group (e.g. "Bank Accounts" -> "Bank",
+        # "Cash-in-Hand" -> "Cash"). The specific ledger name (HDFC
+        # Bank, ICICI Bank, Petty Cash …) stays inside ``ledgers`` on
+        # the DEBIT row so Tally still knows which account to post to.
+        "payment_mode": _classify_payment_mode(payment_mode_ledger),
         "company": company_name,
         "total_amount": _fmt_money(analyzed_bill.total),
         "notes": notes_message,
