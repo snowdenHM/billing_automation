@@ -2394,6 +2394,51 @@ def get_client_ip(request):
     return request.META.get("REMOTE_ADDR")
 
 
+def _ledger_parent_name(ledger):
+    """Return the parent-group name of a Ledger (e.g. ``Sundry Creditors``,
+    ``Duties & Taxes``). Ledger.parent is a FK → ParentLedger, whose ``parent``
+    field carries the actual group name string. Safe on None / partial data —
+    returns ``""`` when anything is missing so the caller can decide whether
+    to emit an empty ``<parent>`` tag or a sensible default."""
+    if ledger is None:
+        return ""
+    parent = getattr(ledger, 'parent', None)
+    if parent is None:
+        return ""
+    return getattr(parent, 'parent', "") or ""
+
+
+def _resolve_stock_item(organization, name):
+    """Look up an existing ``StockItem`` by (organization, name). Returns None
+    when not found. Used to pull inline-master extras (``parent``, ``unit``,
+    ``gst_rate``, ``hsn_code``) into the voucher payload so the Tally TDL can
+    create the item on-the-fly if it doesn't already have it."""
+    if not name:
+        return None
+    from ..models import StockItem
+    try:
+        return StockItem.objects.filter(
+            organization=organization, name=name
+        ).first()
+    except Exception:
+        return None
+
+
+def _resolve_ledger_by_name(organization, name):
+    """Look up an existing ``Ledger`` by (organization, name). Returns None
+    when not found. Used to pull the parent-group name for purchase ledgers
+    that are referenced by name only inside the payload build."""
+    if not name:
+        return None
+    from ..models import Ledger
+    try:
+        return Ledger.objects.select_related('parent').filter(
+            organization=organization, name=name
+        ).first()
+    except Exception:
+        return None
+
+
 def _clean_tally_text(value):
     """Sanitize text for Tally XML sync: collapse newlines/tabs/carriage-returns
     to single spaces. Double-quotes pass through unchanged — inside XML element
@@ -2475,6 +2520,11 @@ def _sync_data_to_xml(bills_data):
         ledger_elem = ET.SubElement(parent_elem, "ledger")
         _set_scalar(ledger_elem, "amount", entry.get("amount"))
         _set_scalar(ledger_elem, "ledger", entry.get("ledger"))
+        # Inline-master extra — parent group name. Tally uses it only when
+        # the ledger doesn't already exist (create it under this group);
+        # ignored when the ledger is already present.
+        if entry.get("parent"):
+            _set_scalar(ledger_elem, "parent", entry["parent"])
         if entry.get("rate"):
             _set_scalar(ledger_elem, "rate", entry["rate"])
         if entry.get("debit_or_credit"):
@@ -2615,23 +2665,40 @@ def prepare_sync_data(analyzed_bill, organization):
     # purchase ledger so a mixed-rate bill (some 18%, some 28% items)
     # still emits ONE <ledger> row per distinct purchase-ledger.
     # Only used when ``use_inventory=False``.
-    purchase_rollup = {}  # {purchase_ledger_name: Decimal_total}
+    purchase_rollup = {}  # {purchase_ledger_name: {"total": Decimal, "ledger": Ledger|None}}
 
     for line in source_lines:
         # The "purchase ledger" is the dr-side ledger that the bill amount
         # is booked against (e.g. ``PURCHASE ACCOUNTS @18%``). It is the
         # FK named ``taxes`` on the product model.
+        purchase_ledger_obj = getattr(line, 'taxes', None)
         purchase_ledger_name = (
-            str(line.taxes) if getattr(line, 'taxes', None) else "No Purchase Ledger"
+            str(purchase_ledger_obj) if purchase_ledger_obj else "No Purchase Ledger"
         )
 
         if use_inventory:
             # Item-invoice mode — per-item <item> rows with the purchase
-            # ledger attached to each one.
+            # ledger attached to each one. Inline-master extras (parent,
+            # unit, gst_rate, hsn_code) come from the org's StockItem row
+            # (created by the quick-add flow); Tally uses them only when
+            # the stock item doesn't already exist on its side.
+            item_name = _clean_tally_text(getattr(line, 'item_name', '')) or ""
+            stock_item = _resolve_stock_item(organization, item_name)
             items_payload.append({
-                "name": _clean_tally_text(getattr(line, 'item_name', '')) or "",
+                "name": item_name,
+                "parent": (getattr(stock_item, 'parent', None) or "Primary"),
+                "unit": (getattr(stock_item, 'unit', None) or "Nos"),
+                "gst_rate": (
+                    getattr(stock_item, 'gst_rate', None)
+                    or getattr(line, 'product_gst', None)
+                    or ""
+                ),
+                "hsn_code": (getattr(stock_item, 'hsn_code', None) or ""),
                 "details": _clean_tally_text(getattr(line, 'item_details', '')) or "",
                 "purchase_ledger": purchase_ledger_name,
+                "purchase_ledger_parent": (
+                    _ledger_parent_name(purchase_ledger_obj) or "Purchase Accounts"
+                ),
                 "price": _fmt_money(getattr(line, 'price', 0)),
                 "quantity": int(getattr(line, 'quantity', 0) or 0),
                 "amount": _fmt_money(getattr(line, 'amount', 0)),
@@ -2639,10 +2706,15 @@ def prepare_sync_data(analyzed_bill, organization):
         else:
             # Accounting-invoice mode — collapse into a purchase-ledger
             # rollup that will be prepended to the ``ledgers_payload`` below.
-            purchase_rollup[purchase_ledger_name] = (
-                purchase_rollup.get(purchase_ledger_name, Decimal('0.00'))
-                + _money(getattr(line, 'amount', 0))
+            slot = purchase_rollup.setdefault(
+                purchase_ledger_name,
+                {"total": Decimal('0.00'), "ledger": purchase_ledger_obj},
             )
+            slot["total"] += _money(getattr(line, 'amount', 0))
+            # Keep the first non-null ledger obj we saw (all lines with the
+            # same purchase-ledger name necessarily share the FK).
+            if slot["ledger"] is None and purchase_ledger_obj is not None:
+                slot["ledger"] = purchase_ledger_obj
 
         # Capture line-level tax info for the grouping pass below.
         # Per-product GST ledger FKs only exist on individual products,
@@ -2683,6 +2755,7 @@ def prepare_sync_data(analyzed_bill, organization):
                 "type": tax_type,
                 "amount": Decimal('0.00'),
                 "ledger": ledger_name,
+                "parent": _ledger_parent_name(ledger) or "Duties & Taxes",
                 "rates": [],  # collected for `rate` attribute
             }
         return gst_buckets[key]
@@ -2734,7 +2807,9 @@ def prepare_sync_data(analyzed_bill, organization):
     # operator can fix the mapping.
     if not use_inventory:
         _BLANK = {"", "no purchase ledger", "no tax ledger", "none"}
-        for pledger_name, total in purchase_rollup.items():
+        for pledger_name, slot in purchase_rollup.items():
+            total = slot["total"]
+            pledger_obj = slot["ledger"]
             if total == 0:
                 continue
             if (pledger_name or "").strip().lower() in _BLANK:
@@ -2747,6 +2822,9 @@ def prepare_sync_data(analyzed_bill, organization):
             ledgers_payload.append({
                 "amount": _fmt_money(total),
                 "ledger": pledger_name,
+                "parent": (
+                    _ledger_parent_name(pledger_obj) or "Purchase Accounts"
+                ),
             })
 
     for entry in sorted_gst_buckets:
@@ -2760,6 +2838,7 @@ def prepare_sync_data(analyzed_bill, organization):
         ledgers_payload.append({
             "amount": _fmt_money(entry["amount"]),
             "ledger": entry["ledger"],
+            "parent": entry.get("parent") or "Duties & Taxes",
             "rate": rate_str,
         })
 
@@ -2782,6 +2861,14 @@ def prepare_sync_data(analyzed_bill, organization):
          getattr(analyzed_bill, 'round_off', 0),
          getattr(analyzed_bill, 'round_off_taxes', None)),
     )
+    # Default parent groups for extras when the ledger has none set
+    # (Tally uses these only if the ledger doesn't already exist).
+    _extras_default_parent = {
+        "discount": "Indirect Expenses",
+        "cess": "Duties & Taxes",
+        "freight": "Indirect Expenses",
+        "round_off": "Indirect Expenses",
+    }
     for tax_type, amount, ledger in extras:
         amt = _money(amount)
         if amt == 0:
@@ -2789,6 +2876,10 @@ def prepare_sync_data(analyzed_bill, organization):
         ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(ledger) if ledger else "No Tax Ledger",
+            "parent": (
+                _ledger_parent_name(ledger)
+                or _extras_default_parent.get(tax_type, "Indirect Expenses")
+            ),
         })
 
     bill_data = {
@@ -2805,6 +2896,15 @@ def prepare_sync_data(analyzed_bill, organization):
         # key — kept as an alias so an older TDL parsing that value
         # doesn't break during rollout.
         "vendor": vendor_name,
+        # Inline-master extras for the vendor ledger — Tally uses them
+        # only when it doesn't already have a ledger by ``<vendor>`` name;
+        # ignored when the vendor already exists.
+        "vendor_gst_in": (
+            getattr(vendor_ledger, 'gst_in', None) or ""
+        ) if vendor_ledger else "",
+        "vendor_parent": (
+            _ledger_parent_name(vendor_ledger) or "Sundry Creditors"
+        ),
         "vendor_name": vendor_name,
         "company": company_name,
         "total_amount": _fmt_money(analyzed_bill.total),

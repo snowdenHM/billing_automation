@@ -54,7 +54,7 @@ from ..models import (
     TallyConfig,
     TallyVendorBill
 )
-from .vendor_bills import _sync_data_to_xml, _clean_tally_text
+from .vendor_bills import _sync_data_to_xml, _clean_tally_text, _ledger_parent_name
 from ..serializers import (
     TallyPaymentBillSerializer,
     TallyPaymentAnalyzedBillSerializer,
@@ -2051,9 +2051,19 @@ def prepare_payment_sync_data(analyzed_bill, organization):
     # The old "vendor" FK is no longer posted here — it's identification
     # only now (see module docstring / model comment).
     if payment_mode_ledger and _money(analyzed_bill.total) > 0:
+        # Parent-group default varies with the payment mode category so a
+        # newly-created ledger lands in the right Tally group.
+        _pm_parent = _ledger_parent_name(payment_mode_ledger)
+        if not _pm_parent:
+            _pm_parent = (
+                "Cash-in-Hand"
+                if _classify_payment_mode(payment_mode_ledger) == "Cash"
+                else "Bank Accounts"
+            )
         ledgers_payload.append({
             "amount": _fmt_money(analyzed_bill.total),
             "ledger": payment_mode_ledger.name or "Unknown Payment Mode",
+            "parent": _pm_parent,
             "debit_or_credit": "debit",
         })
 
@@ -2078,6 +2088,7 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(coa),
+            "parent": _ledger_parent_name(coa) or "Sundry Creditors",
             "debit_or_credit": "credit",
         })
     if missing_coa:
@@ -2105,6 +2116,7 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(gst_line.ledger),
+            "parent": _ledger_parent_name(gst_line.ledger) or "Duties & Taxes",
             "rate": gst_line.rate or "",
             "debit_or_credit": _dc(gst_line.debit_or_credit),
         })
@@ -2119,6 +2131,11 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         ("round_off", analyzed_bill.round_off, analyzed_bill.round_off_taxes,
          analyzed_bill.round_off_debit_or_credit),
     )
+    _extras_default_parent = {
+        "tds": "Current Liabilities",
+        "other_adjustment": "Indirect Expenses",
+        "round_off": "Indirect Expenses",
+    }
     for _tax_type, amount, ledger, dc in extras:
         amt = _money(amount)
         if amt == 0 or not ledger:
@@ -2126,6 +2143,10 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(ledger),
+            "parent": (
+                _ledger_parent_name(ledger)
+                or _extras_default_parent.get(_tax_type, "Indirect Expenses")
+            ),
             "debit_or_credit": _dc(dc),
         })
 
