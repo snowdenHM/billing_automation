@@ -243,6 +243,12 @@ def organization_tally_data(request, org_id):
                 "masters": f"{base_url}masters/",
                 "vendor_bills_sync_external": f"{base_url}vendor-bills/sync_bills/",
                 "expense_bills_sync_external": f"{base_url}expense-bills/sync_bills/",
+                "payment_vouchers_sync_external": f"{base_url}payment-vouchers/sync_bills/",
+                "bill_status_callback": f"{base_url}bills/tally_status/",
+                # Tally TCP bridge posts here every 10 minutes; response
+                # is used purely to keep the Account Info health badge
+                # green. Documented for the TDL developer to configure.
+                "health_ping_url": f"{base_url}health/ping/",
                 "api_key": f"Authorization:Api-Key {api_key_value}",
                 "tcp_download_url": tcp_download_url,
                 "tcp_version": tcp_version,

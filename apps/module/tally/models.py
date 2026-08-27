@@ -352,6 +352,19 @@ class TallyConfig(BaseOrgModel):
         help_text="Specific ledger applied when TDS is deducted.",
     )
 
+    # ------------------------------------------------------------------
+    # TCP bridge health check. The Tally TDL POSTs to
+    # ``/api/v1/tally/org/<id>/health/ping/`` every 10 minutes; each hit
+    # stamps ``last_tally_ping_at``. The frontend polls the paired
+    # ``GET /health/`` endpoint and shows a green/red badge based on how
+    # long ago the last ping arrived.
+    # ------------------------------------------------------------------
+    last_tally_ping_at = models.DateTimeField(
+        blank=True, null=True,
+        verbose_name="Last Tally TCP ping",
+        help_text="Timestamp of the last health ping received from the Tally TCP bridge.",
+    )
+
     class Meta:
         verbose_name = "Tally Configuration"
         verbose_name_plural = "Tally Configurations"

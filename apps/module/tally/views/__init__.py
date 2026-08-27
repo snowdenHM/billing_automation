@@ -32,6 +32,7 @@ from .master import MasterAPIView
 
 # Bill sync status
 from .bill_status import update_bill_tally_sync_status
+from .health import tally_health_ping, tally_health_status
 
 # Vendor bill views
 from .vendor_bills import (

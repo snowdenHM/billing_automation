@@ -15,6 +15,9 @@ from .views import (
     MasterAPIView,
     # Bill status
     update_bill_tally_sync_status,
+    # Tally TCP health-check (ping from bridge, status for FE badge)
+    tally_health_ping,
+    tally_health_status,
     # Vendor bills
     vendor_bills_list,
     vendor_bills_upload,
@@ -165,6 +168,12 @@ urlpatterns = [
 
         # Bill tally sync status update endpoint
         path('bills/tally_status/', update_bill_tally_sync_status, name='update-bill-tally-sync-status'),
+
+        # Tally TCP bridge health check. The bridge POSTs to /health/ping/
+        # every 10 minutes with the org API key; the FE polls /health/ to
+        # render a green/red connectivity badge on Account Info.
+        path('health/', tally_health_status, name='tally-health-status'),
+        path('health/ping/', tally_health_ping, name='tally-health-ping'),
 
         # Trash — recoverable delete across every Tally bill type.
         # `empty/` is declared before the <slug> route so it can never be
