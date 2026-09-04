@@ -10,6 +10,14 @@ class ParentLedgerSerializer(serializers.ModelSerializer):
 
 
 class LedgerSerializer(serializers.ModelSerializer):
+    # Declared explicitly rather than left to DRF's automatic relational
+    # introspection. Mirrors the model exactly (``parent`` is a required,
+    # non-null FK to ParentLedger) and keeps this serializer independent
+    # of ``model_meta`` field-info introspection — see
+    # apps/common/drf_patches.py for the bug that made that matter.
+    parent = serializers.PrimaryKeyRelatedField(
+        queryset=ParentLedger.objects.all(),
+    )
     parent_name = serializers.CharField(source='parent.parent', read_only=True)
 
     class Meta:
