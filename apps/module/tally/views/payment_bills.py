@@ -1983,7 +1983,10 @@ def prepare_payment_sync_data(analyzed_bill, organization):
     # Base URL is configurable so staging/self-hosted deployments
     # don't leak the production domain into Tally narration.
     _base = getattr(settings, "SITE_URL", "https://billmunshi.com").rstrip("/")
-    bill_url = f"{_base}/tally/payment-bill/{analyzed_bill.selected_bill.id}"
+    # Must match the frontend route (App.jsx: "tally/payment-voucher/:id").
+    # This was "/tally/payment-bill/", which 404'd for anyone clicking the
+    # permalink out of a Tally narration.
+    bill_url = f"{_base}/tally/payment-voucher/{analyzed_bill.selected_bill.id}"
     notes_message = f"Payment voucher entered via BillMunshi {bill_url}"
 
     Q2 = Decimal('0.01')

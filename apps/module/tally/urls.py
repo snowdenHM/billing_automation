@@ -166,6 +166,14 @@ urlpatterns = [
         path('payment-vouchers/sync_bills/', payment_bills_sync_list, name='payment-vouchers-sync-list'),
         path('payment-vouchers/sync_external/', payment_bill_sync_external, name='payment-voucher-sync-external'),
 
+        # Alias for the TCP-facing pull endpoint. The Tally connector was
+        # built against `payment-bills/sync_bills/` (the integration doc
+        # shipped that path while the route was registered under
+        # `payment-vouchers/`, so the bridge got a 404). Both paths are
+        # served so the connector keeps working; `payment-vouchers/` above
+        # stays canonical for the frontend.
+        path('payment-bills/sync_bills/', payment_bills_sync_list, name='payment-bills-sync-list-alias'),
+
         # Bill tally sync status update endpoint
         path('bills/tally_status/', update_bill_tally_sync_status, name='update-bill-tally-sync-status'),
 
