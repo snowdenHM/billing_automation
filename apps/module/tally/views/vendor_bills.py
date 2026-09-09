@@ -2558,7 +2558,49 @@ def _sync_data_to_xml(bills_data):
     # ``xml_declaration=False`` drops the ``<?xml version='1.0' encoding='utf-8'?>``
     # prolog. Tally's TDL/TCP parser doesn't need it, and the client asked for
     # the response to start directly with ``<data>``.
-    return ET.tostring(root, encoding='utf-8', xml_declaration=False).decode('utf-8')
+    payload = ET.tostring(root, encoding='utf-8', xml_declaration=False).decode('utf-8')
+    return _emit_literal_ampersands(payload)
+
+
+# ---------------------------------------------------------------------------
+# Ampersand handling for the Tally TCP payload
+# ---------------------------------------------------------------------------
+# ``&`` is legal in XML *only* as the entity ``&amp;``, and that is what
+# ElementTree emits. A conformant parser decodes it straight back to ``&``,
+# and Tally's own XML export writes group names the same way
+# (``Duties &amp; Taxes``).
+#
+# The connector on the Tally side, however, lifts values out of the response
+# with plain string operations rather than an XML parser — it takes whatever
+# sits between ``<parent>`` and ``</parent>`` verbatim. That hands it the
+# literal text ``Duties &amp; Taxes``, which matches no Tally group, so the
+# master lookup fails (and inline-master creation would make a bogus group).
+#
+# Client decision: emit the raw ``&``. Trade-off, stated plainly:
+#   * The response is no longer well-formed XML. Anything that parses it
+#     strictly (ElementTree, lxml, browsers, most HTTP tooling) will reject
+#     the document.
+#   * Only the TCP bridge consumes this payload, and it does not parse
+#     strictly — so in practice nothing else is affected today.
+#   * Flip ``EMIT_LITERAL_AMPERSAND`` back to ``False`` to restore standards
+#     -compliant output the moment the connector switches to a real parser.
+#
+# ``<`` and ``>`` stay escaped: those genuinely break even lenient tag
+# scanning, because the bridge finds tag boundaries by looking for them.
+EMIT_LITERAL_AMPERSAND = True
+
+
+def _emit_literal_ampersands(xml_text):
+    """Turn ``&amp;`` back into a bare ``&`` in the serialized payload.
+
+    Deliberately narrow: only the ``&amp;`` entity is reverted, so ``&lt;``
+    and ``&gt;`` keep protecting the tag structure. A value that literally
+    contained the seven characters ``&amp;`` would round-trip differently
+    after this, which is not a case that arises in Tally master names.
+    """
+    if not EMIT_LITERAL_AMPERSAND:
+        return xml_text
+    return xml_text.replace('&amp;', '&')
 
 
 def prepare_sync_data(analyzed_bill, organization):
