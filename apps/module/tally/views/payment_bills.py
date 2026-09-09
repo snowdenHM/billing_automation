@@ -1641,7 +1641,7 @@ def get_structured_payment_bill_data(analyzed_bill, organization):
             "company": vendor_ledger.company if vendor_ledger and vendor_ledger.company else "",
         },
         # Bank/Cash ledger the payment is made through (Correction 26).
-        # Emitted as the DEBIT entry in the sync XML.
+        # Emitted as the Bank/Cash posting in the sync XML.
         "payment_mode": {
             "id": str(payment_mode_ledger.id) if payment_mode_ledger else None,
             "name": payment_mode_ledger.name if payment_mode_ledger and payment_mode_ledger.name else "",
@@ -1754,7 +1754,7 @@ def payment_bill_sync(request, org_id):
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     # Payment Mode (the actual Bank/Cash ledger) is required too — the
-    # sync XML posts its DEBIT entry using this ledger (Correction 26).
+    # sync XML posts its Bank/Cash entry using this ledger (Correction 26).
     if analyzed_bill.payment_mode is None:
         return Response({
             'error': 'Payment Mode Not Selected',
@@ -1952,25 +1952,39 @@ def prepare_payment_sync_data(analyzed_bill, organization):
           "notes": str,
           "ledgers": [
             # Every posting that hits a Tally ledger, flat list.
-            # Each entry: amount, ledger (name), debit_or_credit.
+            # Each entry: amount, ledger (name), parent, debit_or_credit.
             # GST entries additionally carry "rate" for cross-check.
-            {"amount": "54500.00", "ledger": "HDFC Bank",
-             "debit_or_credit": "debit"},
-            {"amount": "4500.00", "ledger": "CGST (ITC) @ 9%", "rate": "18%",
-             "debit_or_credit": "debit"},
+            #
+            # Expense + GST are DEBITED, the Bank/Cash ledger is CREDITED
+            # (money leaves the account). Debits and credits must match —
+            # 50000 + 4500 = 54500. Every value below comes from what the
+            # verify screen stored on the bill; none of it is hardcoded.
             {"amount": "50000.00", "ledger": "Office Rent",
-             "debit_or_credit": "credit"},
+             "parent": "Indirect Expenses", "debit_or_credit": "debit"},
+            {"amount": "4500.00", "ledger": "CGST (ITC) @ 9%", "rate": "18%",
+             "parent": "Duties & Taxes", "debit_or_credit": "debit"},
+            {"amount": "54500.00", "ledger": "HDFC Bank",
+             "parent": "Bank Accounts", "debit_or_credit": "credit"},
             ...
           ]
         }
 
     Client Correction 26: the picked "Vendor" ledger is identification
     only and its name/GST is deliberately NOT sent — ``<vendor>`` is
-    always an empty string. The Payment Mode ledger (the actual
-    Bank/Cash account) is posted as a single DEBIT entry equal to
-    ``analyzed_bill.total``, and every expense/payment line is posted as
-    a CREDIT entry — the reverse of a purchase-side voucher, since a
-    Payment voucher debits the bank and credits the expense/vendor.
+    always an empty string.
+
+    DR/CR is taken from what the verify screen stored, never hardcoded:
+
+    * Payment Mode row (the Bank/Cash account, for ``analyzed_bill.total``)
+      uses ``vendor_debit_or_credit`` — the "Amount Paid" row's type,
+      which defaults to CREDIT (money leaves the bank).
+    * Expense lines use each line's own ``debit_or_credit`` (default DEBIT).
+    * GST lines and the TDS / other-adjustment / round-off extras use
+      their own stored values.
+
+    The resulting payload is checked for DR/CR balance before it is
+    returned; an unbalanced voucher raises ``ValueError`` rather than
+    shipping a payload Tally will reject.
 
     Zero-amount entries are dropped. ``round_off`` may be negative.
     """
@@ -2047,12 +2061,17 @@ def prepare_payment_sync_data(analyzed_bill, organization):
     # ------------------------------------------------------------------
     ledgers_payload = []
 
-    # Payment Mode — the Bank/Cash ledger the payment is made through.
-    # ALWAYS a DEBIT entry for ``analyzed_bill.total`` (Correction 26):
-    # the client wants the bank ledger debited and the expense/vendor
-    # side credited, which is the reverse of the vendor/purchase voucher.
-    # The old "vendor" FK is no longer posted here — it's identification
-    # only now (see module docstring / model comment).
+    # Payment Mode — the Bank/Cash ledger the payment is made through,
+    # posted for ``analyzed_bill.total``.
+    #
+    # DR/CR comes from ``vendor_debit_or_credit`` (the "Amount Paid" row's
+    # type on the verify screen, defaulting to CREDIT) — NOT hardcoded.
+    # An earlier revision pinned this row to "debit" and every expense
+    # line to "credit", which inverted the whole voucher AND left it
+    # unbalanced whenever GST was present: GST rows kept their own stored
+    # DR/CR ("debit"), so a ₹45,000 expense + ₹8,100 IGST voucher emitted
+    # ₹61,100 of debits against ₹45,000 of credits and Tally refused it.
+    # The screen already stores the correct, balanced sides — use them.
     if payment_mode_ledger and _money(analyzed_bill.total) > 0:
         # Parent-group default varies with the payment mode category so a
         # newly-created ledger lands in the right Tally group.
@@ -2067,13 +2086,14 @@ def prepare_payment_sync_data(analyzed_bill, organization):
             "amount": _fmt_money(analyzed_bill.total),
             "ledger": payment_mode_ledger.name or "Unknown Payment Mode",
             "parent": _pm_parent,
-            "debit_or_credit": "debit",
+            "debit_or_credit": _dc(
+                analyzed_bill.vendor_debit_or_credit or "credit"
+            ),
         })
 
-    # Payment item lines — booked against the chart-of-accounts ledger.
-    # ALWAYS a CREDIT entry (Correction 26) regardless of the line's own
-    # stored ``debit_or_credit`` — the Payment Mode debit above is the
-    # only debit side of the voucher. A row with a real amount but no
+    # Payment item lines — booked against the chart-of-accounts ledger
+    # using the line's own stored DR/CR (the "Type" column on the verify
+    # screen; expenses default to DEBIT). A row with a real amount but no
     # COA would silently disappear from the voucher and leave DR/CR out
     # of balance in Tally, so refuse to build a partial payload — the
     # caller must fix the missing COA before sync.
@@ -2091,8 +2111,8 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(coa),
-            "parent": _ledger_parent_name(coa) or "Sundry Creditors",
-            "debit_or_credit": "credit",
+            "parent": _ledger_parent_name(coa) or "Indirect Expenses",
+            "debit_or_credit": _dc(getattr(line, 'debit_or_credit', 'debit')),
         })
     if missing_coa:
         raise ValueError(
@@ -2152,6 +2172,30 @@ def prepare_payment_sync_data(analyzed_bill, organization):
             ),
             "debit_or_credit": _dc(dc),
         })
+
+    # ------------------------------------------------------------------
+    # Balance guard. Tally rejects a voucher whose debits and credits do
+    # not match, and a silently-unbalanced payload is very hard to debug
+    # from the Tally side (the connector just reports a generic import
+    # failure). Fail loudly here instead — the caller turns this into a
+    # user-facing "fix the voucher before syncing" message, and the
+    # sync-list view skips the bill rather than shipping a bad payload.
+    # ------------------------------------------------------------------
+    _debits = sum(
+        _money(e["amount"]) for e in ledgers_payload
+        if e.get("debit_or_credit") == "debit"
+    )
+    _credits = sum(
+        _money(e["amount"]) for e in ledgers_payload
+        if e.get("debit_or_credit") == "credit"
+    )
+    if _debits != _credits:
+        raise ValueError(
+            "Cannot build payment sync payload — the voucher is unbalanced: "
+            f"debits ₹{_debits:.2f} vs credits ₹{_credits:.2f} "
+            f"(difference ₹{abs(_debits - _credits):.2f}). "
+            "Check the Dr/Cr type on the expense, GST and Amount Paid rows."
+        )
 
     bill_data = {
         # ``id`` is the BillMunshi bill UUID. The Tally TCP / TDL connector

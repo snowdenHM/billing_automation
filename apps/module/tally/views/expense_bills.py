@@ -1851,23 +1851,22 @@ def prepare_expense_sync_data(analyzed_bill, organization):
           "total_amount": "54500.00",
           "notes": str,
           "ledgers": [
-            # Every posting that hits a Tally ledger, flat list.
-            # Each entry: amount, ledger (name), debit_or_credit.
+            # Every posting that hits a Tally ledger, flat list. There is
+            # NO separate "items" key — expense lines are folded in here
+            # too, so the Journal voucher has one collection to iterate.
+            # Each entry: amount, ledger (name), parent, debit_or_credit.
             # GST entries additionally carry "rate" for cross-check.
+            #
+            # Debits and credits must match — 50000 + 4500 = 54500. Every
+            # DR/CR below comes from what the verify screen stored on the
+            # bill; none of it is hardcoded.
+            {"amount": "50000.00", "ledger": "RENT EXPENSE",
+             "parent": "Indirect Expenses", "debit_or_credit": "debit"},
             {"amount": "4500.00", "ledger": "CGST (ITC) @ 9%", "rate": "18%",
-             "debit_or_credit": "debit"},
-            {"amount": "5000.00", "ledger": "TDS on Rent @ 10%",
-             "debit_or_credit": "credit"},
+             "parent": "Duties & Taxes", "debit_or_credit": "debit"},
+            {"amount": "54500.00", "ledger": "BLUE DART EXPRESS LTD",
+             "parent": "Sundry Creditors", "debit_or_credit": "credit"},
             ...
-          ],
-          "items": [
-            # Pure journal-entry style — no price/quantity. Each line
-            # books an amount against a chart-of-accounts ledger with
-            # explicit DR/CR.
-            {"details": "Office rent — November",
-             "expense_ledger": "RENT EXPENSE",
-             "amount": "50000.00",
-             "debit_or_credit": "debit"},
           ]
         }
 

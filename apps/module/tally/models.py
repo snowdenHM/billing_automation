@@ -1469,7 +1469,8 @@ class TallyPaymentAnalyzedBill(BaseOrgModel):
     # NOT posted to the sync XML (no name/GST leak into <vendor>). The
     # actual Bank/Cash ledger the payment is made *through* lives here,
     # populated from a dropdown scoped to ``TallyConfig.payment_parents``.
-    # It is required for verify + sync and is emitted as the DEBIT entry
+    # It is required for verify + sync and is emitted as the Bank/Cash
+    # posting (Dr/Cr from ``vendor_debit_or_credit``, default CREDIT)
     # in ``prepare_payment_sync_data`` — see payment_bills.py.
     payment_mode = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True,
