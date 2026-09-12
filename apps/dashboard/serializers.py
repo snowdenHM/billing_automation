@@ -70,8 +70,34 @@ class ErrorResponseSerializer(serializers.Serializer):
     error = serializers.CharField()
 
 
-# Tally and Zoho share the same response shape — keep aliases for
-# drf-spectacular's extended_schema tag differentiation.
-TallyOverviewResponseSerializer = ZohoOverviewResponseSerializer
-TallyFunnelResponseSerializer = ZohoFunnelResponseSerializer
-TallyUsageResponseSerializer = ZohoUsageResponseSerializer
+# Tally responses are the Zoho shape plus payment-voucher keys (payment
+# vouchers only exist on the Tally side).
+class TallyFinancialSummarySerializer(FinancialSummarySerializer):
+    total_payment_amount = serializers.FloatField()
+
+
+class TallyRecentActivitySerializer(RecentActivitySerializer):
+    payment_bills_last_7_days = serializers.IntegerField()
+
+
+class TallyOverviewResponseSerializer(ZohoOverviewResponseSerializer):
+    payment_bills = BillStatsSerializer()
+    financial_summary = TallyFinancialSummarySerializer()
+    recent_activity = TallyRecentActivitySerializer()
+
+
+class TallyFunnelResponseSerializer(ZohoFunnelResponseSerializer):
+    payment_bills_funnel = FunnelDataSerializer()
+
+
+class TallyUsageStatsSerializer(UsageStatsSerializer):
+    payment_bills_uploaded = serializers.IntegerField()
+
+
+class TallyFileStatsSerializer(FileStatsSerializer):
+    total_payment_files = serializers.IntegerField()
+
+
+class TallyUsageResponseSerializer(ZohoUsageResponseSerializer):
+    usage_by_period = serializers.DictField(child=TallyUsageStatsSerializer())
+    file_statistics = TallyFileStatsSerializer()

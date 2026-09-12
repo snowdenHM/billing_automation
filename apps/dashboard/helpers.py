@@ -4,6 +4,11 @@ Generic dashboard helpers for building overview / funnel / usage responses.
 Both Tally and Zoho dashboard views share the same structure — only the
 models and timestamp field names differ.  This module provides thin
 factory helpers so each view file becomes a handful of one-liners.
+
+Payment vouchers exist only on the Tally side, so every builder takes an
+optional ``payment_bill_model``. When it is omitted (Zoho) the response
+keeps its original shape; when it is given the payment keys are added
+alongside the vendor / expense ones.
 """
 
 from datetime import timedelta
@@ -37,6 +42,22 @@ def _get_organization(org_id):
         return Organization.objects.get(id=org_id), None
     except Organization.DoesNotExist:
         return None, Response({"error": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+def _total_amount(analyzed_model, organization, amount_field, bill_field=None):
+    """Sum ``amount_field`` across an analysed-bill model for one org.
+
+    Summed in Python rather than with ``Sum()``: the Zoho analysed models
+    keep ``total`` in a CharField, which PostgreSQL cannot SUM.
+
+    ``bill_field`` names the FK from an analysed row to its uploaded bill.
+    When given, rows whose bill sits in the trash are skipped, so the amount
+    agrees with the counts beside it (those come from ``_visible``).
+    """
+    qs = analyzed_model.objects.filter(organization=organization)
+    if bill_field:
+        qs = qs.filter(**{f"{bill_field}__is_deleted": False})
+    return sum(float(value or 0) for value in qs.values_list(amount_field, flat=True))
 
 
 def _calculate_conversion_rates(funnel_data):
@@ -103,10 +124,18 @@ def build_overview_response(
     analyzed_vendor_model,
     analyzed_expense_model,
     counter_model,
+    payment_bill_model=None,
+    analyzed_payment_model=None,
+    analyzed_bill_field=None,
     amount_field="total",
     counter_label="vendor_count",
 ):
-    """Build the overview response dict used by both Tally and Zoho dashboards."""
+    """Build the overview response dict used by both Tally and Zoho dashboards.
+
+    ``analyzed_bill_field`` — FK from the analysed models to their uploaded
+    bill; pass it when the bills are trashable so trashed bills drop out of
+    the amounts as they already do from the counts.
+    """
     organization, err = _get_organization(org_id)
     if err:
         return err
@@ -114,19 +143,16 @@ def build_overview_response(
     vendor_qs = _visible(vendor_bill_model).filter(organization=organization)
     expense_qs = _visible(expense_bill_model).filter(organization=organization)
 
-    analyzed_vendor_qs = analyzed_vendor_model.objects.filter(organization=organization)
-    analyzed_expense_qs = analyzed_expense_model.objects.filter(organization=organization)
-
-    total_vendor = sum(
-        float(getattr(b, amount_field) or 0) for b in analyzed_vendor_qs
+    total_vendor = _total_amount(
+        analyzed_vendor_model, organization, amount_field, analyzed_bill_field,
     )
-    total_expense = sum(
-        float(getattr(b, amount_field) or 0) for b in analyzed_expense_qs
+    total_expense = _total_amount(
+        analyzed_expense_model, organization, amount_field, analyzed_bill_field,
     )
 
     week_ago = timezone.now() - timedelta(days=7)
 
-    return Response({
+    payload = {
         "vendor_bills": _bill_stats(vendor_qs),
         "expense_bills": _bill_stats(expense_qs),
         "financial_summary": {
@@ -139,19 +165,45 @@ def build_overview_response(
             "vendor_bills_last_7_days": vendor_qs.filter(created_at__gte=week_ago).count(),
             "expense_bills_last_7_days": expense_qs.filter(created_at__gte=week_ago).count(),
         },
-    })
+    }
+
+    if payment_bill_model is not None:
+        payment_qs = _visible(payment_bill_model).filter(organization=organization)
+        total_payment = _total_amount(
+            analyzed_payment_model, organization, amount_field, analyzed_bill_field,
+        )
+
+        payload["payment_bills"] = _bill_stats(payment_qs)
+        payload["financial_summary"]["total_payment_amount"] = total_payment
+        payload["financial_summary"]["combined_amount"] += total_payment
+        payload["recent_activity"]["payment_bills_last_7_days"] = (
+            payment_qs.filter(created_at__gte=week_ago).count()
+        )
+
+    return Response(payload)
 
 
-def build_funnel_response(org_id, *, vendor_bill_model, expense_bill_model):
+def build_funnel_response(
+    org_id,
+    *,
+    vendor_bill_model,
+    expense_bill_model,
+    payment_bill_model=None,
+):
     """Build the funnel response dict used by both Tally and Zoho dashboards."""
     organization, err = _get_organization(org_id)
     if err:
         return err
 
-    return Response({
+    payload = {
         "vendor_bills_funnel": _funnel(_visible(vendor_bill_model).filter(organization=organization)),
         "expense_bills_funnel": _funnel(_visible(expense_bill_model).filter(organization=organization)),
-    })
+    }
+    if payment_bill_model is not None:
+        payload["payment_bills_funnel"] = _funnel(
+            _visible(payment_bill_model).filter(organization=organization)
+        )
+    return Response(payload)
 
 
 def build_usage_response(
@@ -159,6 +211,7 @@ def build_usage_response(
     *,
     vendor_bill_model,
     expense_bill_model,
+    payment_bill_model=None,
     updated_at_field="updated_at",
 ):
     """Build the usage response dict used by both Tally and Zoho dashboards."""
@@ -166,35 +219,44 @@ def build_usage_response(
     if err:
         return err
 
+    # Keyed by the prefix each bill type contributes to the response
+    # (``vendor_bills_uploaded``, ``total_vendor_files`` …).
+    bill_models = {"vendor": vendor_bill_model, "expense": expense_bill_model}
+    if payment_bill_model is not None:
+        bill_models["payment"] = payment_bill_model
+    querysets = {
+        kind: _visible(model).filter(organization=organization)
+        for kind, model in bill_models.items()
+    }
+
     now = timezone.now()
     usage_stats = {}
     for period_name, days in [("today", 1), ("week", 7), ("month", 30), ("quarter", 90)]:
         start_date = now - timedelta(days=days)
-        vendor_qs = _visible(vendor_bill_model).filter(organization=organization)
-        expense_qs = _visible(expense_bill_model).filter(organization=organization)
-
         kw_analysed = {f"{updated_at_field}__gte": start_date}
-        usage_stats[period_name] = {
-            "vendor_bills_uploaded": vendor_qs.filter(created_at__gte=start_date).count(),
-            "expense_bills_uploaded": expense_qs.filter(created_at__gte=start_date).count(),
-            "bills_analysed": (
-                vendor_qs.filter(status__in=["Analysed", "Verified", "Synced"], **kw_analysed).count()
-                + expense_qs.filter(status__in=["Analysed", "Verified", "Synced"], **kw_analysed).count()
-            ),
-            "bills_synced": (
-                vendor_qs.filter(status="Synced", **kw_analysed).count()
-                + expense_qs.filter(status="Synced", **kw_analysed).count()
-            ),
-        }
 
-    vendor_files = _visible(vendor_bill_model).filter(organization=organization, file__isnull=False).count()
-    expense_files = _visible(expense_bill_model).filter(organization=organization, file__isnull=False).count()
+        period = {
+            f"{kind}_bills_uploaded": qs.filter(created_at__gte=start_date).count()
+            for kind, qs in querysets.items()
+        }
+        period["bills_analysed"] = sum(
+            qs.filter(status__in=["Analysed", "Verified", "Synced"], **kw_analysed).count()
+            for qs in querysets.values()
+        )
+        period["bills_synced"] = sum(
+            qs.filter(status="Synced", **kw_analysed).count()
+            for qs in querysets.values()
+        )
+        usage_stats[period_name] = period
+
+    file_counts = {
+        kind: qs.filter(file__isnull=False).count()
+        for kind, qs in querysets.items()
+    }
+    file_statistics = {f"total_{kind}_files": count for kind, count in file_counts.items()}
+    file_statistics["total_files"] = sum(file_counts.values())
 
     return Response({
         "usage_by_period": usage_stats,
-        "file_statistics": {
-            "total_vendor_files": vendor_files,
-            "total_expense_files": expense_files,
-            "total_files": vendor_files + expense_files,
-        },
+        "file_statistics": file_statistics,
     })
