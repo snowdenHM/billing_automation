@@ -2455,10 +2455,12 @@ def _sync_data_to_xml(bills_data):
     """Convert the list of sync-bill dicts built by ``prepare_sync_data`` into a
     Tally-compatible XML payload.
 
-    Schema (a single flat ``<ledgers>`` collection, each child a
-    ``<ledger>`` entry — Tally TDL just iterates):
+    Schema (``<ENVELOPE>`` root per Tally convention, then a single flat
+    ``<ledgers>`` collection, each child a ``<ledger>`` entry — Tally TDL
+    just iterates):
 
-        <data>
+        <ENVELOPE>
+         <data>
           <bill>
             <bill_no>MS/2025-26/3054</bill_no>
             <bill_date>20-12-2025</bill_date>
@@ -2492,7 +2494,8 @@ def _sync_data_to_xml(bills_data):
               </item>
             </items>
           </bill>
-        </data>
+         </data>
+        </ENVELOPE>
 
     Mixed-rate bills produce multiple ``<ledger>`` entries — one per
     distinct ledger. Tally TDL iterates and posts each as its own voucher
@@ -2530,7 +2533,19 @@ def _sync_data_to_xml(bills_data):
         if entry.get("debit_or_credit"):
             _set_scalar(ledger_elem, "debit_or_credit", entry["debit_or_credit"])
 
-    root = ET.Element('data')
+    # ``<ENVELOPE>`` is Tally's standard XML document root — every payload
+    # Tally itself imports or exports is wrapped in one, and its own exports
+    # add it automatically (which is why TDL report definitions carry
+    # ``Delete: XMLTag: "ENVELOPE"`` to strip it back off).
+    #
+    # NOTE FOR THE TDL SIDE: this changes ``XML Object Path``. The path is
+    # absolute from the document root, so the collections that used to read
+    #     XML Object Path : "data:1"
+    # must now read
+    #     XML Object Path : "ENVELOPE.data:1"
+    # Both have been updated in the connector sources.
+    envelope = ET.Element('ENVELOPE')
+    root = ET.SubElement(envelope, 'data')
     for bill in bills_data:
         bill_elem = ET.SubElement(root, 'bill')
         for key, value in bill.items():
@@ -2557,7 +2572,7 @@ def _sync_data_to_xml(bills_data):
 
     # ``xml_declaration=False`` drops the ``<?xml version='1.0' encoding='utf-8'?>``
     # prolog. Tally's TDL/TCP parser doesn't need it, and the client asked for
-    # the response to start directly with ``<data>``.
+    # the response to start directly with ``<ENVELOPE>``.
     #
     # ``short_empty_elements=False`` forces ``<hsn_code></hsn_code>`` instead of
     # ElementTree's default ``<hsn_code />`` for empty values. Both are valid
@@ -2568,7 +2583,7 @@ def _sync_data_to_xml(bills_data):
     # Empty values are common in this payload (blank GSTIN, missing HSN, a bill
     # with no tax ledgers), so always emitting the long form is the safer shape.
     payload = ET.tostring(
-        root, encoding='utf-8', xml_declaration=False, short_empty_elements=False
+        envelope, encoding='utf-8', xml_declaration=False, short_empty_elements=False
     ).decode('utf-8')
     return _emit_literal_ampersands(payload)
 
@@ -2581,22 +2596,27 @@ def _sync_data_to_xml(bills_data):
 # and Tally's own XML export writes group names the same way
 # (``Duties &amp; Taxes``).
 #
-# This was briefly flipped to emit a raw ``&``, on the theory that the Tally
-# connector lifted values out with plain string operations. Reading the TDL
-# source settled it — the connector declares:
+# Client decision (reaffirmed after review): emit the raw ``&``.
 #
-#     [Collection: purcapicol]
-#         Data Source     : HTTP XML : @@BMBaseURL+"vendor-bills/sync_bills/"
-#         XML Object Path : "data:1"
+# The concern was raised and is recorded here rather than re-argued. The
+# connector reads this payload with ``Data Source: HTTP XML``, which is
+# Tally's own XML reader, and a bare ``&`` is not well-formed XML. Tally's
+# XML handling is non-standard in both directions though — it also uses its
+# own ``&#4;`` prefix convention for reserved names — so it is entirely
+# plausible that it accepts a bare ``&`` where a strict parser would not.
+# The client has tested against the real Tally; that evidence outranks the
+# spec here.
 #
-# ``HTTP XML`` is Tally's own XML parser, not a string scan. A raw ``&``
-# makes the document malformed, so the parse fails and NO bill is imported —
-# not just the ones whose names contain ``&``. The entity form is required.
+# Consequences to keep in mind:
+#   * The response is NOT well-formed XML. Anything strict (ElementTree,
+#     lxml, browsers, most HTTP tooling) will reject the whole document —
+#     not just the records containing ``&``.
+#   * Today the TCP bridge is the only consumer, so nothing else breaks.
+#     Adding a second consumer means revisiting this.
+#   * Flip to ``False`` for standards-compliant output.
 #
-# Leave this ``False``. It exists only as a documented escape hatch; flipping
-# it to ``True`` breaks every consumer that parses XML properly, Tally
-# included.
-EMIT_LITERAL_AMPERSAND = False
+# ``<`` and ``>`` stay escaped either way — those break tag structure itself.
+EMIT_LITERAL_AMPERSAND = True
 
 
 def _emit_literal_ampersands(xml_text):
