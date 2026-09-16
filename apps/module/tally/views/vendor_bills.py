@@ -2464,7 +2464,7 @@ def _sync_data_to_xml(bills_data):
           <bill>
             <bill_no>MS/2025-26/3054</bill_no>
             <bill_date>20-12-2025</bill_date>
-            <vendor>AGGARWAL TRADE LINK</vendor>
+            <vendor_name>AGGARWAL TRADE LINK</vendor_name>
             <company>Spectrum Poly Pack and Packaging</company>
             <total_amount>3776.00</total_amount>
             <notes>...</notes>
@@ -2665,7 +2665,7 @@ def prepare_sync_data(analyzed_bill, organization):
     Top-level shape:
         {
           "bill_no": str, "bill_date": "DD-MM-YYYY",
-          "vendor": str, "company": str,
+          "vendor_name": str, "company": str,
           "total_amount": "3776.00",
           "notes": str,
           "ledgers": [
@@ -2758,6 +2758,39 @@ def prepare_sync_data(analyzed_bill, organization):
         'consolidated' if use_consolidated else 'individual',
         'on' if use_inventory else 'off',
     )
+
+    # ------------------------------------------------------------------
+    # A stock item can be neither matched nor created without a name, so a
+    # line with a blank ``item_name`` cannot be posted in Item-Invoice mode:
+    # Tally gets ``<item><name></name></item>``, the inventory entry has no
+    # stock item, and the WHOLE voucher is rejected. The connector only logs
+    # "StockItem  does not exists." and moves on, so the bill just silently
+    # never appears.
+    #
+    # This is normal for service bills — professional fees, rent, stall
+    # charges — which have nothing to put in inventory. Fall the bill back to
+    # Accounting-Invoice mode instead: the amounts roll into their
+    # purchase-ledger ``<ledger>`` rows, which is the correct accounting
+    # shape for a service line and posts cleanly.
+    #
+    # Whole bill, not per line: a Tally voucher is either Item-Invoice or
+    # Accounting-Invoice, so a mix would be emitted in a shape the connector
+    # cannot post.
+    # ------------------------------------------------------------------
+    if use_inventory:
+        unnamed = [
+            line for line in source_lines
+            if not (_clean_tally_text(getattr(line, 'item_name', '')) or '').strip()
+        ]
+        if unnamed:
+            logger.warning(
+                "Bill %s: %d of %d line(s) have no item name — emitting the "
+                "voucher in accounting-invoice mode (amounts posted to the "
+                "purchase ledger) instead of shipping an unnamed stock item "
+                "that Tally would reject.",
+                analyzed_bill.bill_no, len(unnamed), len(source_lines),
+            )
+            use_inventory = False
 
     # Accounting-invoice mode rollup: bucket product amounts by their
     # purchase ledger so a mixed-rate bill (some 18%, some 28% items)
@@ -3002,11 +3035,17 @@ def prepare_sync_data(analyzed_bill, organization):
         "bill_no": analyzed_bill.bill_no,
         "bill_date": bill_date_str,
         "voucher_type": "Purchase",
-        # ``vendor`` is the tag the TDL contract documents (see
-        # docs/tally-master-sync.md). ``vendor_name`` was the legacy
-        # key — kept as an alias so an older TDL parsing that value
-        # doesn't break during rollout.
-        "vendor": vendor_name,
+        # ``vendor_name`` is the party tag, and the only one the connector
+        # reads on this feed:
+        #     PURCHASE IN TALLY.txt:296   Compute : PRT : $vendor_name
+        #     import_purchase_new.txt:57  Set : party : $vendor_name
+        #
+        # A duplicate ``vendor`` tag carrying the identical value used to be
+        # emitted alongside it. Nothing consumed it — neither purchase
+        # importer references ``$vendor`` — so it has been dropped to keep
+        # the payload at the shape the deployed TCP was built against.
+        # (The Journal and Payment feeds do still carry ``<vendor>``; that is
+        # their own contract and is unaffected by this.)
         "vendor_name": vendor_name,
         "company": company_name,
         "total_amount": _fmt_money(analyzed_bill.total),
@@ -3016,13 +3055,13 @@ def prepare_sync_data(analyzed_bill, organization):
     }
 
     # Inline-master extras for the vendor ledger, inserted right after
-    # ``<vendor>`` so the sibling grouping stays readable. Gated — see
+    # ``<vendor_name>`` so the sibling grouping stays readable. Gated — see
     # EMIT_INLINE_MASTER_EXTRAS.
     if EMIT_INLINE_MASTER_EXTRAS:
         _with_extras = {}
         for _k, _v in bill_data.items():
             _with_extras[_k] = _v
-            if _k == "vendor":
+            if _k == "vendor_name":
                 _with_extras["vendor_gst_in"] = (
                     getattr(vendor_ledger, 'gst_in', None) or ""
                 ) if vendor_ledger else ""
