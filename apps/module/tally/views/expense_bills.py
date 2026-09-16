@@ -48,7 +48,8 @@ from ..models import (
 )
 from .vendor_bills import (
     _sync_data_to_xml, _clean_tally_text, _ledger_parent_name,
-    _resolve_ledger_by_name, EMIT_INLINE_MASTER_EXTRAS,
+    _resolve_ledger_by_name,
+    EXPENSE_BILL_EMIT_VENDOR_EXTRAS, EXPENSE_BILL_EMIT_LEDGER_EXTRAS,
 )
 from ..serializers import (
     TallyExpenseBillSerializer,
@@ -1952,7 +1953,7 @@ def prepare_expense_sync_data(analyzed_bill, organization):
             "amount": _fmt_money(analyzed_bill.vendor_amount),
             "ledger": vendor_ledger.name or "Unknown Vendor",
             **({"parent": _ledger_parent_name(vendor_ledger) or "Sundry Creditors"}
-               if EMIT_INLINE_MASTER_EXTRAS else {}),
+               if EXPENSE_BILL_EMIT_LEDGER_EXTRAS else {}),
             "debit_or_credit": _dc(analyzed_bill.vendor_debit_or_credit or "credit"),
         })
 
@@ -1969,7 +1970,7 @@ def prepare_expense_sync_data(analyzed_bill, organization):
             "amount": _fmt_money(amt),
             "ledger": str(coa),
             **({"parent": _ledger_parent_name(coa) or "Indirect Expenses"}
-               if EMIT_INLINE_MASTER_EXTRAS else {}),
+               if EXPENSE_BILL_EMIT_LEDGER_EXTRAS else {}),
             "debit_or_credit": _dc(getattr(line, 'debit_or_credit', 'debit')),
         })
 
@@ -1991,7 +1992,7 @@ def prepare_expense_sync_data(analyzed_bill, organization):
             "amount": _fmt_money(amt),
             "ledger": str(gst_line.ledger),
             **({"parent": _ledger_parent_name(gst_line.ledger) or "Duties & Taxes"}
-               if EMIT_INLINE_MASTER_EXTRAS else {}),
+               if EXPENSE_BILL_EMIT_LEDGER_EXTRAS else {}),
             "rate": gst_line.rate or "",
             "debit_or_credit": _dc(gst_line.debit_or_credit),
         })
@@ -2021,7 +2022,7 @@ def prepare_expense_sync_data(analyzed_bill, organization):
             **({"parent": (
                 _ledger_parent_name(ledger)
                 or _extras_default_parent.get(_tax_type, "Indirect Expenses")
-            )} if EMIT_INLINE_MASTER_EXTRAS else {}),
+            )} if EXPENSE_BILL_EMIT_LEDGER_EXTRAS else {}),
             "debit_or_credit": _dc(dc),
         })
 
@@ -2035,11 +2036,20 @@ def prepare_expense_sync_data(analyzed_bill, organization):
         "bill_date": bill_date_str,
         "voucher_type": "Journal",
         # ``vendor_name`` is the party tag the connector reads
-        # (JV.txt:48 -> Set : vPartyName : $vendor_name). A duplicate
-        # ``vendor`` tag plus the inline-master extras were emitted here
-        # and have been dropped -- see EMIT_INLINE_MASTER_EXTRAS in
-        # vendor_bills.py for the gate and how to turn them back on.
+        # (JV.txt:48 -> Set : vPartyName : $vendor_name). The duplicate
+        # ``vendor`` tag that used to sit beside it carried the identical
+        # value and nothing read it, so it stays dropped.
         "vendor_name": vendor_name,
+        # Inline-master extras for the party ledger — see
+        # EXPENSE_BILL_EMIT_VENDOR_EXTRAS in vendor_bills.py.
+        **({
+            "vendor_gst_in": (
+                getattr(vendor_ledger, 'gst_in', None) or ""
+            ) if vendor_ledger else "",
+            "vendor_parent": (
+                _ledger_parent_name(vendor_ledger) or "Sundry Creditors"
+            ),
+        } if EXPENSE_BILL_EMIT_VENDOR_EXTRAS else {}),
         "company": company_name,
         "total_amount": _fmt_money(analyzed_bill.total),
         "notes": notes_message,

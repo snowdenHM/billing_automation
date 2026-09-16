@@ -2595,14 +2595,7 @@ def _sync_data_to_xml(bills_data):
 # The connector ignores an extra it wasn't built for, so each can be rolled
 # out on its own.
 #
-# Shared default for the Expense (Journal) and Payment feeds. Those two are
-# held at the shape their deployed TCP was built against so it can be
-# debugged from a known baseline — do not turn this on without shipping a
-# TCP that reads them in the same release.
-EMIT_INLINE_MASTER_EXTRAS = False
-
-# Vendor Bill (Purchase) feed only — deliberately independent of the flag
-# above so this one feed can move ahead without disturbing the other two.
+# Scoped per feed so one can move without disturbing the others.
 #
 #   VENDOR extras -> <vendor_gst_in>, <vendor_parent>
 #                    alongside <vendor_name>, so a party that only exists in
@@ -2625,10 +2618,27 @@ EMIT_INLINE_MASTER_EXTRAS = False
 #
 # The connector side that consumes these is written but not yet compiled into
 # the live TCP — see BM MASTERS.txt (BMEnsureLedger / BMEnsureStockItem).
+# Until that ships Tally simply ignores the extra tags.
+
+# --- Vendor Bill (Purchase) ---
 VENDOR_BILL_EMIT_VENDOR_EXTRAS = True
 VENDOR_BILL_EMIT_LEDGER_EXTRAS = True
 VENDOR_BILL_EMIT_ITEM_EXTRAS = True
 VENDOR_BILL_EMIT_ITEM_PARENT = False
+
+# --- Expense Bill (Journal) ---
+# No item extras: a Journal voucher has no <items> block at all, every line
+# is a <ledger> row, so ledger extras cover the whole payload.
+EXPENSE_BILL_EMIT_VENDOR_EXTRAS = True
+EXPENSE_BILL_EMIT_LEDGER_EXTRAS = True
+
+# --- Payment Voucher ---
+# No vendor extras: <vendor> is deliberately emitted empty on this feed
+# (Client Correction 26 — the picked party is identification only and its
+# name/GST is never sent), so there is no vendor master to describe. The
+# party, bank/cash and GST ledgers all arrive as <ledger> rows, which the
+# ledger extras cover.
+PAYMENT_EMIT_LEDGER_EXTRAS = True
 
 
 # ---------------------------------------------------------------------------
