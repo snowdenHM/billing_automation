@@ -54,7 +54,10 @@ from ..models import (
     TallyConfig,
     TallyVendorBill
 )
-from .vendor_bills import _sync_data_to_xml, _clean_tally_text, _ledger_parent_name
+from .vendor_bills import (
+    _sync_data_to_xml, _clean_tally_text, _ledger_parent_name,
+    EMIT_INLINE_MASTER_EXTRAS,
+)
 from ..serializers import (
     TallyPaymentBillSerializer,
     TallyPaymentAnalyzedBillSerializer,
@@ -2085,7 +2088,7 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         ledgers_payload.append({
             "amount": _fmt_money(analyzed_bill.total),
             "ledger": payment_mode_ledger.name or "Unknown Payment Mode",
-            "parent": _pm_parent,
+            **({"parent": _pm_parent} if EMIT_INLINE_MASTER_EXTRAS else {}),
             "debit_or_credit": _dc(
                 analyzed_bill.vendor_debit_or_credit or "credit"
             ),
@@ -2111,7 +2114,8 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(coa),
-            "parent": _ledger_parent_name(coa) or "Indirect Expenses",
+            **({"parent": _ledger_parent_name(coa) or "Indirect Expenses"}
+               if EMIT_INLINE_MASTER_EXTRAS else {}),
             "debit_or_credit": _dc(getattr(line, 'debit_or_credit', 'debit')),
         })
     if missing_coa:
@@ -2139,7 +2143,8 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(gst_line.ledger),
-            "parent": _ledger_parent_name(gst_line.ledger) or "Duties & Taxes",
+            **({"parent": _ledger_parent_name(gst_line.ledger) or "Duties & Taxes"}
+               if EMIT_INLINE_MASTER_EXTRAS else {}),
             "rate": gst_line.rate or "",
             "debit_or_credit": _dc(gst_line.debit_or_credit),
         })
@@ -2166,10 +2171,10 @@ def prepare_payment_sync_data(analyzed_bill, organization):
         ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(ledger),
-            "parent": (
+            **({"parent": (
                 _ledger_parent_name(ledger)
                 or _extras_default_parent.get(_tax_type, "Indirect Expenses")
-            ),
+            )} if EMIT_INLINE_MASTER_EXTRAS else {}),
             "debit_or_credit": _dc(dc),
         })
 

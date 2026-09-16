@@ -2898,6 +2898,10 @@ def prepare_sync_data(analyzed_bill, organization):
                 "type": tax_type,
                 "amount": Decimal('0.00'),
                 "ledger": ledger_name,
+                # Internal bucket only — NOT the payload. It reaches the wire
+                # solely through the ``ledgers_payload.append`` below, which
+                # is gated on EMIT_INLINE_MASTER_EXTRAS. Carried here so the
+                # flag can be flipped without re-plumbing the grouping pass.
                 "parent": _ledger_parent_name(ledger) or "Duties & Taxes",
                 "rates": [],  # collected for `rate` attribute
             }
