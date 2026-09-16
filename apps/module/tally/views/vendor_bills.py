@@ -2590,28 +2590,45 @@ def _sync_data_to_xml(bills_data):
 # ---------------------------------------------------------------------------
 # Inline-master extras
 # ---------------------------------------------------------------------------
-# When True the payload carries, next to every master NAME, the fields needed
-# to CREATE that master if Tally does not already have it:
+# These control whether the payload carries, next to every master NAME, the
+# fields Tally needs to CREATE that master when it doesn't already have it.
+# The connector ignores an extra it wasn't built for, so each can be rolled
+# out on its own.
 #
-#   vendor          -> <vendor_gst_in>, <vendor_parent>
-#   ledger row      -> <parent>
-#   item            -> <parent>, <unit>, <gst_rate>, <hsn_code>
-#   purchase ledger -> <purchase_ledger_parent>
-#
-# Currently OFF. Two reasons:
-#
-#   1. The deployed connector does not read them. It only checks
-#      ``$$IsObjectExists`` and logs "Ledger X does not exists." — it never
-#      creates anything. The TDL side that WOULD use them is written (see
-#      BM MASTERS.txt in the connector sources) but is not compiled into the
-#      live TCP yet.
-#   2. Turning them off restores the exact payload that TCP was built
-#      against, so its behaviour can be debugged from a known baseline
-#      instead of against a shape that changed underneath it.
-#
-# Flip to True in the same release as a TCP that consumes them. Nothing else
-# needs changing — the builders below are already wired to this flag.
+# Shared default for the Expense (Journal) and Payment feeds. Those two are
+# held at the shape their deployed TCP was built against so it can be
+# debugged from a known baseline — do not turn this on without shipping a
+# TCP that reads them in the same release.
 EMIT_INLINE_MASTER_EXTRAS = False
+
+# Vendor Bill (Purchase) feed only — deliberately independent of the flag
+# above so this one feed can move ahead without disturbing the other two.
+#
+#   VENDOR extras -> <vendor_gst_in>, <vendor_parent>
+#                    alongside <vendor_name>, so a party that only exists in
+#                    BillMunshi can be created in Tally with its GSTIN and
+#                    the right group.
+#
+#   LEDGER extras -> <parent> on every <ledgers>/<ledger> row, plus
+#                    <purchase_ledger_parent> inside each <item> (the
+#                    purchase account is a ledger too and needs a group to be
+#                    created under).
+#
+#   ITEM extras   -> <unit>, <gst_rate>, <hsn_code> inside <item>, so a stock
+#                    item that only exists in BillMunshi can be created in
+#                    Tally with its unit and tax details.
+#
+#   ITEM PARENT   -> <parent> (the stock GROUP) inside <item>. Split out from
+#                    the rest because it is optional: with no <parent> Tally
+#                    files a new item under "Primary", which is usually what
+#                    is wanted. Turn on to preserve a real stock group.
+#
+# The connector side that consumes these is written but not yet compiled into
+# the live TCP — see BM MASTERS.txt (BMEnsureLedger / BMEnsureStockItem).
+VENDOR_BILL_EMIT_VENDOR_EXTRAS = True
+VENDOR_BILL_EMIT_LEDGER_EXTRAS = True
+VENDOR_BILL_EMIT_ITEM_EXTRAS = True
+VENDOR_BILL_EMIT_ITEM_PARENT = False
 
 
 # ---------------------------------------------------------------------------
@@ -2816,14 +2833,16 @@ def prepare_sync_data(analyzed_bill, organization):
             item_name = _clean_tally_text(getattr(line, 'item_name', '')) or ""
             item_entry = {"name": item_name}
 
-            # Inline-master extras for the stock item. Pulled from the org's
-            # StockItem row (created by the quick-add flow) and used by Tally
-            # only when the item doesn't already exist on its side.
-            if EMIT_INLINE_MASTER_EXTRAS:
+            # Stock-item creation extras, read off the org's StockItem row
+            # (the one the quick-add flow writes). Tally uses them only when
+            # it has no item by this name; they are ignored otherwise.
+            if VENDOR_BILL_EMIT_ITEM_EXTRAS:
                 stock_item = _resolve_stock_item(organization, item_name)
                 item_entry.update({
-                    "parent": (getattr(stock_item, 'parent', None) or "Primary"),
                     "unit": (getattr(stock_item, 'unit', None) or "Nos"),
+                    # Fall back to the line's own GST rate when the stock
+                    # item master has none — on a bill that rate is the more
+                    # reliable of the two.
                     "gst_rate": (
                         getattr(stock_item, 'gst_rate', None)
                         or getattr(line, 'product_gst', None)
@@ -2831,12 +2850,22 @@ def prepare_sync_data(analyzed_bill, organization):
                     ),
                     "hsn_code": (getattr(stock_item, 'hsn_code', None) or ""),
                 })
+                # Stock GROUP. Separate flag because it was not part of the
+                # request: with no <parent> Tally files a newly created item
+                # under "Primary", which is the usual answer anyway. Turn on
+                # to preserve a real stock group instead.
+                if VENDOR_BILL_EMIT_ITEM_PARENT:
+                    item_entry["parent"] = (
+                        getattr(stock_item, 'parent', None) or "Primary"
+                    )
 
             item_entry.update({
                 "details": _clean_tally_text(getattr(line, 'item_details', '')) or "",
                 "purchase_ledger": purchase_ledger_name,
             })
-            if EMIT_INLINE_MASTER_EXTRAS:
+            # The purchase account is a ledger, so this rides with the
+            # ledger extras rather than the stock-item ones.
+            if VENDOR_BILL_EMIT_LEDGER_EXTRAS:
                 item_entry["purchase_ledger_parent"] = (
                     _ledger_parent_name(purchase_ledger_obj) or "Purchase Accounts"
                 )
@@ -2900,7 +2929,7 @@ def prepare_sync_data(analyzed_bill, organization):
                 "ledger": ledger_name,
                 # Internal bucket only — NOT the payload. It reaches the wire
                 # solely through the ``ledgers_payload.append`` below, which
-                # is gated on EMIT_INLINE_MASTER_EXTRAS. Carried here so the
+                # is gated on VENDOR_BILL_EMIT_LEDGER_EXTRAS. Carried here so the
                 # flag can be flipped without re-plumbing the grouping pass.
                 "parent": _ledger_parent_name(ledger) or "Duties & Taxes",
                 "rates": [],  # collected for `rate` attribute
@@ -2971,7 +3000,7 @@ def prepare_sync_data(analyzed_bill, organization):
                 "ledger": pledger_name,
                 **({"parent": (
                     _ledger_parent_name(pledger_obj) or "Purchase Accounts"
-                )} if EMIT_INLINE_MASTER_EXTRAS else {}),
+                )} if VENDOR_BILL_EMIT_LEDGER_EXTRAS else {}),
             })
 
     for entry in sorted_gst_buckets:
@@ -2986,7 +3015,7 @@ def prepare_sync_data(analyzed_bill, organization):
             "amount": _fmt_money(entry["amount"]),
             "ledger": entry["ledger"],
             **({"parent": entry.get("parent") or "Duties & Taxes"}
-               if EMIT_INLINE_MASTER_EXTRAS else {}),
+               if VENDOR_BILL_EMIT_LEDGER_EXTRAS else {}),
             "rate": rate_str,
         })
 
@@ -3027,7 +3056,7 @@ def prepare_sync_data(analyzed_bill, organization):
             **({"parent": (
                 _ledger_parent_name(ledger)
                 or _extras_default_parent.get(tax_type, "Indirect Expenses")
-            )} if EMIT_INLINE_MASTER_EXTRAS else {}),
+            )} if VENDOR_BILL_EMIT_LEDGER_EXTRAS else {}),
         })
 
     bill_data = {
@@ -3060,8 +3089,8 @@ def prepare_sync_data(analyzed_bill, organization):
 
     # Inline-master extras for the vendor ledger, inserted right after
     # ``<vendor_name>`` so the sibling grouping stays readable. Gated — see
-    # EMIT_INLINE_MASTER_EXTRAS.
-    if EMIT_INLINE_MASTER_EXTRAS:
+    # VENDOR_BILL_EMIT_VENDOR_EXTRAS.
+    if VENDOR_BILL_EMIT_VENDOR_EXTRAS:
         _with_extras = {}
         for _k, _v in bill_data.items():
             _with_extras[_k] = _v
