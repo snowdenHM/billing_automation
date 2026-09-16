@@ -2581,24 +2581,22 @@ def _sync_data_to_xml(bills_data):
 # and Tally's own XML export writes group names the same way
 # (``Duties &amp; Taxes``).
 #
-# The connector on the Tally side, however, lifts values out of the response
-# with plain string operations rather than an XML parser — it takes whatever
-# sits between ``<parent>`` and ``</parent>`` verbatim. That hands it the
-# literal text ``Duties &amp; Taxes``, which matches no Tally group, so the
-# master lookup fails (and inline-master creation would make a bogus group).
+# This was briefly flipped to emit a raw ``&``, on the theory that the Tally
+# connector lifted values out with plain string operations. Reading the TDL
+# source settled it — the connector declares:
 #
-# Client decision: emit the raw ``&``. Trade-off, stated plainly:
-#   * The response is no longer well-formed XML. Anything that parses it
-#     strictly (ElementTree, lxml, browsers, most HTTP tooling) will reject
-#     the document.
-#   * Only the TCP bridge consumes this payload, and it does not parse
-#     strictly — so in practice nothing else is affected today.
-#   * Flip ``EMIT_LITERAL_AMPERSAND`` back to ``False`` to restore standards
-#     -compliant output the moment the connector switches to a real parser.
+#     [Collection: purcapicol]
+#         Data Source     : HTTP XML : @@BMBaseURL+"vendor-bills/sync_bills/"
+#         XML Object Path : "data:1"
 #
-# ``<`` and ``>`` stay escaped: those genuinely break even lenient tag
-# scanning, because the bridge finds tag boundaries by looking for them.
-EMIT_LITERAL_AMPERSAND = True
+# ``HTTP XML`` is Tally's own XML parser, not a string scan. A raw ``&``
+# makes the document malformed, so the parse fails and NO bill is imported —
+# not just the ones whose names contain ``&``. The entity form is required.
+#
+# Leave this ``False``. It exists only as a documented escape hatch; flipping
+# it to ``True`` breaks every consumer that parses XML properly, Tally
+# included.
+EMIT_LITERAL_AMPERSAND = False
 
 
 def _emit_literal_ampersands(xml_text):
