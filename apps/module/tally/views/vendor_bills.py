@@ -2534,16 +2534,17 @@ def _sync_data_to_xml(bills_data):
             _set_scalar(ledger_elem, "debit_or_credit", entry["debit_or_credit"])
 
     # ``<ENVELOPE>`` is Tally's standard XML document root — every payload
-    # Tally itself imports or exports is wrapped in one, and its own exports
-    # add it automatically (which is why TDL report definitions carry
-    # ``Delete: XMLTag: "ENVELOPE"`` to strip it back off).
+    # Tally itself imports or exports is wrapped in one, which is why TDL
+    # report definitions carry ``Delete: XMLTag: "ENVELOPE"`` to strip it
+    # back off on export.
     #
-    # NOTE FOR THE TDL SIDE: this changes ``XML Object Path``. The path is
-    # absolute from the document root, so the collections that used to read
-    #     XML Object Path : "data:1"
-    # must now read
+    # THIS MUST SHIP WITH THE TCP. ``XML Object Path`` is absolute from the
+    # document root, so the connector collections read
     #     XML Object Path : "ENVELOPE.data:1"
-    # Both have been updated in the connector sources.
+    # and NOT the older ``"data:1"``. A backend deploy without a matching
+    # recompiled TCP makes the lookup match nothing — the GET still returns
+    # 200 and the bills show up in Tally's request log, but no voucher is
+    # created and the status callback posts an empty ``{}``.
     envelope = ET.Element('ENVELOPE')
     root = ET.SubElement(envelope, 'data')
     for bill in bills_data:
@@ -2596,27 +2597,28 @@ def _sync_data_to_xml(bills_data):
 # and Tally's own XML export writes group names the same way
 # (``Duties &amp; Taxes``).
 #
-# Client decision (reaffirmed after review): emit the raw ``&``.
+# Emitting a bare ``&`` was tried in production and broke the sync. Keeping
+# the finding here so it is not tried a third time.
 #
-# The concern was raised and is recorded here rather than re-argued. The
-# connector reads this payload with ``Data Source: HTTP XML``, which is
-# Tally's own XML reader, and a bare ``&`` is not well-formed XML. Tally's
-# XML handling is non-standard in both directions though — it also uses its
-# own ``&#4;`` prefix convention for reserved names — so it is entirely
-# plausible that it accepts a bare ``&`` where a strict parser would not.
-# The client has tested against the real Tally; that evidence outranks the
-# spec here.
+# The connector reads this feed with ``Data Source: HTTP XML`` — Tally's own
+# XML reader. A bare ``&`` is not well-formed XML, so the parse fails for the
+# WHOLE document, not just the records containing ``&``. Observed symptoms:
 #
-# Consequences to keep in mind:
-#   * The response is NOT well-formed XML. Anything strict (ElementTree,
-#     lxml, browsers, most HTTP tooling) will reject the whole document —
-#     not just the records containing ``&``.
-#   * Today the TCP bridge is the only consumer, so nothing else breaks.
-#     Adding a second consumer means revisiting this.
-#   * Flip to ``False`` for standards-compliant output.
+#   * The HTTP GET succeeded and the bills were visible in Tally's own
+#     request log, so it looked like the data had arrived.
+#   * The collection was empty all the same, so the importer's
+#     ``If : Not $$IsEmpty:$bill[1].voucher_type`` guard skipped every bill
+#     silently — no voucher, no error file.
+#   * The status callback posted a literal ``{}``, leaving every bill
+#     pending and re-sent on the next poll.
 #
+# Note that a bare ``&`` still *renders* fine in Postman: its pretty-printer
+# is lenient, so the response looks healthy while real parsers reject it.
+# Tally's own XML export writes ``Duties &amp; Taxes``.
+#
+# Leave this ``False``. It exists only as a documented escape hatch.
 # ``<`` and ``>`` stay escaped either way — those break tag structure itself.
-EMIT_LITERAL_AMPERSAND = True
+EMIT_LITERAL_AMPERSAND = False
 
 
 def _emit_literal_ampersands(xml_text):
