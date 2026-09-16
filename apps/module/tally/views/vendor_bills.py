@@ -2558,7 +2558,18 @@ def _sync_data_to_xml(bills_data):
     # ``xml_declaration=False`` drops the ``<?xml version='1.0' encoding='utf-8'?>``
     # prolog. Tally's TDL/TCP parser doesn't need it, and the client asked for
     # the response to start directly with ``<data>``.
-    payload = ET.tostring(root, encoding='utf-8', xml_declaration=False).decode('utf-8')
+    #
+    # ``short_empty_elements=False`` forces ``<hsn_code></hsn_code>`` instead of
+    # ElementTree's default ``<hsn_code />`` for empty values. Both are valid
+    # XML and mean the same thing to a real parser, but the TCP bridge locates
+    # values by scanning for an opening and closing tag pair — and the
+    # self-closing form contains neither ``<hsn_code>`` nor ``</hsn_code>``, so
+    # the scan finds no match and can run past the field it was looking for.
+    # Empty values are common in this payload (blank GSTIN, missing HSN, a bill
+    # with no tax ledgers), so always emitting the long form is the safer shape.
+    payload = ET.tostring(
+        root, encoding='utf-8', xml_declaration=False, short_empty_elements=False
+    ).decode('utf-8')
     return _emit_literal_ampersands(payload)
 
 
