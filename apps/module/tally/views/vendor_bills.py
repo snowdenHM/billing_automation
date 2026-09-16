@@ -2523,9 +2523,11 @@ def _sync_data_to_xml(bills_data):
         ledger_elem = ET.SubElement(parent_elem, "ledger")
         _set_scalar(ledger_elem, "amount", entry.get("amount"))
         _set_scalar(ledger_elem, "ledger", entry.get("ledger"))
-        # Inline-master extra — parent group name. Tally uses it only when
-        # the ledger doesn't already exist (create it under this group);
-        # ignored when the ledger is already present.
+        # Inline-master extra — parent group name, used by Tally only when
+        # the ledger has to be created. Emitted whenever the caller put it in
+        # the entry; whether to include it is decided per module in the
+        # payload builder, NOT here (this emitter is shared by vendor,
+        # expense and payment).
         if entry.get("parent"):
             _set_scalar(ledger_elem, "parent", entry["parent"])
         if entry.get("rate"):
@@ -2533,20 +2535,17 @@ def _sync_data_to_xml(bills_data):
         if entry.get("debit_or_credit"):
             _set_scalar(ledger_elem, "debit_or_credit", entry["debit_or_credit"])
 
-    # ``<ENVELOPE>`` is Tally's standard XML document root — every payload
-    # Tally itself imports or exports is wrapped in one, which is why TDL
-    # report definitions carry ``Delete: XMLTag: "ENVELOPE"`` to strip it
-    # back off on export.
+    # ``<data>`` is the document root — the shape the deployed TCP was built
+    # against (``XML Object Path : "data:1"``).
     #
-    # THIS MUST SHIP WITH THE TCP. ``XML Object Path`` is absolute from the
-    # document root, so the connector collections read
-    #     XML Object Path : "ENVELOPE.data:1"
-    # and NOT the older ``"data:1"``. A backend deploy without a matching
-    # recompiled TCP makes the lookup match nothing — the GET still returns
-    # 200 and the bills show up in Tally's request log, but no voucher is
-    # created and the status callback posts an empty ``{}``.
-    envelope = ET.Element('ENVELOPE')
-    root = ET.SubElement(envelope, 'data')
+    # A ``<ENVELOPE>`` wrapper was tried and reverted. It is Tally's own
+    # convention, but ``XML Object Path`` is absolute from the document root,
+    # so adding a wrapper means every connector collection must change to
+    # ``"ENVELOPE.data:1"`` and be recompiled in the SAME release. A mismatch
+    # fails silently: the GET returns 200 and the bills appear in Tally's
+    # request log, but the lookup matches nothing, no voucher is created, and
+    # the status callback posts an empty ``{}``.
+    root = ET.Element('data')
     for bill in bills_data:
         bill_elem = ET.SubElement(root, 'bill')
         for key, value in bill.items():
@@ -2573,20 +2572,46 @@ def _sync_data_to_xml(bills_data):
 
     # ``xml_declaration=False`` drops the ``<?xml version='1.0' encoding='utf-8'?>``
     # prolog. Tally's TDL/TCP parser doesn't need it, and the client asked for
-    # the response to start directly with ``<ENVELOPE>``.
+    # the response to start directly with ``<data>``.
     #
-    # ``short_empty_elements=False`` forces ``<hsn_code></hsn_code>`` instead of
-    # ElementTree's default ``<hsn_code />`` for empty values. Both are valid
-    # XML and mean the same thing to a real parser, but the TCP bridge locates
-    # values by scanning for an opening and closing tag pair — and the
-    # self-closing form contains neither ``<hsn_code>`` nor ``</hsn_code>``, so
-    # the scan finds no match and can run past the field it was looking for.
-    # Empty values are common in this payload (blank GSTIN, missing HSN, a bill
-    # with no tax ledgers), so always emitting the long form is the safer shape.
+    # Empty values are left in ElementTree's default self-closing form
+    # (``<hsn_code />``), matching the payload the deployed TCP was built
+    # against. ``short_empty_elements=False`` would emit
+    # ``<hsn_code></hsn_code>`` instead — identical to any XML parser, and
+    # friendlier to a connector that scans for an opening/closing tag pair,
+    # but it is a shape change and is being held back so the TCP can be
+    # debugged against a known baseline.
     payload = ET.tostring(
-        envelope, encoding='utf-8', xml_declaration=False, short_empty_elements=False
+        root, encoding='utf-8', xml_declaration=False
     ).decode('utf-8')
     return _emit_literal_ampersands(payload)
+
+
+# ---------------------------------------------------------------------------
+# Inline-master extras
+# ---------------------------------------------------------------------------
+# When True the payload carries, next to every master NAME, the fields needed
+# to CREATE that master if Tally does not already have it:
+#
+#   vendor          -> <vendor_gst_in>, <vendor_parent>
+#   ledger row      -> <parent>
+#   item            -> <parent>, <unit>, <gst_rate>, <hsn_code>
+#   purchase ledger -> <purchase_ledger_parent>
+#
+# Currently OFF. Two reasons:
+#
+#   1. The deployed connector does not read them. It only checks
+#      ``$$IsObjectExists`` and logs "Ledger X does not exists." — it never
+#      creates anything. The TDL side that WOULD use them is written (see
+#      BM MASTERS.txt in the connector sources) but is not compiled into the
+#      live TCP yet.
+#   2. Turning them off restores the exact payload that TCP was built
+#      against, so its behaviour can be debugged from a known baseline
+#      instead of against a shape that changed underneath it.
+#
+# Flip to True in the same release as a TCP that consumes them. Nothing else
+# needs changing — the builders below are already wired to this flag.
+EMIT_INLINE_MASTER_EXTRAS = False
 
 
 # ---------------------------------------------------------------------------
@@ -2756,26 +2781,38 @@ def prepare_sync_data(analyzed_bill, organization):
             # (created by the quick-add flow); Tally uses them only when
             # the stock item doesn't already exist on its side.
             item_name = _clean_tally_text(getattr(line, 'item_name', '')) or ""
-            stock_item = _resolve_stock_item(organization, item_name)
-            items_payload.append({
-                "name": item_name,
-                "parent": (getattr(stock_item, 'parent', None) or "Primary"),
-                "unit": (getattr(stock_item, 'unit', None) or "Nos"),
-                "gst_rate": (
-                    getattr(stock_item, 'gst_rate', None)
-                    or getattr(line, 'product_gst', None)
-                    or ""
-                ),
-                "hsn_code": (getattr(stock_item, 'hsn_code', None) or ""),
+            item_entry = {"name": item_name}
+
+            # Inline-master extras for the stock item. Pulled from the org's
+            # StockItem row (created by the quick-add flow) and used by Tally
+            # only when the item doesn't already exist on its side.
+            if EMIT_INLINE_MASTER_EXTRAS:
+                stock_item = _resolve_stock_item(organization, item_name)
+                item_entry.update({
+                    "parent": (getattr(stock_item, 'parent', None) or "Primary"),
+                    "unit": (getattr(stock_item, 'unit', None) or "Nos"),
+                    "gst_rate": (
+                        getattr(stock_item, 'gst_rate', None)
+                        or getattr(line, 'product_gst', None)
+                        or ""
+                    ),
+                    "hsn_code": (getattr(stock_item, 'hsn_code', None) or ""),
+                })
+
+            item_entry.update({
                 "details": _clean_tally_text(getattr(line, 'item_details', '')) or "",
                 "purchase_ledger": purchase_ledger_name,
-                "purchase_ledger_parent": (
+            })
+            if EMIT_INLINE_MASTER_EXTRAS:
+                item_entry["purchase_ledger_parent"] = (
                     _ledger_parent_name(purchase_ledger_obj) or "Purchase Accounts"
-                ),
+                )
+            item_entry.update({
                 "price": _fmt_money(getattr(line, 'price', 0)),
                 "quantity": int(getattr(line, 'quantity', 0) or 0),
                 "amount": _fmt_money(getattr(line, 'amount', 0)),
             })
+            items_payload.append(item_entry)
         else:
             # Accounting-invoice mode — collapse into a purchase-ledger
             # rollup that will be prepended to the ``ledgers_payload`` below.
@@ -2895,9 +2932,9 @@ def prepare_sync_data(analyzed_bill, organization):
             ledgers_payload.append({
                 "amount": _fmt_money(total),
                 "ledger": pledger_name,
-                "parent": (
+                **({"parent": (
                     _ledger_parent_name(pledger_obj) or "Purchase Accounts"
-                ),
+                )} if EMIT_INLINE_MASTER_EXTRAS else {}),
             })
 
     for entry in sorted_gst_buckets:
@@ -2911,7 +2948,8 @@ def prepare_sync_data(analyzed_bill, organization):
         ledgers_payload.append({
             "amount": _fmt_money(entry["amount"]),
             "ledger": entry["ledger"],
-            "parent": entry.get("parent") or "Duties & Taxes",
+            **({"parent": entry.get("parent") or "Duties & Taxes"}
+               if EMIT_INLINE_MASTER_EXTRAS else {}),
             "rate": rate_str,
         })
 
@@ -2949,10 +2987,10 @@ def prepare_sync_data(analyzed_bill, organization):
         ledgers_payload.append({
             "amount": _fmt_money(amt),
             "ledger": str(ledger) if ledger else "No Tax Ledger",
-            "parent": (
+            **({"parent": (
                 _ledger_parent_name(ledger)
                 or _extras_default_parent.get(tax_type, "Indirect Expenses")
-            ),
+            )} if EMIT_INLINE_MASTER_EXTRAS else {}),
         })
 
     bill_data = {
@@ -2969,15 +3007,6 @@ def prepare_sync_data(analyzed_bill, organization):
         # key — kept as an alias so an older TDL parsing that value
         # doesn't break during rollout.
         "vendor": vendor_name,
-        # Inline-master extras for the vendor ledger — Tally uses them
-        # only when it doesn't already have a ledger by ``<vendor>`` name;
-        # ignored when the vendor already exists.
-        "vendor_gst_in": (
-            getattr(vendor_ledger, 'gst_in', None) or ""
-        ) if vendor_ledger else "",
-        "vendor_parent": (
-            _ledger_parent_name(vendor_ledger) or "Sundry Creditors"
-        ),
         "vendor_name": vendor_name,
         "company": company_name,
         "total_amount": _fmt_money(analyzed_bill.total),
@@ -2985,6 +3014,22 @@ def prepare_sync_data(analyzed_bill, organization):
         "ledgers": ledgers_payload,
         "items": items_payload,
     }
+
+    # Inline-master extras for the vendor ledger, inserted right after
+    # ``<vendor>`` so the sibling grouping stays readable. Gated — see
+    # EMIT_INLINE_MASTER_EXTRAS.
+    if EMIT_INLINE_MASTER_EXTRAS:
+        _with_extras = {}
+        for _k, _v in bill_data.items():
+            _with_extras[_k] = _v
+            if _k == "vendor":
+                _with_extras["vendor_gst_in"] = (
+                    getattr(vendor_ledger, 'gst_in', None) or ""
+                ) if vendor_ledger else ""
+                _with_extras["vendor_parent"] = (
+                    _ledger_parent_name(vendor_ledger) or "Sundry Creditors"
+                )
+        bill_data = _with_extras
 
     return {"data": bill_data}
 
