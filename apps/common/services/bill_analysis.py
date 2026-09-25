@@ -456,6 +456,18 @@ _GST_EXTRACTION_PREAMBLE = """
     6. For any line item quantity, extract the exact printed value
        (integer or decimal). Fractional quantities like "1.5 kg" are
        real; do not truncate to 1.
+    7. PAISE / DECIMALS — every MONEY amount (item amount, igst,
+       cgst, sgst, tds, round_off, discount, cess, freight, total)
+       MUST keep BOTH digits after the decimal point exactly as printed.
+       "62,816.13" -> 62816.13 (NOT 62816.1, NOT 62816).
+       "11,306.90" -> 11306.90. "74,123.00" -> 74123.00.
+       Read the last two digits after the decimal point one by one —
+       dropping the final paise digit is a known OCR failure. If the
+       same amount is printed in more than one place (item row,
+       taxable value, tax summary table), use those copies to confirm
+       the paise digits. Quantity and unit price/rate keep EVERY
+       decimal digit that is printed (e.g. 1.125, 12.3456) — never
+       round or truncate them.
 
     Return a single JSON object matching the schema below. Do NOT
     include commentary, markdown fences, or narration.

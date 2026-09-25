@@ -117,12 +117,15 @@ def quick_create_vendor(request, org_id):
         )
 
     # Reject duplicates in the same org — Tally would rename them
-    # awkwardly otherwise ("XYZ (2)").
-    if Ledger.objects.filter(organization=organization, name__iexact=name).exists():
+    # awkwardly otherwise ("XYZ (2)"). Correction 50: also return the
+    # existing ledger so the UI can simply select it.
+    existing = Ledger.objects.filter(organization=organization, name__iexact=name).first()
+    if existing:
         return Response(
             {
                 "error": "DUPLICATE_LEDGER",
                 "message": f"A ledger named '{name}' already exists in this organization.",
+                "existing_ledger": LedgerSerializer(existing, context={"request": request}).data,
             },
             status=status.HTTP_409_CONFLICT,
         )

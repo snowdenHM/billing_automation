@@ -1,0 +1,13 @@
+{% autoescape off %}Confirm your email for your Bill Munshi demo
+
+Hi {{ display_name }},
+
+Thanks for requesting a Bill Munshi demo{% if organization %} for {{ organization }}{% endif %}.
+Please confirm this is your email address so our team can reach you:
+  {{ verify_url }}
+
+Didn't request a demo? Ignore this email.
+
+— The Bill Munshi team
+https://billmunshi.com
+{% endautoescape %}

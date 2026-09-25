@@ -47,7 +47,8 @@ def _site_url() -> str:
     )
 
 
-def _send_html_email(subject: str, template: str, to_email: str, context: dict):
+def _send_html_email(subject: str, template: str, to_email: str, context: dict,
+                     reply_to: list | None = None):
     if not to_email:
         return
     connection, from_email = _resolve_connection()
@@ -60,6 +61,7 @@ def _send_html_email(subject: str, template: str, to_email: str, context: dict):
         from_email=from_email,
         to=[to_email],
         connection=connection,
+        reply_to=reply_to or None,
     )
     email.attach_alternative(html_body, "text/html")
     try:
@@ -79,6 +81,31 @@ def notify_recipients_new_ticket(ticket):
     recipients = SupportTicketRecipient.objects.filter(receive_new=True)
     for recipient in recipients:
         _send_html_email(subject, "support_ticket_new.html", recipient.email, context)
+
+
+def notify_support_chat(ticket):
+    """Correction 51: send a support-chat message to the support inbox
+    (``settings.SUPPORT_EMAIL``) and to every recipient subscribed to new
+    tickets. Reply-To is the visitor, so the team can answer straight from
+    the mailbox."""
+    context = {
+        "ticket": ticket,
+        "site_url": _site_url(),
+        "admin_url": f"{_site_url()}/admin/support/supportticket/{ticket.id}/change/",
+    }
+    subject = f"[Support Chat] {ticket.contact_name} <{ticket.contact_email}>"
+    reply_to = [ticket.contact_email] if ticket.contact_email else None
+
+    to_emails = []
+    support_inbox = (getattr(settings, "SUPPORT_EMAIL", "") or "").strip()
+    if support_inbox:
+        to_emails.append(support_inbox)
+    for recipient in SupportTicketRecipient.objects.filter(receive_new=True):
+        if recipient.email and recipient.email.lower() not in {e.lower() for e in to_emails}:
+            to_emails.append(recipient.email)
+
+    for to_email in to_emails:
+        _send_html_email(subject, "support_ticket_new.html", to_email, context, reply_to=reply_to)
 
 
 def notify_reply(ticket, message, to_email: str):

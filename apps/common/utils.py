@@ -110,6 +110,46 @@ def send_templated_email(
 # Organization resolution
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Rate limiting (public, unauthenticated endpoints)
+# ---------------------------------------------------------------------------
+
+def get_rate_limit_ip(request) -> str:
+    """Client IP for rate limiting.
+
+    Reads ``X-Forwarded-For`` from the right: the leading entries are
+    whatever the caller sent and can be spoofed to dodge a per-IP limit.
+    ``RATE_LIMIT_PROXY_HOPS`` = number of trusted proxies in front of the
+    app (1 = just nginx; 2 = CDN/load balancer + nginx). Falls back to
+    ``REMOTE_ADDR``.
+    """
+    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+    trusted = max(int(getattr(settings, "RATE_LIMIT_PROXY_HOPS", 1) or 1), 1)
+    if hops:
+        return hops[-trusted] if len(hops) >= trusted else hops[0]
+    return request.META.get("REMOTE_ADDR") or "unknown"
+
+
+def is_rate_limited(scope: str, ident: str, limit: int, window_seconds: int) -> bool:
+    """Count one hit for ``scope``/``ident`` and return True once more than
+    ``limit`` hits landed inside ``window_seconds``.
+
+    Backed by the Django cache; if the cache is unreachable the request is
+    allowed (fail open) so a Redis hiccup never blocks real users.
+    """
+    from django.core.cache import cache
+
+    key = f"ratelimit:{scope}:{(ident or 'unknown').lower()}"
+    try:
+        if cache.add(key, 1, timeout=window_seconds):
+            return False
+        return cache.incr(key) > limit
+    except Exception:  # pragma: no cover - cache outage
+        logger.warning("Rate-limit cache unavailable for %s", scope)
+        return False
+
+
 def get_organization_from_request(request, org_id=None, **kwargs):
     """
     Resolve the Organization from the current request.

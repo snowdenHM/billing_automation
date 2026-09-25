@@ -356,6 +356,12 @@ EMAIL_BACKEND = env(
 SENDGRID_API_KEY = env("SENDGRID_API_KEY", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Bill Munshi <support@billmunshi.com>")
 SERVER_EMAIL = env("SERVER_EMAIL", default=DEFAULT_FROM_EMAIL)
+# Inbox that receives support-chat messages (Correction 51), in addition to
+# the SupportTicketRecipient distribution list managed in admin.
+SUPPORT_EMAIL = env("SUPPORT_EMAIL", default="support@billmunshi.com")
+# Trusted proxies in front of Django (nginx = 1; CDN/LB + nginx = 2). Used to
+# pick the real client IP for rate limits on public forms.
+RATE_LIMIT_PROXY_HOPS = env.int("RATE_LIMIT_PROXY_HOPS", default=1)
 
 # Frontend base URL — links in emails (reset password, verify email)
 # resolve against this. MUST be set in production.

@@ -1,13 +1,23 @@
 from django.shortcuts import get_object_or_404
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
 
-from .emails import notify_recipients_new_ticket, notify_reply, notify_recipients_reply
+from apps.common.authentication import OptionalJWTAuthentication
+from apps.common.recaptcha import get_client_ip, verify_token
+from apps.common.utils import get_rate_limit_ip, is_rate_limited
+
+from .emails import (
+    notify_recipients_new_ticket,
+    notify_recipients_reply,
+    notify_reply,
+    notify_support_chat,
+)
 from .models import SupportTicket, SupportTicketMessage
 from .serializers import (
+    SupportChatSerializer,
     SupportTicketCreateSerializer,
     SupportTicketMessageSerializer,
     SupportTicketSerializer,
@@ -110,7 +120,9 @@ def support_ticket_reply_view(request, pk):
     if not is_internal:
         if is_staff and not is_owner:
             # Admin replying to a user's ticket — notify the submitter.
-            submitter_email = ticket.user.email if ticket.user_id else None
+            # Chat tickets from website visitors have no user — reply to
+            # the email they left in the chat (Correction 51).
+            submitter_email = ticket.user.email if ticket.user_id else (ticket.contact_email or None)
             notify_reply(ticket, message, submitter_email)
         else:
             # Submitter replying — notify the dev-team distribution list.
@@ -118,5 +130,77 @@ def support_ticket_reply_view(request, pk):
 
     return Response(
         SupportTicketSerializer(ticket, context={"request": request}).data,
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@extend_schema(
+    request=SupportChatSerializer,
+    tags=["Support"],
+    methods=["POST"],
+)
+@api_view(["POST"])
+@authentication_classes([OptionalJWTAuthentication])
+@permission_classes([AllowAny])
+def support_chat_view(request):
+    """Client Correction 51 — floating support chat (in the app and on the
+    public website). Saves the message as a ticket (source=chat) so it shows
+    up in admin, and emails it to the support inbox.
+
+    Anonymous visitors must pass reCAPTCHA (when configured); everyone is
+    rate-limited per IP.
+    """
+    too_many = Response(
+        {"message": "Too many messages. Please wait a few minutes and try again."},
+        status=status.HTTP_429_TOO_MANY_REQUESTS,
+    )
+    if is_rate_limited("support-chat-ip", get_rate_limit_ip(request), limit=10, window_seconds=600):
+        return too_many
+
+    serializer = SupportChatSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
+
+    user = request.user if request.user and request.user.is_authenticated else None
+    if user is None:
+        ok, captcha_message = verify_token(data.get("recaptcha_token", ""), get_client_ip(request))
+        if not ok:
+            return Response(
+                {"recaptcha_token": [captcha_message]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    # Counted only for messages that passed validation + captcha, so junk
+    # requests can't use up someone else's (or everyone's) quota.
+    if is_rate_limited("support-chat-email", data["email"], limit=5, window_seconds=600):
+        return too_many
+    if user is None and is_rate_limited("support-chat-all", "global", limit=300, window_seconds=3600):
+        return too_many
+
+    message = data["message"]
+    first_line = message.splitlines()[0] if message else ""
+    subject = f"Chat: {first_line}"[:200]
+
+    ticket = SupportTicket.objects.create(
+        user=user,
+        organization=_current_organization(request) if user else None,
+        subject=subject,
+        message=message,
+        category=SupportTicket.CATEGORY_QUESTION,
+        source=SupportTicket.SOURCE_CHAT,
+        contact_name=data["name"],
+        contact_email=data["email"].lower(),
+        page_url=(data.get("page_url") or "")[:500],
+        browser=(request.META.get("HTTP_USER_AGENT") or "")[:200],
+    )
+
+    notify_support_chat(ticket)
+
+    return Response(
+        {
+            "success": True,
+            "message": "Thanks! Our support team will get back to you shortly.",
+            "id": str(ticket.id),
+        },
         status=status.HTTP_201_CREATED,
     )

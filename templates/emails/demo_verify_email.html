@@ -1,0 +1,29 @@
+{% extends "emails/base.html" %}
+{% block subject %}Confirm your email for your Bill Munshi demo{% endblock %}
+{% block preheader %}One click to confirm your email for your demo request.{% endblock %}
+{% block heading %}Confirm your email{% endblock %}
+{% block content %}
+  <p style="margin:0 0 14px;">Hi {{ display_name }},</p>
+
+  <p style="margin:0 0 22px;">
+    Thanks for requesting a <strong style="color:#0b1220;">Bill Munshi</strong>
+    demo{% if organization %} for {{ organization }}{% endif %}. Please confirm this
+    is your email address so our team can reach you.
+  </p>
+
+  <p style="margin:0 0 26px;">
+    <a href="{{ verify_url }}"
+       style="display:inline-block;padding:12px 24px;background:#f97316;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;border-radius:8px;box-shadow:0 4px 12px rgba(249,115,22,0.28);letter-spacing:0.01em;">
+      Confirm my email
+    </a>
+  </p>
+
+  <p style="margin:0 0 18px;font-size:13px;color:#64748b;">
+    Or copy this link into your browser:<br />
+    <a href="{{ verify_url }}" style="color:#f97316;word-break:break-all;text-decoration:none;">{{ verify_url }}</a>
+  </p>
+
+  <p style="margin:22px 0 0;font-size:13px;color:#64748b;">
+    Didn&rsquo;t request a demo? Ignore this email.
+  </p>
+{% endblock %}

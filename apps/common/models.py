@@ -279,6 +279,10 @@ class DemoRequest(TimeStampedModel):
     phone = models.CharField(max_length=20)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.NEW)
     notes = models.TextField(blank=True, help_text="Internal sales notes.")
+    # Client Correction 57: the requester confirms the work email through a
+    # link we send them; sales can filter on this in admin.
+    email_verified = models.BooleanField(default=False)
+    email_verified_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         verbose_name = "Demo request"

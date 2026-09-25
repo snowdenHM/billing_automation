@@ -11,6 +11,7 @@ from .auth import (
     password_reset_confirm_view,
     change_password_view,
     verify_email_view,
+    resend_verification_email_view,
     refresh_token_view,
 )
 
@@ -30,6 +31,7 @@ __all__ = [
     "password_reset_confirm_view",
     "change_password_view",
     "verify_email_view",
+    "resend_verification_email_view",
     "refresh_token_view",
     # Profile & User Management
     "me_view",

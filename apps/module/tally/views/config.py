@@ -147,7 +147,11 @@ def create_or_update_tally_config(request, org_id):
                 organization=organization, tally_product_allow_sync=tally_product_allow_sync
             )
 
-        tally_config.tally_product_allow_sync = tally_product_allow_sync
+        # Only touch the inventory flag when the caller actually sent it — a
+        # partial save (e.g. the Additional Mapping section) must not switch
+        # inventory sync off.
+        if "tally_product_allow_sync" in request.data:
+            tally_config.tally_product_allow_sync = tally_product_allow_sync
         tally_config.save()
 
         for field in parent_fields:

@@ -1,5 +1,6 @@
 # apps/users/serializers.py
 
+import re
 from typing import Optional
 
 from django.contrib.auth import get_user_model
@@ -7,7 +8,8 @@ from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_decode
 
-from rest_framework import serializers
+from rest_framework import serializers, status as http_status
+from rest_framework.exceptions import APIException
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from drf_spectacular.utils import extend_schema_field, OpenApiTypes
@@ -16,6 +18,9 @@ from apps.common.recaptcha import ReCaptchaField
 from apps.organizations.models import Organization, OrgMembership
 
 User = get_user_model()
+
+# 2-digit state code + 13 alphanumerics (PAN + entity + checksum).
+GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z0-9]{13}$")
 
 
 # -------------------- Organization info nested under User --------------------
@@ -108,9 +113,32 @@ class RegisterSerializer(serializers.ModelSerializer):
     # this serializer runs.
     recaptcha_token = ReCaptchaField()
 
+    # Correction 56: signup-form organisation details (all optional here so
+    # older clients keep working). GST No. is validated when given.
+    organization_name = serializers.CharField(
+        source="signup_organization_name", max_length=255,
+        required=False, allow_blank=True, default="",
+    )
+    organization_gst_number = serializers.CharField(
+        source="signup_organization_gst", max_length=15,
+        required=False, allow_blank=True, default="",
+    )
+    designation = serializers.CharField(
+        source="signup_designation", max_length=50,
+        required=False, allow_blank=True, default="",
+    )
+    accounting_software = serializers.CharField(
+        source="signup_accounting_software", max_length=50,
+        required=False, allow_blank=True, default="",
+    )
+
     class Meta:
         model = User
-        fields = ["email", "password", "confirm_password", "first_name", "last_name", "phone_number", "recaptcha_token"]
+        fields = [
+            "email", "password", "confirm_password", "first_name", "last_name", "phone_number",
+            "organization_name", "organization_gst_number", "designation", "accounting_software",
+            "recaptcha_token",
+        ]
         extra_kwargs = {
             'email': {'required': True},
             'first_name': {'required': True},
@@ -133,6 +161,14 @@ class RegisterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("This email address is already in use.")
         return value.lower()  # Normalize to lowercase
 
+    def validate_organization_gst_number(self, value):
+        value = (value or "").strip().upper()
+        if value and not GSTIN_RE.match(value):
+            raise serializers.ValidationError(
+                "Enter a valid 15-character GST No. (e.g. 22AAAAA0000A1Z5)."
+            )
+        return value
+
     def create(self, validated_data):
         # Remove confirm_password from the data
         validated_data.pop('confirm_password', None)
@@ -140,8 +176,18 @@ class RegisterSerializer(serializers.ModelSerializer):
         validated_data.pop('recaptcha_token', None)
         # Let create_user handle hashing & defaults
         password = validated_data.pop("password")
+        # Correction 57: self-registered accounts must verify their email.
+        validated_data["email_verification_required"] = True
         user = User.objects.create_user(password=password, **validated_data)
         return user
+
+
+class EmailNotVerified(APIException):
+    """Login refused until the signup email is verified (Correction 57)."""
+
+    status_code = http_status.HTTP_403_FORBIDDEN
+    default_code = "email_not_verified"
+    default_detail = "Please verify your email address before logging in."
 
 
 class LoginSerializer(serializers.Serializer):
@@ -165,6 +211,17 @@ class LoginSerializer(serializers.Serializer):
 
         if not user.check_password(password):
             raise serializers.ValidationError("Invalid email or password")
+
+        # Correction 57 — only for accounts created via public signup.
+        if user.email_verification_required and not user.email_verified:
+            raise EmailNotVerified(detail={
+                "code": "email_not_verified",
+                "message": (
+                    "Please verify your email address before logging in. "
+                    "Check your inbox for the verification link."
+                ),
+                "email": user.email,
+            })
 
         # Update last active timestamp
         user.update_last_active()

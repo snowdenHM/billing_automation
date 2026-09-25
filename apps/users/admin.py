@@ -22,8 +22,8 @@ class UserAdmin(BaseUserAdmin, UnfoldModelAdmin):
     change_password_form = AdminPasswordChangeForm
 
     list_display = ("id", "email", "first_name", "last_name", "is_active", "is_staff", "is_superuser", "date_joined")
-    search_fields = ("email", "first_name", "last_name")
-    list_filter = ("is_active", "is_staff", "is_superuser", "date_joined")
+    search_fields = ("email", "first_name", "last_name", "signup_organization_name", "signup_organization_gst")
+    list_filter = ("is_active", "is_staff", "is_superuser", "email_verified", "date_joined")
     ordering = ("-date_joined",)
     readonly_fields = ("date_joined", "last_login")
     actions = ["reset_user_passwords"]
@@ -32,7 +32,12 @@ class UserAdmin(BaseUserAdmin, UnfoldModelAdmin):
 
     fieldsets = (
         (None, {"fields": ("email", "password")}),
-        (_("Personal info"), {"fields": ("first_name", "last_name")}),
+        (_("Personal info"), {"fields": ("first_name", "last_name", "phone_number")}),
+        (_("Email verification"), {"fields": ("email_verified", "email_verification_required")}),
+        (_("Signup details"), {"fields": (
+            "signup_organization_name", "signup_organization_gst",
+            "signup_designation", "signup_accounting_software",
+        )}),
         (_("Permissions"), {"fields": ("is_active", "is_staff", "is_superuser", "groups", "user_permissions")}),
         (_("Important dates"), {"fields": ("last_login", "date_joined")}),
     )

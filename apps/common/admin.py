@@ -25,18 +25,22 @@ class DemoRequestAdmin(UnfoldModelAdmin):
 
     list_display = (
         "full_name", "organization", "email", "phone",
-        "accounting_software", "status", "created_at",
+        "accounting_software", "email_verified", "status", "created_at",
     )
-    list_filter = ("status", "accounting_software", "created_at")
+    list_filter = ("status", "email_verified", "accounting_software", "created_at")
     search_fields = ("full_name", "organization", "email", "phone")
     list_editable = ("status",)
     readonly_fields = (
         "id", "full_name", "organization", "accounting_software",
-        "email", "phone", "created_at", "updated_at",
+        "email", "phone", "email_verified", "email_verified_at",
+        "created_at", "updated_at",
     )
     fieldsets = (
         ("Contact", {
-            "fields": ("full_name", "organization", "email", "phone", "accounting_software"),
+            "fields": (
+                "full_name", "organization", "email", "email_verified",
+                "email_verified_at", "phone", "accounting_software",
+            ),
         }),
         ("Follow-up", {
             "fields": ("status", "notes"),

@@ -18,12 +18,17 @@ class SupportTicketAdmin(UnfoldModelAdmin):
         "category",
         "status",
         "priority",
+        "source",
+        "contact_email",
         "organization",
         "user",
         "created_at",
     )
-    list_filter = ("status", "category", "priority", "is_deleted")
-    search_fields = ("subject", "message", "user__email", "organization__name")
+    list_filter = ("status", "category", "priority", "source", "is_deleted")
+    search_fields = (
+        "subject", "message", "user__email", "organization__name",
+        "contact_name", "contact_email",
+    )
     readonly_fields = ("id", "created_at", "updated_at")
     inlines = [SupportTicketMessageInline]
 

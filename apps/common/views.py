@@ -5,6 +5,7 @@ import logging
 import os
 
 from django.conf import settings
+from django.core import signing
 from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 from django.db import IntegrityError
 from django.http import Http404, HttpResponseForbidden
@@ -13,12 +14,14 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.static import serve as django_serve
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from apps.common.authentication import OptionalJWTAuthentication
+from apps.common.models import DemoRequest
 from apps.common.serializers import DemoRequestSerializer
-from apps.common.utils import send_simple_email
+from apps.common.utils import send_simple_email, send_templated_email
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +150,11 @@ def book_demo_view(request):
         email_errors = [str(e) for e in errors.get("email", [])]
         already_booked = DemoRequestSerializer.ALREADY_BOOKED_MESSAGE in email_errors
 
+        # Correction 57: booked but never verified (e.g. the first email got
+        # lost) — send the verification link again, rate-limited.
+        if already_booked:
+            _resend_demo_verify_if_pending(request.data.get("email"))
+
         # Surface one flat message for the toast, keep per-field errors
         # for inline display.
         first_error = next(
@@ -176,6 +184,9 @@ def book_demo_view(request):
             status=status.HTTP_409_CONFLICT,
         )
 
+    # Correction 57: ask the requester to confirm their work email.
+    _send_demo_verify_email(demo_request)
+
     # Notify sales. A dead SMTP server must never fail the booking the
     # visitor already completed, so failures are logged and swallowed.
     try:
@@ -187,6 +198,8 @@ def book_demo_view(request):
                 f"Email: {demo_request.email}\n"
                 f"Phone: {demo_request.phone}\n"
                 f"Accounting software: {demo_request.get_accounting_software_display()}\n"
+                "Email verified: No — a verification link was sent to the requester. "
+                "You'll get another email once they verify.\n"
             ),
             to_email=getattr(settings, "SALES_NOTIFICATION_EMAIL", "support@billmunshi.com"),
         )
@@ -195,8 +208,99 @@ def book_demo_view(request):
 
     return Response(
         {
-            "message": "Thank you! Our team will contact you shortly to schedule your demo.",
+            "message": (
+                "Thank you! We've sent a verification link to your email — please "
+                "verify it. Our team will contact you shortly to schedule your demo."
+            ),
+            "email_verification_required": True,
             "demo_request": DemoRequestSerializer(demo_request).data,
         },
         status=status.HTTP_201_CREATED,
     )
+
+
+# ---------------------------------------------------------------------------
+# Demo request email verification (Client Correction 57)
+# ---------------------------------------------------------------------------
+
+_DEMO_VERIFY_SALT = "apps.common.demo-request-verify"
+_DEMO_VERIFY_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
+
+
+def _resend_demo_verify_if_pending(email):
+    from apps.common.utils import is_rate_limited
+
+    email = (email or "").strip().lower()
+    if not email:
+        return
+    demo_request = DemoRequest.objects.filter(email=email, email_verified=False).first()
+    if demo_request and not is_rate_limited("demo-verify-resend", email, limit=3, window_seconds=3600):
+        _send_demo_verify_email(demo_request)
+
+
+def _send_demo_verify_email(demo_request):
+    """Email the requester a signed link that confirms their address.
+    Failures are logged, never raised — the booking is already saved."""
+    token = signing.dumps({"demo": str(demo_request.pk)}, salt=_DEMO_VERIFY_SALT)
+    base = getattr(settings, "FRONTEND_URL", "https://billmunshi.com").rstrip("/")
+    verify_url = f"{base}/book-demo/verify?token={token}"
+    try:
+        send_templated_email(
+            subject="Confirm your email for your Bill Munshi demo",
+            template_base="demo_verify_email",
+            to_email=demo_request.email,
+            context={
+                "display_name": demo_request.full_name,
+                "organization": demo_request.organization,
+                "verify_url": verify_url,
+            },
+        )
+    except Exception as exc:
+        logger.error("Demo verify-email send failed for %s: %s", demo_request.email, exc)
+
+
+@extend_schema(tags=["Public"], methods=["POST"])
+@api_view(["POST"])
+@authentication_classes([OptionalJWTAuthentication])
+@permission_classes([AllowAny])
+def book_demo_verify_view(request):
+    """Mark a demo request's email as verified from the emailed link."""
+    from django.utils import timezone
+
+    token = ((request.data or {}).get("token") or "").strip()
+    invalid = Response(
+        {"message": "This verification link is invalid or has expired."},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+    if not token:
+        return invalid
+    try:
+        payload = signing.loads(token, salt=_DEMO_VERIFY_SALT, max_age=_DEMO_VERIFY_MAX_AGE)
+        demo_request = DemoRequest.objects.get(pk=payload.get("demo"))
+    except (BadSignature, SignatureExpired, DemoRequest.DoesNotExist, ValueError, TypeError, AttributeError):
+        return invalid
+    except Exception:  # malformed UUID etc.
+        return invalid
+
+    if demo_request.email_verified:
+        return Response({"message": "Your email is already verified. Our team will contact you shortly."})
+
+    demo_request.email_verified = True
+    demo_request.email_verified_at = timezone.now()
+    demo_request.save(update_fields=["email_verified", "email_verified_at", "updated_at"])
+
+    try:
+        send_simple_email(
+            subject=f"Demo request email verified — {demo_request.organization}",
+            message=(
+                f"{demo_request.full_name} <{demo_request.email}> verified their email.\n"
+                f"Organization: {demo_request.organization}\n"
+                f"Phone: {demo_request.phone}\n"
+                f"Accounting software: {demo_request.get_accounting_software_display()}\n"
+            ),
+            to_email=getattr(settings, "SALES_NOTIFICATION_EMAIL", "support@billmunshi.com"),
+        )
+    except Exception as exc:
+        logger.error("Demo-verified notification failed for %s: %s", demo_request.email, exc)
+
+    return Response({"message": "Email verified! Our team will contact you shortly to schedule your demo."})

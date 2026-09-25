@@ -1,4 +1,4 @@
-Welcome to Bill Munshi, {{ display_name }}!
+{% autoescape off %}Welcome to Bill Munshi, {{ display_name }}!
 
 We're thrilled to have you on board. Your account has been created with:
   {{ user.email }}
@@ -16,3 +16,4 @@ Need help? Reply to this email or write to support@billmunshi.com.
 
 — The Bill Munshi team
 https://billmunshi.com
+{% endautoescape %}

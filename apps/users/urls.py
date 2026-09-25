@@ -7,6 +7,7 @@ from .views import (
     change_password_view,
     me_view,
     verify_email_view,
+    resend_verification_email_view,
     refresh_token_view,
 )
 
@@ -20,6 +21,7 @@ urlpatterns = [
     path("auth/password/reset/", password_reset_request_view, name="password-reset"),
     path("auth/password/confirm/", password_reset_confirm_view, name="password-confirm"),
     path("auth/password/change/", change_password_view, name="password-change"),
+    path("auth/verify-email/resend/", resend_verification_email_view, name="verify-email-resend"),
     path("auth/verify-email/<str:uidb64>/<str:token>/", verify_email_view, name="verify-email"),
 
     # Profile

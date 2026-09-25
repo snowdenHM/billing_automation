@@ -12,10 +12,18 @@ from rest_framework.response import Response
 
 from apps.common.utils import get_organization_from_request
 
-from ..models import TallyVendorBill, TallyExpenseBill
+from ..models import TallyVendorBill, TallyExpenseBill, TallyPaymentBill
 from .helpers import OrganizationAPIKeyOrBearerToken
 
 logger = logging.getLogger(__name__)
+
+# Callback ``mode`` -> bill model. "payment" was missing earlier, so payment
+# vouchers could never be confirmed and stayed "Sync pending in Tally".
+_MODE_MODELS = {
+    "vendor": TallyVendorBill,
+    "expense": TallyExpenseBill,
+    "payment": TallyPaymentBill,
+}
 
 
 @extend_schema(
@@ -26,7 +34,7 @@ logger = logging.getLogger(__name__)
             "properties": {
                 "id": {"type": "string", "format": "uuid", "description": "Bill ID to update"},
                 "status": {"type": "boolean", "description": "Tally sync status to set"},
-                "mode": {"type": "string", "enum": ["vendor", "expense"], "description": "Bill type mode"},
+                "mode": {"type": "string", "enum": ["vendor", "expense", "payment"], "description": "Bill type mode"},
                 "message": {"type": "string", "description": "Message from Tally about sync result (success info or error reason)"},
                 "Data": {
                     "type": "array",
@@ -36,7 +44,7 @@ logger = logging.getLogger(__name__)
                         "properties": {
                             "id": {"type": "string", "format": "uuid"},
                             "status": {"type": "boolean"},
-                            "mode": {"type": "string", "enum": ["vendor", "expense"]},
+                            "mode": {"type": "string", "enum": ["vendor", "expense", "payment"]},
                             "message": {"type": "string", "description": "Message from Tally about sync result"},
                         },
                         "required": ["id", "status", "mode"],
@@ -69,7 +77,8 @@ logger = logging.getLogger(__name__)
 @permission_classes([OrganizationAPIKeyOrBearerToken])
 def update_bill_tally_sync_status(request, org_id):
     """
-    Update the tally_synced status for bills based on mode (vendor or expense).
+    Update the tally_synced status for bills based on mode (vendor, expense
+    or payment).
     Supports both single and bulk updates.
     """
     try:
@@ -99,14 +108,14 @@ def update_bill_tally_sync_status(request, org_id):
 
             if not all([bill_id is not None, sync_status is not None, mode is not None]):
                 return {"error": "Missing required fields: id, status, and mode are all required"}
-            if mode not in ("vendor", "expense"):
-                return {"error": 'Invalid mode. Must be either "vendor" or "expense"'}
+            if mode not in _MODE_MODELS:
+                return {"error": 'Invalid mode. Must be one of "vendor", "expense" or "payment"'}
             try:
                 sync_status = _normalize_status(sync_status)
             except ValueError as e:
                 return {"error": str(e)}
 
-            model = TallyVendorBill if mode == "vendor" else TallyExpenseBill
+            model = _MODE_MODELS[mode]
             try:
                 bill = model.objects.get(id=bill_id)
             except model.DoesNotExist:

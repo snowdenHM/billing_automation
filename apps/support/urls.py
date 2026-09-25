@@ -9,6 +9,7 @@ app_name = "support"
 
 urlpatterns = [
     path("tickets/", views.support_ticket_create_view, name="ticket-create"),
+    path("chat/", views.support_chat_view, name="chat"),
     path("tickets/mine/", views.support_ticket_mine_view, name="ticket-mine"),
     path("tickets/<uuid:pk>/reply/", views.support_ticket_reply_view, name="ticket-reply"),
 ]

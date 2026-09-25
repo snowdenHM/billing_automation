@@ -11,11 +11,18 @@ from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from apps.common.utils import send_simple_email, send_templated_email
+from apps.common.authentication import OptionalJWTAuthentication
+from apps.common.utils import (
+    get_rate_limit_ip,
+    is_rate_limited,
+    send_simple_email,
+    send_templated_email,
+)
+from apps.users.tokens import email_verification_token
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +41,7 @@ def _build_frontend_url(path):
 
 def _send_verify_email(user):
     """Generate a signed verification link and send the branded email."""
-    token = PasswordResetTokenGenerator().make_token(user)
+    token = email_verification_token.make_token(user)
     uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
     verify_url = _build_frontend_url(f"/auth/verify-email?uidb64={uidb64}&token={token}")
     try:
@@ -91,7 +98,14 @@ def register_view(request):
         logger.error("Welcome email send failed for %s: %s", user.email, exc)
 
     return Response(
-        {"user": UserSerializer(user, context={"request": request}).data},
+        {
+            "user": UserSerializer(user, context={"request": request}).data,
+            "email_verification_required": True,
+            "message": (
+                "Account created. We've sent a verification link to "
+                f"{user.email} — please verify your email to log in."
+            ),
+        },
         status=status.HTTP_201_CREATED,
     )
 
@@ -172,6 +186,7 @@ def change_password_view(request):
 
 @extend_schema(responses={"200": None}, tags=["Auth"], methods=["GET"])
 @api_view(["GET"])
+@authentication_classes([OptionalJWTAuthentication])
 @permission_classes([AllowAny])
 def verify_email_view(request, uidb64, token):
     """Verify a user's email address from the link in the verification email."""
@@ -181,12 +196,48 @@ def verify_email_view(request, uidb64, token):
     except Exception:
         return Response({"detail": "Invalid verification link"}, status=status.HTTP_400_BAD_REQUEST)
 
-    if not PasswordResetTokenGenerator().check_token(user, token):
+    if user.email_verified:
+        return Response({"detail": "Email already verified. You can log in."})
+
+    if not email_verification_token.check_token(user, token):
         return Response({"detail": "Invalid or expired verification token"}, status=status.HTTP_400_BAD_REQUEST)
 
     user.email_verified = True
     user.save(update_fields=["email_verified"])
     return Response({"detail": "Email verified successfully."})
+
+
+@extend_schema(responses={"200": None}, tags=["Auth"], methods=["POST"])
+@api_view(["POST"])
+@authentication_classes([OptionalJWTAuthentication])
+@permission_classes([AllowAny])
+def resend_verification_email_view(request):
+    """Re-send the email-verification link (Correction 57).
+
+    Always answers with the same generic message so it can't be used to
+    probe which emails are registered.
+    """
+    email = ((request.data or {}).get("email") or "").strip().lower()
+    generic = {
+        "detail": "If this email needs verification, a new link has been sent."
+    }
+    if not email:
+        return Response({"email": ["This field is required."]}, status=status.HTTP_400_BAD_REQUEST)
+
+    ip = get_rate_limit_ip(request)
+    if (
+        is_rate_limited("verify-resend-ip", ip, limit=20, window_seconds=3600)
+        or is_rate_limited("verify-resend-email", email, limit=3, window_seconds=900)
+    ):
+        return Response(
+            {"detail": "Too many requests. Please wait a few minutes and try again."},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    user = User.objects.filter(email__iexact=email, is_active=True).first()
+    if user and not user.email_verified:
+        _send_verify_email(user)
+    return Response(generic)
 
 
 @extend_schema(request=RefreshTokenSerializer, responses=RefreshTokenSerializer, tags=["Auth"], methods=["POST"])

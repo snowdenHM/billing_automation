@@ -43,6 +43,42 @@ class SupportTicketCreateSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"]
 
 
+class SupportChatSerializer(serializers.Serializer):
+    """``POST /support/chat/`` — the floating support chat (Correction 51).
+    Name / email / message only; open to visitors who aren't logged in."""
+
+    name = serializers.CharField(max_length=120, trim_whitespace=True)
+
+    def validate_name(self, value):
+        # The name goes into the email subject — no header line breaks.
+        return " ".join(value.split())
+    email = serializers.EmailField(max_length=254)
+    message = serializers.CharField(max_length=5000, trim_whitespace=True)
+    page_url = serializers.CharField(
+        max_length=500, required=False, allow_blank=True, default=""
+    )
+
+    def validate_page_url(self, value):
+        # Informational only — keep it if it's a real URL, else drop it so
+        # the ticket stays editable in admin (model field is a URLField).
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from django.core.validators import URLValidator
+
+        value = (value or "").strip()[:500]
+        if not value:
+            return ""
+        try:
+            URLValidator()(value)
+        except DjangoValidationError:
+            return ""
+        return value
+
+    # Checked in the view, and only for anonymous visitors.
+    recaptcha_token = serializers.CharField(
+        required=False, allow_blank=True, default="", write_only=True
+    )
+
+
 class SupportTicketSerializer(serializers.ModelSerializer):
     """Read serializer — nests the message thread."""
 
@@ -75,7 +111,7 @@ class SupportTicketSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_submitter_email(self, obj):
-        return obj.user.email if obj.user_id else None
+        return obj.user.email if obj.user_id else (obj.contact_email or None)
 
     def get_messages(self, obj):
         request = self.context.get("request")

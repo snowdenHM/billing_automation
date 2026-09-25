@@ -27,7 +27,7 @@
           </tr>
           <tr>
             <td style="padding:4px 0;color:#64748b;font-weight:600;vertical-align:top;">Submitter</td>
-            <td style="padding:4px 0;color:#0b1220;">{% if ticket.user %}{{ ticket.user.email }}{% else %}Anonymous{% endif %}</td>
+            <td style="padding:4px 0;color:#0b1220;">{% if ticket.contact_email %}{{ ticket.contact_name }} &lt;{{ ticket.contact_email }}&gt;{% elif ticket.user %}{{ ticket.user.email }}{% else %}Anonymous{% endif %}</td>
           </tr>
           <tr>
             <td style="padding:4px 0;color:#64748b;font-weight:600;vertical-align:top;">Organization</td>

@@ -1,4 +1,4 @@
-Confirm your email address
+{% autoescape off %}Confirm your email address
 
 Hi {{ display_name }},
 
@@ -11,3 +11,4 @@ created for you.
 
 — The Bill Munshi team
 https://billmunshi.com
+{% endautoescape %}

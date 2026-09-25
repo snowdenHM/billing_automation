@@ -72,6 +72,21 @@ class SupportTicket(models.Model):
     page_url = models.URLField(max_length=500, blank=True, default="")
     browser = models.CharField(max_length=200, blank=True, default="")
 
+    # Client Correction 51: the floating support chat (app + public website)
+    # asks for name / email / message. The sender may not be logged in, so
+    # their details are kept on the ticket itself.
+    SOURCE_TICKET = "ticket"
+    SOURCE_CHAT = "chat"
+    SOURCE_CHOICES = [
+        (SOURCE_TICKET, "Support ticket"),
+        (SOURCE_CHAT, "Support chat"),
+    ]
+    source = models.CharField(
+        max_length=10, choices=SOURCE_CHOICES, default=SOURCE_TICKET
+    )
+    contact_name = models.CharField(max_length=120, blank=True, default="")
+    contact_email = models.EmailField(blank=True, default="")
+
     # Trashable-lite: soft delete flag, kept optional/simple rather than
     # pulling in apps.common's full Trashable mixin (which carries its own
     # migration dependencies) — a plain boolean is enough for admin cleanup.

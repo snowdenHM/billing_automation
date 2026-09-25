@@ -24,6 +24,19 @@ class User(AbstractUser):
 
     # Account status
     email_verified = models.BooleanField(default=False)
+    # Client Correction 57: set for accounts created through public signup.
+    # Such users must verify their email before they can log in. Existing /
+    # admin-created / invited users keep False, so nothing changes for them.
+    email_verification_required = models.BooleanField(default=False)
+
+    # Details captured on the public signup form (Correction 56). Signup
+    # doesn't create an Organization, so they're kept here for onboarding.
+    signup_organization_name = models.CharField(max_length=255, blank=True, default="")
+    signup_organization_gst = models.CharField(
+        "Organization GST No.", max_length=15, blank=True, default=""
+    )
+    signup_designation = models.CharField(max_length=50, blank=True, default="")
+    signup_accounting_software = models.CharField(max_length=50, blank=True, default="")
     last_active = models.DateTimeField(null=True, blank=True)
 
     # Settings and preferences
