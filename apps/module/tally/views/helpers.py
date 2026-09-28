@@ -4,6 +4,7 @@ Shared helpers used across tally views.
 Kept here to avoid circular imports between view modules.
 """
 import logging
+import re
 
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
@@ -42,6 +43,15 @@ def clean_decimal_value(value_str):
 # ============================================================================
 # Vendor Ledger Lookup (shared by vendor and expense views)
 # ============================================================================
+
+_GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z0-9]{13}$")
+
+
+def _gstin_pan(gstin):
+    """PAN part of a well-formed GSTIN (chars 3-12), else ``None``."""
+    value = re.sub(r"\s+", "", str(gstin or "")).upper()
+    return value[2:12] if _GSTIN_RE.match(value) else None
+
 
 def find_tally_vendor_ledger(company_name, organization, vendor_gst=None,
                              similarity_threshold=0.70, use_config_threshold=False,
@@ -93,9 +103,23 @@ def find_tally_vendor_ledger(company_name, organization, vendor_gst=None,
                 logger.info(f"Found vendor by GST match: {gst_match.name} (GST: {gst_match.gst_in})")
                 return gst_match
 
+        # A name match must not pick a ledger registered under a DIFFERENT
+        # business: when both the bill and the ledger carry a valid GSTIN,
+        # their PAN part (chars 3-12) must agree. Same PAN / other state
+        # (multi-state vendor) is still fine; ledgers without GSTIN too.
+        bill_pan = _gstin_pan(vendor_gst)
+
+        def _pan_conflict(ledger):
+            ledger_pan = _gstin_pan(ledger.gst_in)
+            return bool(bill_pan and ledger_pan and bill_pan != ledger_pan)
+
         # Step 2: Exact name match
         normalized_name = normalize_company_name(company_name)
-        exact = vendor_ledgers.filter(name__iexact=company_name.strip()).first()
+        exact = next(
+            (l for l in vendor_ledgers.filter(name__iexact=company_name.strip())
+             if not _pan_conflict(l)),
+            None,
+        )
         if exact:
             logger.info(f"Found vendor by exact name: {exact.name}")
             return exact
@@ -114,6 +138,8 @@ def find_tally_vendor_ledger(company_name, organization, vendor_gst=None,
         best_similarity = 0.0
 
         for ledger in vendor_ledgers:
+            if _pan_conflict(ledger):
+                continue
             normalized_ledger = normalize_company_name(ledger.name)
 
             # Normalized exact match
@@ -138,7 +164,11 @@ def find_tally_vendor_ledger(company_name, organization, vendor_gst=None,
 
         # Step 4: Contains fallback (if using config threshold — expense style)
         if use_config_threshold:
-            contains = vendor_ledgers.filter(name__icontains=company_name).first()
+            contains = next(
+                (l for l in vendor_ledgers.filter(name__icontains=company_name)
+                 if not _pan_conflict(l)),
+                None,
+            )
             if contains:
                 logger.info(f"Found vendor by contains match: {contains.name}")
                 return contains
