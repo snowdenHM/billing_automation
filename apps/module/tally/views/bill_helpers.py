@@ -4,7 +4,6 @@ Shared helper functions for Tally vendor and expense bill views.
 Eliminates duplication by parameterizing model/serializer.
 """
 import logging
-import os
 
 from django.conf import settings
 from rest_framework import status
@@ -706,24 +705,36 @@ def _check_file_duplicates(uploaded_file, organization, bill_model, bill_type_la
     """
     warnings = []
 
-    similar_files = bill_model.objects.alive().filter(
-        organization=organization,
-        file__isnull=False,
-    ).exclude(status=bill_model.BillStatus.DRAFT)
-
     uploaded_filename = uploaded_file.name.lower()
 
-    potential_duplicates = []
-    for existing_bill in similar_files:
-        if not (existing_bill.file and existing_bill.file.name):
-            continue
-        existing_filename = os.path.basename(existing_bill.file.name).lower()
-        if existing_filename == uploaded_filename:
-            potential_duplicates.append({
-                'bill': existing_bill,
-                'match_type': 'exact_filename',
-                'reason': 'Same filename detected',
-            })
+    # Match in the database, not in Python.
+    #
+    # This used to pull EVERY non-draft bill in the organisation into
+    # memory and compare basenames in a loop — once per uploaded file. On
+    # a workspace with a few thousand bills that is a full table scan plus
+    # full model instantiation per file, and it ran inside the upload
+    # request while the modal sat spinning.
+    #
+    # Files are stored as ``bills/<org_id>/<name>``, so matching on the
+    # path ending in ``/<name>`` finds the same rows. ``iendswith`` cannot
+    # use an index (leading wildcard), but it still filters server-side and
+    # returns the handful of matches instead of the whole table. Only the
+    # three fields the warning actually needs are fetched.
+    potential_duplicates = [
+        {
+            'bill': existing_bill,
+            'match_type': 'exact_filename',
+            'reason': 'Same filename detected',
+        }
+        for existing_bill in bill_model.objects.alive().filter(
+            organization=organization,
+            file__isnull=False,
+        ).exclude(
+            status=bill_model.BillStatus.DRAFT,
+        ).filter(
+            file__iendswith=f'/{uploaded_filename}',
+        ).only('id', 'bill_munshi_name', 'file')[:3]
+    ]
 
     if potential_duplicates:
         warnings.append({
