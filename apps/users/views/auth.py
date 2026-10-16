@@ -40,7 +40,20 @@ def _build_frontend_url(path):
 
 
 def _send_verify_email(user):
-    """Generate a signed verification link and send the branded email."""
+    """Generate a signed verification link and send the branded email.
+
+    Returns ``(verify_url, sent)``. ``sent`` is False when the provider
+    refused the message.
+
+    Callers must not assume delivery. This swallowed its exception and
+    returned only the URL, so every caller carried on as if the mail had
+    gone out — which is how a signup could answer "we've sent a
+    verification link to <email>" while SendGrid was returning
+    "Maximum credits exceeded" and nothing had been sent at all. The user
+    then waits for a mail that will never arrive, and because
+    ``email_verification_required`` blocks login, the account is unusable
+    with no visible reason.
+    """
     token = email_verification_token.make_token(user)
     uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
     verify_url = _build_frontend_url(f"/auth/verify-email?uidb64={uidb64}&token={token}")
@@ -57,7 +70,8 @@ def _send_verify_email(user):
         )
     except Exception as exc:
         logger.error("Verify-email send failed for %s: %s", user.email, exc)
-    return verify_url
+        return verify_url, False
+    return verify_url, True
 from apps.users.serializers import (
     RegisterSerializer,
     LoginSerializer,
@@ -82,7 +96,7 @@ def register_view(request):
 
     # Fire the welcome + verify-email flow. Failures are logged, never
     # fatal — signup itself succeeds even if SMTP is temporarily down.
-    verify_url = _send_verify_email(user)
+    verify_url, verification_sent = _send_verify_email(user)
     try:
         send_templated_email(
             subject="Welcome to Bill Munshi",
@@ -97,14 +111,29 @@ def register_view(request):
     except Exception as exc:
         logger.error("Welcome email send failed for %s: %s", user.email, exc)
 
+    # Say what actually happened. The account exists either way — the
+    # signup itself succeeded — but claiming a link was sent when the
+    # provider rejected it leaves the user watching an inbox for nothing,
+    # unable to log in and with no idea why.
+    if verification_sent:
+        message = (
+            "Account created. We've sent a verification link to "
+            f"{user.email} — please verify your email to log in."
+        )
+    else:
+        message = (
+            f"Account created for {user.email}, but we couldn't send the "
+            "verification email just now. Use \u201cResend verification "
+            "email\u201d below in a few minutes, or contact support if it "
+            "keeps failing."
+        )
+
     return Response(
         {
             "user": UserSerializer(user, context={"request": request}).data,
             "email_verification_required": True,
-            "message": (
-                "Account created. We've sent a verification link to "
-                f"{user.email} — please verify your email to log in."
-            ),
+            "verification_email_sent": verification_sent,
+            "message": message,
         },
         status=status.HTTP_201_CREATED,
     )
@@ -236,7 +265,28 @@ def resend_verification_email_view(request):
 
     user = User.objects.filter(email__iexact=email, is_active=True).first()
     if user and not user.email_verified:
-        _send_verify_email(user)
+        _, sent = _send_verify_email(user)
+        if not sent:
+            # Trade-off, taken deliberately. The generic reply above exists
+            # so this endpoint cannot be used to probe which addresses are
+            # registered, and a 503 here is only reachable when an account
+            # was in fact found — so during a provider outage it does leak
+            # that much.
+            #
+            # Returning the usual "a new link has been sent" would be worse:
+            # the user retries, is told it worked every time, and never
+            # learns the mail is not coming. The leak needs our mail
+            # provider to be down to exist at all; the lie is permanent.
+            return Response(
+                {
+                    "detail": (
+                        "Our email service is temporarily unavailable, so the "
+                        "link could not be sent. Please try again in a few "
+                        "minutes."
+                    )
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
     return Response(generic)
 
 
