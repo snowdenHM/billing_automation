@@ -96,7 +96,7 @@ class BaseTallyBillSerializer(serializers.ModelSerializer):
         stored stage says — rows that predate the stage column default to
         ``queued``, and showing them at 5% would be wrong.
         """
-        from apps.module.tally.models import ProcessingStage
+        from apps.module.tally.models import STAGE_PERCENT, ProcessingStage
 
         if getattr(obj, 'status', None) in ('Analysed', 'Verified', 'Synced'):
             return 100
@@ -104,7 +104,7 @@ class BaseTallyBillSerializer(serializers.ModelSerializer):
             return 100
 
         stage = getattr(obj, 'processing_stage', None) or ProcessingStage.QUEUED
-        return ProcessingStage.PERCENT.get(str(stage), 0)
+        return STAGE_PERCENT.get(str(stage), 0)
 
     def get_file(self, obj):
         """Return a short-lived, HMAC-signed URL for the bill file.

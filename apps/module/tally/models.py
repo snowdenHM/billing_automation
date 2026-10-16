@@ -90,8 +90,15 @@ class ProcessingStage(models.TextChoices):
     nothing and is why they kept pressing Analyse on rows that were
     already being worked on.
 
-    The background task advances this; PERCENT below is the mapping the
-    API hands the frontend so the two cannot drift apart.
+    The background task advances this; ``STAGE_PERCENT`` below maps each
+    stage to the number the API hands the frontend, so the two cannot
+    drift apart.
+
+    NOTE: nothing but choices may live in this class body. ``TextChoices``
+    turns every class attribute into a member, so a helper dict defined
+    here becomes a "choice" whose value is the dict's repr — which is what
+    triggered ``fields.E009: 'max_length' is too small to fit the longest
+    value in 'choices' (98 characters)``. Keep helpers at module level.
     """
 
     QUEUED = "queued", "Queued"
@@ -101,17 +108,24 @@ class ProcessingStage(models.TextChoices):
     DONE = "done", "Done"
     FAILED = "failed", "Failed"
 
-    # Deliberately not linear: screening is one model call, analysis is the
-    # long one. Spacing the steps this way keeps the bar from parking at a
-    # number for most of the wait.
-    PERCENT = {
-        "queued": 5,
-        "screening": 20,
-        "analysing": 55,
-        "duplicate_check": 85,
-        "done": 100,
-        "failed": 100,
-    }
+
+# Stage -> progress percentage for the list UI.
+#
+# Deliberately not linear: screening is one model call, analysis is the
+# long one. Spacing the steps this way keeps the bar from parking at a
+# single number for most of the wait.
+# Keyed on ``.value`` — plain strings, exactly what the column stores and
+# what the serializer looks up. Keying on the members themselves happens to
+# work (a str-mixin enum hashes as its value) but relies on a subtlety no
+# reader should have to verify.
+STAGE_PERCENT = {
+    ProcessingStage.QUEUED.value: 5,
+    ProcessingStage.SCREENING.value: 20,
+    ProcessingStage.ANALYSING.value: 55,
+    ProcessingStage.DUPLICATE_CHECK.value: 85,
+    ProcessingStage.DONE.value: 100,
+    ProcessingStage.FAILED.value: 100,
+}
 
 
 # -----------------------------
@@ -508,7 +522,7 @@ class TallyVendorBill(BaseOrgModel, TrashableMixin):
     # Coarse progress for the upload -> analysis pipeline, so the list can
     # show a real progress bar instead of an indeterminate spinner. Written
     # by the background task as it moves between steps; see
-    # ProcessingStage.PERCENT for the mapping the API exposes.
+    # STAGE_PERCENT for the mapping the API exposes.
     processing_stage = models.CharField(
         max_length=20,
         choices=ProcessingStage.choices,
@@ -870,7 +884,7 @@ class TallyExpenseBill(BaseOrgModel, TrashableMixin):
     # Coarse progress for the upload -> analysis pipeline, so the list can
     # show a real progress bar instead of an indeterminate spinner. Written
     # by the background task as it moves between steps; see
-    # ProcessingStage.PERCENT for the mapping the API exposes.
+    # STAGE_PERCENT for the mapping the API exposes.
     processing_stage = models.CharField(
         max_length=20,
         choices=ProcessingStage.choices,
@@ -1443,7 +1457,7 @@ class TallyPaymentBill(BaseOrgModel, TrashableMixin):
     # Coarse progress for the upload -> analysis pipeline, so the list can
     # show a real progress bar instead of an indeterminate spinner. Written
     # by the background task as it moves between steps; see
-    # ProcessingStage.PERCENT for the mapping the API exposes.
+    # STAGE_PERCENT for the mapping the API exposes.
     processing_stage = models.CharField(
         max_length=20,
         choices=ProcessingStage.choices,
