@@ -4,6 +4,7 @@ import re
 from typing import Optional
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_decode
@@ -16,6 +17,7 @@ from drf_spectacular.utils import extend_schema_field, OpenApiTypes
 
 from apps.common.recaptcha import ReCaptchaField
 from apps.organizations.models import Organization, OrgMembership
+from apps.organizations.services import provision_organization
 
 User = get_user_model()
 
@@ -178,7 +180,29 @@ class RegisterSerializer(serializers.ModelSerializer):
         password = validated_data.pop("password")
         # Correction 57: self-registered accounts must verify their email.
         validated_data["email_verification_required"] = True
-        user = User.objects.create_user(password=password, **validated_data)
+
+        # User and workspace are created together. Previously only the User
+        # row was written: the organisation name, GSTIN and accounting
+        # software from the form were parked in ``signup_*`` text columns and
+        # nothing was done with them. No Organization, no membership — so the
+        # new account signed in to an empty Clients list (that page lists
+        # organisations the user has an ACTIVE MEMBERSHIP in) with nowhere to
+        # upload a bill.
+        #
+        # Atomic: an account whose workspace failed to materialise is worse
+        # than a signup the user can simply retry.
+        with transaction.atomic():
+            user = User.objects.create_user(password=password, **validated_data)
+
+            provision_organization(
+                user,
+                name=validated_data.get("signup_organization_name", ""),
+                gst_number=validated_data.get("signup_organization_gst", ""),
+                accounting_software=validated_data.get(
+                    "signup_accounting_software", "",
+                ),
+            )
+
         return user
 
 
