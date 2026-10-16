@@ -26,18 +26,47 @@ def send_simple_email(subject: str, message: str, to_email: str, from_email: str
 
 
 def _resolve_email_connection(cfg):
-    """Return a DRF-style email connection matching the runtime config.
+    """Return an email connection matching the runtime config.
 
-    When SendGrid is enabled we build an anymail SendGrid backend with the
-    DB-provided API key. Otherwise Django's ``get_connection`` returns the
-    ``EMAIL_BACKEND`` configured in settings (console in dev, SMTP in
-    prod fallback).
+    The provider is chosen in Django admin (``EmailSettings.provider``),
+    so operations can move off a failing service without a redeploy. This
+    used to understand SendGrid and nothing else: when that account
+    returned "Maximum credits exceeded" there was no switch to throw, and
+    every verification email was lost until a release went out.
+
+    Falls through to the settings-level ``EMAIL_BACKEND`` whenever the
+    chosen provider is not usable — a provider set to SMTP with no host,
+    for instance — rather than raising here, so a misconfiguration
+    degrades to the configured default instead of taking signup down.
     """
     if cfg.use_sendgrid:
         return get_connection(
             backend="anymail.backends.sendgrid.EmailBackend",
             api_key=cfg.sendgrid_api_key,
         )
+
+    if cfg.use_smtp:
+        return get_connection(
+            backend="django.core.mail.backends.smtp.EmailBackend",
+            host=cfg.smtp_host,
+            port=cfg.smtp_port,
+            username=cfg.smtp_username,
+            password=cfg.smtp_password,
+            # Django rejects both at once. STARTTLS wins when the pair is
+            # ticked, since port 587 is the common case.
+            #
+            # Note the asymmetry: zeroing BOTH on conflict would quietly
+            # drop to an unencrypted connection, which is the one outcome
+            # that must never come out of a misconfiguration.
+            use_tls=cfg.smtp_use_tls,
+            use_ssl=cfg.smtp_use_ssl and not cfg.smtp_use_tls,
+        )
+
+    if getattr(cfg, "provider", "") == "console":
+        return get_connection(
+            backend="django.core.mail.backends.console.EmailBackend",
+        )
+
     return get_connection()
 
 

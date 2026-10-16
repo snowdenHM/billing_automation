@@ -63,22 +63,50 @@ class EmailSettingsAdmin(UnfoldModelAdmin):
 
     # "id" first meant the only link was a bare number; from_email is the
     # column that identifies the row.
-    list_display = ("from_email", "from_name", "is_enabled", "updated_at")
+    list_display = ("from_email", "from_name", "provider", "is_enabled", "updated_at")
     list_display_links = ("from_email",)
     fieldsets = (
         (None, {
-            "fields": ("is_enabled",),
+            "fields": ("is_enabled", "provider"),
+            "description": (
+                "<b>Provider</b> decides which service actually carries the "
+                "mail. Change it here to move off a failing provider without "
+                "a redeploy — only the section matching your choice is used, "
+                "the others are ignored."
+            ),
+        }),
+        ("SMTP", {
+            "fields": (
+                "smtp_host", "smtp_port", "smtp_username", "smtp_password",
+                "smtp_use_tls", "smtp_use_ssl",
+            ),
+            "description": (
+                "Used when Provider is <b>SMTP</b>. Works with Brevo, Mailgun, "
+                "Postmark, Amazon SES, Gmail and anything else that speaks "
+                "SMTP.<br>"
+                "Port <code>587</code> with <b>STARTTLS</b> ticked is the "
+                "usual setup; port <code>465</code> needs <b>implicit SSL</b> "
+                "instead. Do not tick both."
+            ),
         }),
         ("SendGrid", {
             "fields": ("sendgrid_api_key",),
+            "classes": ("collapse",),
             "description": (
-                "Paste the SendGrid API key here (starts with <code>SG.</code>). "
-                "The sender address below must be a verified single sender "
-                "or belong to an authenticated domain in your SendGrid account."
+                "Used when Provider is <b>SendGrid</b>. Paste the API key "
+                "(starts with <code>SG.</code>). The sender address below "
+                "must be a verified single sender or belong to an "
+                "authenticated domain in that SendGrid account.<br>"
+                "Note: django-anymail has dropped official SendGrid support, "
+                "so SMTP is the better choice for new setups."
             ),
         }),
         ("Sender identity", {
             "fields": ("from_email", "from_name", "reply_to"),
+            "description": (
+                "Applies to every provider. The address must be one your "
+                "provider has authorised to send, or mail will be rejected."
+            ),
         }),
     )
     readonly_fields = ("updated_at",)

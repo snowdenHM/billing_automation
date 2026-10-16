@@ -185,15 +185,62 @@ class EmailSettings(models.Model):
 
     SINGLETON_PK = 1
 
+    # Which service actually carries the mail.
+    #
+    # This row only ever held a SendGrid key, so SendGrid was the only
+    # provider reachable without a code change. When the account hit
+    # "Maximum credits exceeded" every signup silently lost its
+    # verification email and there was no way to switch without a
+    # redeploy. django-anymail has also dropped official SendGrid
+    # support, so SMTP is the better default for new installs — it works
+    # with Brevo, Mailgun, Postmark, SES, Gmail and anything else.
+    PROVIDER_SENDGRID = "sendgrid"
+    PROVIDER_SMTP = "smtp"
+    PROVIDER_CONSOLE = "console"
+    PROVIDER_CHOICES = [
+        (PROVIDER_SMTP, "SMTP (Brevo, Mailgun, SES, Gmail, …)"),
+        (PROVIDER_SENDGRID, "SendGrid API"),
+        (PROVIDER_CONSOLE, "Console (write to logs, send nothing)"),
+    ]
+
     id = models.PositiveIntegerField(primary_key=True, default=SINGLETON_PK, editable=False)
     is_enabled = models.BooleanField(
         default=True,
         help_text="Turn off to force the console-email fallback everywhere.",
     )
+    provider = models.CharField(
+        max_length=20,
+        choices=PROVIDER_CHOICES,
+        default=PROVIDER_SENDGRID,
+        help_text=(
+            "Which service sends the mail. Existing installs default to "
+            "SendGrid so nothing changes on upgrade; switch to SMTP to use "
+            "any other provider without a redeploy."
+        ),
+    )
     sendgrid_api_key = models.CharField(
         max_length=256,
         blank=True,
-        help_text="SendGrid API key (SG.xxxx). Leave blank to use console/SMTP fallback.",
+        help_text="SendGrid API key (SG.xxxx). Only used when Provider is SendGrid.",
+    )
+
+    # --- SMTP credentials (used when Provider is SMTP) ---
+    smtp_host = models.CharField(
+        max_length=255, blank=True,
+        help_text="e.g. smtp-relay.brevo.com, smtp.mailgun.org, email-smtp.ap-south-1.amazonaws.com",
+    )
+    smtp_port = models.PositiveIntegerField(
+        default=587,
+        help_text="587 for STARTTLS (usual), 465 for implicit SSL.",
+    )
+    smtp_username = models.CharField(max_length=255, blank=True)
+    smtp_password = models.CharField(max_length=512, blank=True)
+    smtp_use_tls = models.BooleanField(
+        default=True, help_text="STARTTLS. Use with port 587.",
+    )
+    smtp_use_ssl = models.BooleanField(
+        default=False,
+        help_text="Implicit SSL. Use with port 465. Do not enable together with STARTTLS.",
     )
     from_email = models.EmailField(
         default="support@billmunshi.com",
@@ -217,6 +264,43 @@ class EmailSettings(models.Model):
 
     def __str__(self):
         return f"Email settings ({'enabled' if self.is_enabled else 'disabled'})"
+
+    def clean(self):
+        """Catch provider mistakes in admin rather than at send time.
+
+        A bad combination here is invisible until a user signs up and no
+        mail arrives, so it is worth refusing the save.
+        """
+        from django.core.exceptions import ValidationError
+
+        errors = {}
+
+        if self.is_enabled and self.provider == self.PROVIDER_SMTP:
+            if not self.smtp_host:
+                errors["smtp_host"] = "Required when the provider is SMTP."
+            if self.smtp_use_tls and self.smtp_use_ssl:
+                msg = (
+                    "Pick one. STARTTLS goes with port 587, implicit SSL with "
+                    "port 465."
+                )
+                errors["smtp_use_tls"] = msg
+                errors["smtp_use_ssl"] = msg
+            elif not self.smtp_use_tls and not self.smtp_use_ssl:
+                errors["smtp_use_tls"] = (
+                    "Enable STARTTLS (port 587) or implicit SSL (port 465) — "
+                    "sending credentials over an unencrypted connection is "
+                    "not allowed."
+                )
+
+        if (
+            self.is_enabled
+            and self.provider == self.PROVIDER_SENDGRID
+            and not self.sendgrid_api_key
+        ):
+            errors["sendgrid_api_key"] = "Required when the provider is SendGrid."
+
+        if errors:
+            raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
         # Enforce a single row — always id=1.

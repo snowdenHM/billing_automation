@@ -26,6 +26,16 @@ class EmailConfig:
     from_email: str
     from_name: str
     reply_to: str
+    # Which service carries the mail, plus SMTP credentials for when it
+    # is not SendGrid. Defaults keep older callers and the settings
+    # fallback working unchanged.
+    provider: str = "sendgrid"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
 
     @property
     def formatted_from(self) -> str:
@@ -35,7 +45,15 @@ class EmailConfig:
 
     @property
     def use_sendgrid(self) -> bool:
-        return bool(self.is_enabled and self.sendgrid_api_key)
+        return bool(
+            self.is_enabled
+            and self.provider == "sendgrid"
+            and self.sendgrid_api_key
+        )
+
+    @property
+    def use_smtp(self) -> bool:
+        return bool(self.is_enabled and self.provider == "smtp" and self.smtp_host)
 
 
 _CACHE: EmailConfig | None = None
@@ -80,6 +98,13 @@ def get_email_config() -> EmailConfig:
             from_email=row.from_email,
             from_name=row.from_name,
             reply_to=row.reply_to or row.from_email,
+            provider=getattr(row, "provider", "sendgrid") or "sendgrid",
+            smtp_host=getattr(row, "smtp_host", "") or "",
+            smtp_port=getattr(row, "smtp_port", 587) or 587,
+            smtp_username=getattr(row, "smtp_username", "") or "",
+            smtp_password=getattr(row, "smtp_password", "") or "",
+            smtp_use_tls=bool(getattr(row, "smtp_use_tls", True)),
+            smtp_use_ssl=bool(getattr(row, "smtp_use_ssl", False)),
         )
     except (OperationalError, ProgrammingError) as exc:
         # DB not yet migrated (e.g. running `manage.py migrate` itself).
