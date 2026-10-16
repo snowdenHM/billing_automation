@@ -24,6 +24,9 @@ class SupportTicketAdmin(UnfoldModelAdmin):
         "user",
         "created_at",
     )
+    # list_display shows organization and user, so join them instead of
+    # letting Django fire two extra queries for every row on the page.
+    list_select_related = ("organization", "user")
     list_filter = ("status", "category", "priority", "source", "is_deleted")
     search_fields = (
         "subject", "message", "user__email", "organization__name",
@@ -36,6 +39,7 @@ class SupportTicketAdmin(UnfoldModelAdmin):
 @admin.register(SupportTicketMessage)
 class SupportTicketMessageAdmin(UnfoldModelAdmin):
     list_display = ("ticket", "author_user", "author_email", "is_internal", "created_at")
+    list_select_related = ("ticket", "author_user")
     list_filter = ("is_internal",)
     search_fields = ("body", "author_email", "ticket__subject")
     readonly_fields = ("id", "created_at")

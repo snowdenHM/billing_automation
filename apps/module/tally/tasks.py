@@ -15,6 +15,7 @@ from apps.common.services.tasks import (
     get_job_status,                   # re-exported for view imports
     mark_processing_done,
     mark_processing_error,
+    mark_processing_stage,
     mark_processing_start,
     update_bill_duplicate_fields,
 )
@@ -172,6 +173,58 @@ def split_pdf_bill_payment(bill_id, **kwargs):
 # Task processors
 # ---------------------------------------------------------------------------
 
+def _screen_document_is_bill(bill, bill_type):
+    """Return True when ``bill``'s file looks like a bill worth analysing.
+
+    On a refusal the bill is left in Draft with ``processing_error`` set to
+    the reason, so the operator can see why it stopped and delete it.
+
+    Screening failures (model unreachable, unreadable file) deliberately
+    return True — "we could not look" must not block a genuine bill. That
+    matches the fail-open contract in apps.common.services.
+    document_classification.
+    """
+    from apps.common.services.document_classification import classify_document
+
+    try:
+        bill.file.open('rb')
+        try:
+            content = bill.file.read()
+        finally:
+            bill.file.close()
+        extension = (bill.file.name or '').lower().rsplit('.', 1)[-1]
+        verdict = classify_document(content, extension)
+    except Exception as exc:
+        logger.warning(
+            "Document screening skipped for %s bill %s (%s: %s) — continuing.",
+            bill_type, bill.id, type(exc).__name__, exc,
+        )
+        return True
+
+    if verdict.get('is_bill', True):
+        return True
+
+    # Not reusing describe_rejection()'s message here: it reads "...so it
+    # was not uploaded", which was true when screening ran at upload time
+    # and is misleading now that the file is already stored.
+    detected = (verdict.get('document_type') or 'other').replace('_', ' ')
+    detail = verdict.get('reason') or ''
+    reason = (
+        f"This looks like a {detected}, not a bill, so it was not analysed. "
+        f"Upload an invoice, bill or receipt — or delete this row."
+    )
+    if detail:
+        reason = f"{reason}\n{detail}"
+
+    logger.info(
+        "[%s] Rejected bill %s — detected as %s (confidence %.2f)",
+        bill_type, bill.id, verdict.get('document_type'),
+        verdict.get('confidence') or 0.0,
+    )
+    mark_processing_error(bill, reason)
+    return False
+
+
 def _process_tally_bill(bill_id, *, model_class, get_functions, bill_type):
     """
     Generic task body for Tally bill analysis + duplicate check.
@@ -191,7 +244,25 @@ def _process_tally_bill(bill_id, *, model_class, get_functions, bill_type):
 
         analyze_fn, duplicate_fn = get_functions()
 
+        # Step 0 — is this even a bill?
+        #
+        # This screening used to run inside the upload HTTP request, once
+        # per file, and it makes an OpenAI vision call. Ten files meant ten
+        # sequential model calls while the request (and its open DB
+        # transaction) was held — well past the proxy's ~100s patience, so
+        # the operator saw a 500 while the server quietly finished and
+        # committed anyway. Running it here keeps the upload a plain write.
+        #
+        # Trade-off: a non-bill now becomes a Draft row before it is
+        # refused, instead of being turned away at upload. That row is left
+        # in Draft carrying the reason, which the Error badge surfaces, so
+        # it is visible and deletable rather than silently dropped.
+        mark_processing_stage(bill, "screening")
+        if not _screen_document_is_bill(bill, bill_type):
+            return f"Rejected {bill_type} bill {bill_id} — not a bill"
+
         # Step 1 — AI analysis
+        mark_processing_stage(bill, "analysing")
         try:
             analyze_fn(bill, organization)
             logger.info("AI analysis completed for %s bill %s", bill_type, bill_id)
@@ -201,6 +272,7 @@ def _process_tally_bill(bill_id, *, model_class, get_functions, bill_type):
             return
 
         # Step 2 — duplicate check
+        mark_processing_stage(bill, "duplicate_check")
         try:
             result = duplicate_fn(bill, organization)
             update_bill_duplicate_fields(bill, result, include_url=True)

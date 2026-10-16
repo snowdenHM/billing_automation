@@ -19,8 +19,25 @@ if ENV_FILE.exists():
 # ------------------------------------------------------------
 SECRET_KEY = env("SECRET_KEY", default="django-insecure-change-me")
 DEBUG = env.bool("DEBUG", default=False)
-# ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*", "localhost:5173", "34.51.42.227"])
-ALLOWED_HOSTS = ["billmunshi.com", "www.billmunshi.com", "api.billmunshi.com", "127.0.0.1", "localhost","34.51.42.227"]
+# Env-driven so a host can be added on the server without a code deploy. It
+# was hardcoded, which meant setting ALLOWED_HOSTS in .env silently did
+# nothing and any new hostname needed a release.
+#
+# A host missing here is rejected by Django with "Invalid HTTP_HOST header"
+# (DisallowedHost, HTTP 400) before routing — it is not a 404 and never
+# reaches a view. Hostnames only: Django strips the port before matching, so
+# a "host:port" entry matches nothing.
+ALLOWED_HOSTS = env.list(
+    "ALLOWED_HOSTS",
+    default=[
+        "billmunshi.com",
+        "www.billmunshi.com",
+        "api.billmunshi.com",
+        "34.51.42.227",
+        "127.0.0.1",
+        "localhost",
+    ],
+)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your_openai_api_key_here")
 
 # Zoho Books Integration (Server-Based Application)
@@ -83,6 +100,42 @@ SITE_ID = 1
 # ------------------------------------------------------------
 # django-unfold admin theme
 # ------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Admin sidebar helpers
+# ---------------------------------------------------------------------------
+# The navigation below used to hardcode URL strings like
+# "/admin/zoho/zohovendorbill/". Those are derived from app_label and the
+# lowercased model name, so a model rename turns them into silent 404s —
+# which is exactly what happened to the Zoho links once already.
+#
+# ``_admin_url`` builds them through ``reverse_lazy`` instead: the URL is
+# resolved from the registry at render time, so a rename surfaces as a
+# loud NoReverseMatch in staging rather than a dead link in production.
+#
+# ``_can`` gates an item on the viewer actually holding view permission for
+# that model. Without it every staff account sees every link and discovers
+# the limits of its access by hitting a 403.
+def _admin_url(app_label, model_name):
+    from django.urls import reverse_lazy
+    return reverse_lazy(f"admin:{app_label}_{model_name}_changelist")
+
+
+def _can(app_label, model_name):
+    def _check(request):
+        return request.user.has_perm(f"{app_label}.view_{model_name}")
+    return _check
+
+
+def _nav(title, icon, app_label, model_name):
+    """One permission-gated sidebar entry for a registered model."""
+    return {
+        "title": title,
+        "icon": icon,
+        "link": _admin_url(app_label, model_name),
+        "permission": _can(app_label, model_name),
+    }
+
+
 UNFOLD = {
     "SITE_TITLE": "Bill Munshi Admin",
     "SITE_HEADER": "Bill Munshi",
@@ -111,52 +164,88 @@ UNFOLD = {
     },
     "SIDEBAR": {
         "show_search": True,
+        # Keeps the auto-generated "all applications" list as a fallback for
+        # anything not curated below.
         "show_all_applications": True,
         "navigation": [
             {
                 "title": "Users & Access",
                 "items": [
-                    {"title": "Users", "icon": "person", "link": "/admin/users/user/"},
-                    {"title": "Organizations", "icon": "domain", "link": "/admin/organizations/organization/"},
+                    _nav("Users", "person", "users", "user"),
+                    _nav("Organizations", "domain", "organizations", "organization"),
+                    _nav("Memberships", "group", "organizations", "orgmembership"),
+                    _nav("API keys", "key", "organizations", "organizationapikey"),
+                ],
+            },
+            {
+                "title": "Billing",
+                "items": [
+                    _nav("Plans", "sell", "subscriptions", "plan"),
+                    _nav("Subscriptions", "card_membership", "subscriptions", "subscription"),
+                    _nav("Modules", "widgets", "organizations", "module"),
+                    _nav("Org modules", "tune", "organizations", "organizationmodule"),
                 ],
             },
             {
                 "title": "Tally",
                 "items": [
-                    {"title": "Tally config", "icon": "settings", "link": "/admin/tally/tallyconfig/"},
-                    {"title": "Purchase vouchers", "icon": "receipt", "link": "/admin/tally/tallyvendorbill/"},
-                    {"title": "Journal entries", "icon": "book", "link": "/admin/tally/tallyexpensebill/"},
-                    {"title": "Payment vouchers", "icon": "payments", "link": "/admin/tally/tallypaymentbill/"},
-                    {"title": "Ledgers", "icon": "list", "link": "/admin/tally/ledger/"},
+                    _nav("Tally config", "settings", "tally", "tallyconfig"),
+                    _nav("Purchase vouchers", "receipt", "tally", "tallyvendorbill"),
+                    _nav("Journal entries", "book", "tally", "tallyexpensebill"),
+                    _nav("Payment vouchers", "payments", "tally", "tallypaymentbill"),
+                ],
+            },
+            {
+                "title": "Tally masters",
+                "items": [
+                    _nav("Ledgers", "list", "tally", "ledger"),
+                    _nav("Parent ledgers", "account_tree", "tally", "parentledger"),
+                    _nav("Stock items", "inventory_2", "tally", "stockitem"),
+                    _nav("GST rate mapping", "percent", "tally", "gstrateledgermapping"),
+                ],
+            },
+            {
+                "title": "Tally setup",
+                "items": [
+                    _nav("TCP releases", "download", "tally", "tallytcprelease"),
+                    _nav("Setup steps", "checklist", "tally", "tallysetupstep"),
                 ],
             },
             {
                 "title": "Zoho",
                 "items": [
-                    # Admin URLs are `/admin/<app_label>/<model_lowercase>/`.
-                    # Zoho classes are `VendorBill` / `ExpenseBill` /
-                    # `JournalBill`, not `Zoho...Bill` — old links 404'd.
-                    {"title": "Vendor bills", "icon": "receipt", "link": "/admin/zoho/vendorbill/"},
-                    {"title": "Expense bills", "icon": "book", "link": "/admin/zoho/expensebill/"},
-                    {"title": "Journal bills", "icon": "menu_book", "link": "/admin/zoho/journalbill/"},
-                    {"title": "Vendors (Zoho)", "icon": "person", "link": "/admin/zoho/zohovendor/"},
-                    {"title": "Chart of accounts", "icon": "list_alt", "link": "/admin/zoho/zohochartofaccount/"},
-                    {"title": "Taxes", "icon": "percent", "link": "/admin/zoho/zohotaxes/"},
-                    {"title": "TDS / TCS", "icon": "gavel", "link": "/admin/zoho/zohotdstcs/"},
-                    {"title": "Credentials", "icon": "key", "link": "/admin/zoho/zohocredentials/"},
+                    _nav("Vendor bills", "receipt", "zoho", "vendorbill"),
+                    _nav("Expense bills", "book", "zoho", "expensebill"),
+                    _nav("Journal bills", "menu_book", "zoho", "journalbill"),
+                    _nav("Vendors (Zoho)", "person", "zoho", "zohovendor"),
+                    _nav("Chart of accounts", "list_alt", "zoho", "zohochartofaccount"),
+                    _nav("Taxes", "percent", "zoho", "zohotaxes"),
+                    _nav("TDS / TCS", "gavel", "zoho", "zohotdstcs"),
+                    _nav("Credentials", "key", "zoho", "zohocredentials"),
                 ],
             },
             {
                 "title": "Support",
                 "items": [
-                    {"title": "Tickets", "icon": "help", "link": "/admin/support/supportticket/"},
-                    {"title": "Recipients", "icon": "email", "link": "/admin/support/supportticketrecipient/"},
+                    _nav("Tickets", "help", "support", "supportticket"),
+                    _nav("Messages", "forum", "support", "supportticketmessage"),
+                    _nav("Recipients", "email", "support", "supportticketrecipient"),
+                    _nav("Demo requests", "contact_mail", "common", "demorequest"),
                 ],
             },
             {
                 "title": "Ops",
                 "items": [
-                    {"title": "Background jobs", "icon": "settings_backup_restore", "link": "/admin/rq/"},
+                    _nav("Email settings", "mail", "common", "emailsettings"),
+                    {
+                        "title": "Background jobs",
+                        "icon": "settings_backup_restore",
+                        # django-rq is not a model admin, so there is no
+                        # changelist to reverse and no per-model permission
+                        # to check — staff-only is the best gate available.
+                        "link": "/admin/rq/",
+                        "permission": lambda request: request.user.is_staff,
+                    },
                 ],
             },
         ],
@@ -439,13 +528,44 @@ WAFFLE_SAMPLE_DEFAULT = False
 X_FRAME_OPTIONS = 'DENY'
 
 # ------------------------------------------------------------
-# Upload limits (applies to multipart parsing and request body)
+# Upload limits
 # ------------------------------------------------------------
-# Override via env: BILL_MAX_UPLOAD_MB (defaults to 25 MB)
-_MAX_UPLOAD_MB = env.int("BILL_MAX_UPLOAD_MB", default=25)
-DATA_UPLOAD_MAX_MEMORY_SIZE = _MAX_UPLOAD_MB * 1024 * 1024
-FILE_UPLOAD_MAX_MEMORY_SIZE = _MAX_UPLOAD_MB * 1024 * 1024
-BILL_MAX_UPLOAD_BYTES = DATA_UPLOAD_MAX_MEMORY_SIZE
+# These are four DIFFERENT limits. They used to share one value, which
+# left bulk uploads effectively uncapped — a 10-file, 240 MB batch was
+# accepted because the only working limit was the 25 MB PER FILE check.
+#
+# Why the per-request cap is enforced in the view and not here: Django's
+# DATA_UPLOAD_MAX_MEMORY_SIZE does NOT count uploaded file bytes. In
+# django/http/multipartparser.py the running total is only incremented in
+# the FIELD branch; the FILE branch never touches it. So raising it gives
+# no protection against large file uploads at all — it only caps ordinary
+# form fields. See apps/module/tally/views/bill_helpers.py for the real
+# per-request size/count enforcement.
+
+# Per FILE. Enforced by validate_bill_file_size() on the model field and
+# again in the upload serializer.
+BILL_MAX_UPLOAD_BYTES = env.int("BILL_MAX_UPLOAD_MB", default=25) * 1024 * 1024
+
+# Per REQUEST, across every file in one multipart upload. Enforced in the
+# upload view; nothing in Django enforces this for us.
+BILL_MAX_UPLOAD_TOTAL_BYTES = (
+    env.int("BILL_MAX_UPLOAD_TOTAL_MB", default=60) * 1024 * 1024
+)
+
+# Files per REQUEST. Django's own DATA_UPLOAD_MAX_NUMBER_FILES is a blunt
+# backstop (it 400s with no useful message), so it is set a little above
+# the friendly limit the view reports.
+BILL_MAX_UPLOAD_FILES = env.int("BILL_MAX_UPLOAD_FILES", default=15)
+DATA_UPLOAD_MAX_NUMBER_FILES = BILL_MAX_UPLOAD_FILES + 5
+
+# Ordinary (non-file) form fields only — see the note above.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
+
+# Spill-to-disk threshold for an individual upload. Django's default is
+# 2.5 MB. It had been raised to 25 MB, which meant every file was held
+# ENTIRELY in memory: a 10-file batch could pin ~250 MB of RAM in one
+# worker. Back to the default so anything larger streams to a temp file.
+FILE_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024
 
 # ------------------------------------------------------------
 # Google reCAPTCHA v2 ("I'm not a robot")

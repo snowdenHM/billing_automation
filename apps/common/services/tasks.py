@@ -49,11 +49,41 @@ def get_job_status(job_id):
 # Processing-flag helpers
 # ---------------------------------------------------------------------------
 
+def _save_with_optional_stage(bill, fields, stage=None):
+    """Save *fields*, adding ``processing_stage`` when the model has it.
+
+    The Zoho bill models share these helpers but have no stage column, so
+    the field is only written when it actually exists.
+    """
+    if stage is not None and hasattr(bill, "processing_stage"):
+        bill.processing_stage = stage
+        fields = [*fields, "processing_stage"]
+    bill.save(update_fields=fields)
+
+
+def mark_processing_stage(bill, stage):
+    """Record which step of analysis *bill* has reached.
+
+    Drives the progress bar on the bills list. Deliberately a bare save of
+    one column — it is called between the slow steps of a job, so it must
+    not become a reason for the job itself to fail.
+    """
+    if not hasattr(bill, "processing_stage"):
+        return
+    try:
+        bill.processing_stage = stage
+        bill.save(update_fields=["processing_stage"])
+    except Exception:
+        logger.exception("Could not record processing stage %s for bill %s", stage, bill.pk)
+
+
 def mark_processing_start(bill):
     """Set ``is_processing=True`` and clear any previous error."""
     bill.is_processing = True
     bill.processing_error = ""
-    bill.save(update_fields=["is_processing", "processing_error"])
+    _save_with_optional_stage(
+        bill, ["is_processing", "processing_error"], stage="queued",
+    )
 
 
 def mark_processing_done(bill):
@@ -67,14 +97,18 @@ def mark_processing_done(bill):
     """
     bill.is_processing = False
     bill.processing_error = ""
-    bill.save(update_fields=["is_processing", "processing_error"])
+    _save_with_optional_stage(
+        bill, ["is_processing", "processing_error"], stage="done",
+    )
 
 
 def mark_processing_error(bill, error_msg: str):
     """Record a processing error and clear the flag."""
     bill.is_processing = False
     bill.processing_error = str(error_msg)
-    bill.save(update_fields=["is_processing", "processing_error"])
+    _save_with_optional_stage(
+        bill, ["is_processing", "processing_error"], stage="failed",
+    )
 
 
 # ---------------------------------------------------------------------------

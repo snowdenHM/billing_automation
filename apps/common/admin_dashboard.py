@@ -30,13 +30,21 @@ def _safe_count(model_path):
         return 0
 
 
-def _safe_qs(model_path, order_by="-created_at", limit=10, filters=None):
-    """Return a queryset slice or [] on any exception."""
+def _safe_qs(model_path, order_by="-created_at", limit=10, filters=None,
+             select_related=None):
+    """Return a queryset slice or [] on any exception.
+
+    ``select_related`` matters here: the dashboard prints each row's
+    organisation name, and without the join that is one extra query per
+    row — fifteen on this page alone.
+    """
     try:
         app_label, model_name = model_path.split(".")
         from django.apps import apps
         model = apps.get_model(app_label, model_name)
         qs = model.objects.all()
+        if select_related:
+            qs = qs.select_related(*select_related)
         if filters:
             qs = qs.filter(**filters)
         return list(qs.order_by(order_by)[:limit])
@@ -80,13 +88,19 @@ def dashboard_callback(request, context):
             TallyExpenseBill,
             TallyPaymentBill,
         )
+        # One aggregate per model instead of two COUNT(*) queries each —
+        # the dashboard was firing six round trips for a single ratio.
+        from django.db.models import Count, Q
+
         recent = 0
         synced = 0
         for _m in (TallyVendorBill, TallyExpenseBill, TallyPaymentBill):
-            recent += _m.objects.filter(created_at__gte=cutoff).count()
-            synced += _m.objects.filter(
-                created_at__gte=cutoff, tally_synced=True,
-            ).count()
+            agg = _m.objects.filter(created_at__gte=cutoff).aggregate(
+                total=Count("id"),
+                done=Count("id", filter=Q(tally_synced=True)),
+            )
+            recent += agg["total"] or 0
+            synced += agg["done"] or 0
         synced_rate = (synced * 100.0 / recent) if recent else None
     except Exception:
         pass
@@ -130,7 +144,7 @@ def dashboard_callback(request, context):
         ("tally.TallyExpenseBill", "Journal"),
         ("tally.TallyPaymentBill", "Payment"),
     ):
-        for b in _safe_qs(path, limit=5):
+        for b in _safe_qs(path, limit=4, select_related=("organization",)):
             recent_bills.append({
                 "id": str(getattr(b, "id", "")),
                 "name": getattr(b, "bill_munshi_name", "") or str(b),
@@ -149,7 +163,7 @@ def dashboard_callback(request, context):
     open_tickets = []
     try:
         from apps.support.models import SupportTicket
-        for t in SupportTicket.objects.filter(
+        for t in SupportTicket.objects.select_related("organization").filter(
             status__in=("open", "in_progress"),
         ).order_by("-created_at")[:10]:
             open_tickets.append({

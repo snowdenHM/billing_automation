@@ -8,7 +8,10 @@ from .models import Plan, Subscription
 class PlanAdmin(UnfoldModelAdmin):
     """Admin interface for Subscription Plans."""
     
-    list_display = ("id", "code", "name", "max_users", "billing_cycle", "price_display", "is_active", "created_at")
+    # Leading with "id" made a two-character integer the only link into
+    # the record. Name the column an operator would actually click.
+    list_display = ("code", "name", "max_users", "billing_cycle", "price_display", "is_active", "created_at")
+    list_display_links = ("code", "name")
     search_fields = ("code", "name", "description")
     list_filter = ("billing_cycle", "created_at")
     readonly_fields = ("created_at", "updated_at")
@@ -41,8 +44,12 @@ class PlanAdmin(UnfoldModelAdmin):
 class SubscriptionAdmin(UnfoldModelAdmin):
     """Admin interface for Organization Subscriptions."""
     
-    list_display = ("id", "organization", "plan", "status", "starts_at", "ends_at", "assigned_by", "created_at")
-    list_filter = ("status", "plan", "starts_at", "ends_at", "created_at")
+    list_display = ("organization", "plan", "status", "starts_at", "ends_at", "assigned_by", "created_at")
+    list_display_links = ("organization", "plan")
+    list_select_related = ("organization", "plan", "assigned_by")
+    # ``plan`` as a plain FK filter lists every row in the plans table.
+    # RelatedOnlyFieldListFilter shows only plans actually subscribed to.
+    list_filter = ("status", ("plan", admin.RelatedOnlyFieldListFilter), "starts_at", "ends_at", "created_at")
     search_fields = ("organization__name", "plan__name", "plan__code", "assigned_by__email")
     readonly_fields = ("created_at", "updated_at")
     date_hierarchy = "starts_at"

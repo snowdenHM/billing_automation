@@ -21,7 +21,12 @@ class UserAdmin(BaseUserAdmin, UnfoldModelAdmin):
     add_form = UserCreationForm
     change_password_form = AdminPasswordChangeForm
 
-    list_display = ("id", "email", "first_name", "last_name", "is_active", "is_staff", "is_superuser", "date_joined")
+    # Django links only the FIRST column to the change page. This led with
+    # "id", so the sole way into a user record was a two-character integer
+    # — operators clicked the email (the identifier they actually think in)
+    # and nothing happened, which read as "the detail page is missing".
+    list_display = ("email", "first_name", "last_name", "is_active", "is_staff", "is_superuser", "date_joined")
+    list_display_links = ("email",)
     search_fields = ("email", "first_name", "last_name", "signup_organization_name", "signup_organization_gst")
     list_filter = ("is_active", "is_staff", "is_superuser", "email_verified", "date_joined")
     ordering = ("-date_joined",)

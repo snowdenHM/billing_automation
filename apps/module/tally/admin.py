@@ -37,7 +37,7 @@ class ParentLedgerAdmin(BaseOrgAdmin):
     """Admin interface for Tally Parent Ledgers."""
     
     list_display = ('parent', 'organization', 'created_at', 'updated_at')
-    list_filter = ('organization', 'created_at')
+    list_filter = (('organization', admin.RelatedOnlyFieldListFilter), 'created_at')
     search_fields = ('parent', 'organization__name')
     autocomplete_fields = ('organization',)
     readonly_fields = ('created_at', 'updated_at')
@@ -50,7 +50,18 @@ class LedgerAdmin(BaseOrgAdmin):
     """Admin interface for Tally Ledgers."""
     
     list_display = ('name', 'parent', 'master_id', 'alter_id', 'organization', 'created_at')
-    list_filter = ('organization', 'parent', 'created_at')
+    # ``parent`` is shown per row; without the join that is one extra query
+    # per ledger. (``organization`` is already joined by BaseOrgAdmin.)
+    list_select_related = ('parent', 'organization')
+    # Plain FK filters render one <option> per row of the target table —
+    # on a real install that is every parent ledger and every org in the
+    # sidebar on every page load. RelatedOnlyFieldListFilter narrows them
+    # to values that actually occur in this table.
+    list_filter = (
+        ('organization', admin.RelatedOnlyFieldListFilter),
+        ('parent', admin.RelatedOnlyFieldListFilter),
+        'created_at',
+    )
     search_fields = ('name', 'master_id', 'parent__parent', 'organization__name')
     autocomplete_fields = ('organization',)
     readonly_fields = ('created_at', 'updated_at')
@@ -88,7 +99,7 @@ class TallyConfigAdmin(BaseOrgAdmin):
     
     form = TallyConfigForm
     list_display = ('organization', 'display_mappings', 'display_parent_ledgers')
-    list_filter = ('organization',)
+    list_filter = (('organization', admin.RelatedOnlyFieldListFilter),)
     search_fields = ('organization__name',)
     ordering = ('organization__name',)
     autocomplete_fields = ('organization',)
@@ -272,7 +283,15 @@ class TallyVendorAnalyzedBillAdmin(BaseOrgAdmin):
     """Admin interface for Vendor Analyzed Bills."""
     
     list_display = ('__str__', 'vendor', 'bill_no', 'bill_date', 'due_date', 'total', 'discount', 'gst_type', 'organization')
-    list_filter = ('organization', 'gst_type', 'created_at', 'bill_date')
+    
+    # ``vendor`` is rendered for every row; organization is already
+    
+    # joined by BaseOrgAdmin. Without this each row costs an extra
+    
+    # query just to print the vendor's name.
+    
+    list_select_related = ('vendor', 'organization')
+    list_filter = (('organization', admin.RelatedOnlyFieldListFilter), 'gst_type', 'created_at', 'bill_date')
     search_fields = ('bill_no', 'vendor__name', 'selected_bill__bill_munshi_name')
     inlines = [TallyVendorAnalyzedProductInline]
     autocomplete_fields = ('organization', 'vendor', 'selected_bill')
@@ -315,9 +334,16 @@ class _TallyBillAdminBase(FileDisplayMixin, OwnershipDisplayMixin, BaseOrgAdmin)
         'file_type', 'is_duplicate', 'is_processing', 'uploaded_by', 
         'organization', 'display_file', 'created_at'
     )
+    # ``uploaded_by`` and ``organization`` as plain FK filters build one
+    # <option> per row of those tables — every user and every org rendered
+    # into the sidebar on each page load. RelatedOnlyFieldListFilter keeps
+    # them to values that actually appear in this bill table.
     list_filter = (
-        'status', 'bill_belong_your_org', 'tally_synced', 'file_type', 
-        'is_duplicate', 'is_processing', 'uploaded_by', 'organization', 'created_at'
+        'status', 'bill_belong_your_org', 'tally_synced', 'file_type',
+        'is_duplicate', 'is_processing',
+        ('uploaded_by', admin.RelatedOnlyFieldListFilter),
+        ('organization', admin.RelatedOnlyFieldListFilter),
+        'created_at',
     )
     search_fields = (
         'bill_munshi_name', 'description', 'uploaded_by__username', 
@@ -328,6 +354,9 @@ class _TallyBillAdminBase(FileDisplayMixin, OwnershipDisplayMixin, BaseOrgAdmin)
     )
     date_hierarchy = 'created_at'
     list_per_page = 50
+    # BaseOrgAdmin already joins ``organization``; ``uploaded_by`` is also
+    # shown per row and was costing one query each.
+    list_select_related = ('uploaded_by', 'organization')
     autocomplete_fields = ('uploaded_by', 'organization')
     
     fieldsets = (
@@ -389,7 +418,15 @@ class TallyExpenseAnalyzedBillAdmin(BaseOrgAdmin):
     """Admin interface for Expense Analyzed Bills."""
     
     list_display = ('__str__', 'vendor', 'bill_no', 'bill_date', 'due_date', 'total', 'organization')
-    list_filter = ('organization', 'created_at', 'bill_date')
+    
+    # ``vendor`` is rendered for every row; organization is already
+    
+    # joined by BaseOrgAdmin. Without this each row costs an extra
+    
+    # query just to print the vendor's name.
+    
+    list_select_related = ('vendor', 'organization')
+    list_filter = (('organization', admin.RelatedOnlyFieldListFilter), 'created_at', 'bill_date')
     search_fields = ('bill_no', 'vendor__name', 'selected_bill__bill_munshi_name', 'voucher')
     inlines = [TallyExpenseAnalyzedProductInline]
     autocomplete_fields = ('organization', 'vendor', 'selected_bill')
@@ -432,7 +469,7 @@ class TallyVendorConsolidatedProductAdmin(BaseOrgAdmin):
     """Admin interface for Vendor Consolidated Products."""
     
     list_display = ('vendor_bill_name', 'item_name_short', 'amount', 'product_gst', 'original_items_count', 'organization', 'created_at')
-    list_filter = ('organization', 'product_gst', 'created_at')
+    list_filter = (('organization', admin.RelatedOnlyFieldListFilter), 'product_gst', 'created_at')
     search_fields = ('item_name', 'item_details', 'vendor_bill_analyzed__selected_bill__bill_munshi_name', 'organization__name')
     readonly_fields = ('igst', 'cgst', 'sgst', 'created_at', 'updated_at')
     date_hierarchy = 'created_at'
@@ -490,7 +527,7 @@ class TallyExpenseConsolidatedProductAdmin(BaseOrgAdmin):
         'expense_bill_name', 'item_details_short', 'amount', 'debit_or_credit', 
         'original_entries_count', 'organization', 'created_at'
     )
-    list_filter = ('organization', 'debit_or_credit', 'created_at')
+    list_filter = (('organization', admin.RelatedOnlyFieldListFilter), 'debit_or_credit', 'created_at')
     search_fields = ('item_details', 'expense_bill__selected_bill__bill_munshi_name', 'organization__name')
     readonly_fields = ('created_at', 'updated_at')
     date_hierarchy = 'created_at'
@@ -545,7 +582,7 @@ class StockItemAdmin(BaseOrgAdmin):
     """Admin interface for Tally Stock Items."""
     
     list_display = ('name', 'parent', 'unit', 'category', 'organization', 'created_at')
-    list_filter = ('organization', 'category', 'gst_applicable', 'created_at')
+    list_filter = (('organization', admin.RelatedOnlyFieldListFilter), 'category', 'gst_applicable', 'created_at')
     search_fields = ('name', 'item_code', 'alias', 'organization__name')
     readonly_fields = ('created_at', 'updated_at')
     date_hierarchy = 'created_at'
@@ -655,6 +692,7 @@ class TallyTcpReleaseAdmin(UnfoldModelAdmin):
         "updated_at",
     )
     list_display_links = ("version",)
+    list_select_related = ("uploaded_by",)
     list_filter = ("is_active",)
     search_fields = ("version", "notes", "uploaded_by__email", "uploaded_by__full_name")
     list_editable = ("is_active",)
@@ -714,7 +752,9 @@ class GstRateLedgerMappingAdmin(BaseOrgAdmin):
     """Per-organization GST rate → CGST/SGST/IGST ledger mapping."""
 
     list_display = ("organization", "rate", "cgst_ledger", "sgst_ledger", "igst_ledger", "updated_at")
-    list_filter = ("organization", "rate")
+    # Three ledger FKs per row — four extra queries each without this.
+    list_select_related = ("organization", "cgst_ledger", "sgst_ledger", "igst_ledger")
+    list_filter = (("organization", admin.RelatedOnlyFieldListFilter), "rate")
     search_fields = (
         "organization__name",
         "cgst_ledger__name",
@@ -745,7 +785,11 @@ class TallyPaymentAnalyzedProductInline(UnfoldTabularInline):
 @admin.register(TallyPaymentAnalyzedBill)
 class TallyPaymentAnalyzedBillAdmin(BaseOrgAdmin):
     list_display = ("__str__", "vendor", "bill_no", "bill_date", "due_date", "total", "organization")
-    list_filter = ("organization", "created_at", "bill_date")
+    # ``vendor`` is rendered for every row; organization is already
+    # joined by BaseOrgAdmin. Without this each row costs an extra
+    # query just to print the vendor's name.
+    list_select_related = ('vendor', 'organization')
+    list_filter = (("organization", admin.RelatedOnlyFieldListFilter), "created_at", "bill_date")
     search_fields = ("bill_no", "vendor__name", "selected_bill__bill_munshi_name", "voucher")
     inlines = [TallyPaymentAnalyzedProductInline]
     autocomplete_fields = ("organization", "vendor", "selected_bill")
@@ -785,7 +829,7 @@ class TallyPaymentConsolidatedProductAdmin(BaseOrgAdmin):
         "payment_bill_name", "item_details_short", "amount", "debit_or_credit",
         "original_entries_count", "organization", "created_at",
     )
-    list_filter = ("organization", "debit_or_credit", "created_at")
+    list_filter = (("organization", admin.RelatedOnlyFieldListFilter), "debit_or_credit", "created_at")
     search_fields = ("item_details", "payment_bill__selected_bill__bill_munshi_name", "organization__name")
     readonly_fields = ("created_at", "updated_at")
     date_hierarchy = "created_at"

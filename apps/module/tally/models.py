@@ -82,6 +82,38 @@ def _pick_round_off_ledger(organization):
         return None
 
 
+class ProcessingStage(models.TextChoices):
+    """Where a bill is in the upload -> analysis pipeline.
+
+    Exists so the bills list can show a truthful progress bar. The
+    alternative was an indeterminate spinner, which tells the operator
+    nothing and is why they kept pressing Analyse on rows that were
+    already being worked on.
+
+    The background task advances this; PERCENT below is the mapping the
+    API hands the frontend so the two cannot drift apart.
+    """
+
+    QUEUED = "queued", "Queued"
+    SCREENING = "screening", "Checking document"
+    ANALYSING = "analysing", "Reading bill"
+    DUPLICATE_CHECK = "duplicate_check", "Checking duplicates"
+    DONE = "done", "Done"
+    FAILED = "failed", "Failed"
+
+    # Deliberately not linear: screening is one model call, analysis is the
+    # long one. Spacing the steps this way keeps the bar from parking at a
+    # number for most of the wait.
+    PERCENT = {
+        "queued": 5,
+        "screening": 20,
+        "analysing": 55,
+        "duplicate_check": 85,
+        "done": 100,
+        "failed": 100,
+    }
+
+
 # -----------------------------
 # Masters
 # -----------------------------
@@ -473,6 +505,17 @@ class TallyVendorBill(BaseOrgModel, TrashableMixin):
     # Processing status fields
     is_processing = models.BooleanField(default=False, help_text="Whether this bill is currently being processed in background")
     processing_error = models.TextField(blank=True, null=True, help_text="Error message if processing failed")
+    # Coarse progress for the upload -> analysis pipeline, so the list can
+    # show a real progress bar instead of an indeterminate spinner. Written
+    # by the background task as it moves between steps; see
+    # ProcessingStage.PERCENT for the mapping the API exposes.
+    processing_stage = models.CharField(
+        max_length=20,
+        choices=ProcessingStage.choices,
+        default=ProcessingStage.QUEUED,
+        blank=True,
+        help_text="Which step of background analysis this bill is on.",
+    )
     job_id = models.CharField(max_length=100, blank=True, null=True, help_text="Background job ID for tracking")
     content_hash = models.CharField(
         max_length=64, blank=True, null=True, db_index=True,
@@ -824,6 +867,17 @@ class TallyExpenseBill(BaseOrgModel, TrashableMixin):
     # Processing status fields
     is_processing = models.BooleanField(default=False, help_text="Whether this bill is currently being processed in background")
     processing_error = models.TextField(blank=True, null=True, help_text="Error message if processing failed")
+    # Coarse progress for the upload -> analysis pipeline, so the list can
+    # show a real progress bar instead of an indeterminate spinner. Written
+    # by the background task as it moves between steps; see
+    # ProcessingStage.PERCENT for the mapping the API exposes.
+    processing_stage = models.CharField(
+        max_length=20,
+        choices=ProcessingStage.choices,
+        default=ProcessingStage.QUEUED,
+        blank=True,
+        help_text="Which step of background analysis this bill is on.",
+    )
     job_id = models.CharField(max_length=100, blank=True, null=True, help_text="Background job ID for tracking")
     content_hash = models.CharField(
         max_length=64, blank=True, null=True, db_index=True,
@@ -1386,6 +1440,17 @@ class TallyPaymentBill(BaseOrgModel, TrashableMixin):
 
     is_processing = models.BooleanField(default=False)
     processing_error = models.TextField(blank=True, null=True)
+    # Coarse progress for the upload -> analysis pipeline, so the list can
+    # show a real progress bar instead of an indeterminate spinner. Written
+    # by the background task as it moves between steps; see
+    # ProcessingStage.PERCENT for the mapping the API exposes.
+    processing_stage = models.CharField(
+        max_length=20,
+        choices=ProcessingStage.choices,
+        default=ProcessingStage.QUEUED,
+        blank=True,
+        help_text="Which step of background analysis this bill is on.",
+    )
     job_id = models.CharField(max_length=100, blank=True, null=True)
     content_hash = models.CharField(
         max_length=64, blank=True, null=True, db_index=True,

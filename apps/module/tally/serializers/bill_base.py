@@ -64,6 +64,7 @@ class BaseTallyBillSerializer(serializers.ModelSerializer):
     description = serializers.SerializerMethodField()
     can_delete = serializers.SerializerMethodField()
     delete_blocked_reason = serializers.SerializerMethodField()
+    processing_progress = serializers.SerializerMethodField()
 
     # Common fields that all bill serializers share
     base_fields = [
@@ -72,6 +73,7 @@ class BaseTallyBillSerializer(serializers.ModelSerializer):
         'bill_belong_your_org', 'description',
         'is_duplicate', 'duplicate_description', 'duplicate_score', 'duplicate_matched_bills',
         'is_processing', 'processing_error',
+        'processing_stage', 'processing_progress',
         'tally_synced', 'tally_sync_message',
         'can_delete', 'delete_blocked_reason',
         'created_at', 'updated_at'
@@ -80,8 +82,29 @@ class BaseTallyBillSerializer(serializers.ModelSerializer):
     base_read_only_fields = [
         'id', 'bill_munshi_name', 'file', 'uploaded_by', 'uploaded_by_name',
         'bill_belong_your_org', 'description', 'can_delete', 'delete_blocked_reason',
+        'processing_stage', 'processing_progress',
         'created_at', 'updated_at'
     ]
+
+    def get_processing_progress(self, obj):
+        """Percentage for the list's progress bar, 0-100.
+
+        Derived here rather than in the frontend so the stage-to-percent
+        mapping lives in one place and the two cannot drift.
+
+        A bill that has already been analysed reports 100 whatever its
+        stored stage says — rows that predate the stage column default to
+        ``queued``, and showing them at 5% would be wrong.
+        """
+        from apps.module.tally.models import ProcessingStage
+
+        if getattr(obj, 'status', None) in ('Analysed', 'Verified', 'Synced'):
+            return 100
+        if getattr(obj, 'processing_error', None):
+            return 100
+
+        stage = getattr(obj, 'processing_stage', None) or ProcessingStage.QUEUED
+        return ProcessingStage.PERCENT.get(str(stage), 0)
 
     def get_file(self, obj):
         """Return a short-lived, HMAC-signed URL for the bill file.

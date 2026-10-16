@@ -61,7 +61,10 @@ class DemoRequestAdmin(UnfoldModelAdmin):
 class EmailSettingsAdmin(UnfoldModelAdmin):
     """Singleton admin — always edit the same row (pk=1)."""
 
-    list_display = ("id", "is_enabled", "from_email", "from_name", "updated_at")
+    # "id" first meant the only link was a bare number; from_email is the
+    # column that identifies the row.
+    list_display = ("from_email", "from_name", "is_enabled", "updated_at")
+    list_display_links = ("from_email",)
     fieldsets = (
         (None, {
             "fields": ("is_enabled",),

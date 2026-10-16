@@ -394,6 +394,53 @@ def bills_upload_base(
             'error_code': 'NO_FILES_PROVIDED'
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
+    # ------------------------------------------------------------------
+    # Per-request limits.
+    #
+    # These are enforced here because Django does not enforce them for us:
+    # DATA_UPLOAD_MAX_MEMORY_SIZE ignores uploaded file bytes entirely (the
+    # running total is only incremented for ordinary form fields), so the
+    # only limit that previously applied to a bulk upload was the 25 MB
+    # PER FILE check. A ten-file, 240 MB batch sailed through and then
+    # timed out mid-request.
+    #
+    # Rejecting the whole batch rather than trimming it keeps the outcome
+    # predictable: the operator re-sends a smaller selection instead of
+    # guessing which files silently did not make it.
+    # ------------------------------------------------------------------
+    max_files = getattr(settings, 'BILL_MAX_UPLOAD_FILES', 15)
+    if len(files) > max_files:
+        return Response({
+            'error': 'Too Many Files',
+            'message': (
+                f'You selected {len(files)} files. Please upload at most '
+                f'{max_files} at a time — split the batch and try again.'
+            ),
+            'error_code': 'TOO_MANY_FILES',
+            'details': {'file_count': len(files), 'max_files': max_files},
+        }, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+
+    total_bytes = sum(getattr(f, 'size', 0) or 0 for f in files)
+    max_total = getattr(settings, 'BILL_MAX_UPLOAD_TOTAL_BYTES', 60 * 1024 * 1024)
+    if total_bytes > max_total:
+        _mb = lambda b: round(b / (1024 * 1024), 1)  # noqa: E731
+        return Response({
+            'error': 'Upload Too Large',
+            'message': (
+                f'These {len(files)} files total {_mb(total_bytes)} MB. The '
+                f'limit for one upload is {_mb(max_total)} MB — split the '
+                f'batch and try again.'
+            ),
+            'error_code': 'UPLOAD_TOTAL_TOO_LARGE',
+            'details': {
+                'total_bytes': total_bytes,
+                'total_mb': _mb(total_bytes),
+                'max_total_bytes': max_total,
+                'max_total_mb': _mb(max_total),
+                'file_count': len(files),
+            },
+        }, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+
     # Track file paths written to storage inside the atomic block so we
     # can delete them if the transaction rolls back. Django's ``FileField``
     # writes the file to disk during ``.save()`` — BEFORE the atomic
@@ -411,13 +458,15 @@ def bills_upload_base(
 
         with transaction.atomic():
             upload_warnings = []
+            # Kept (and kept in the response) for shape compatibility with
+            # the frontend's uploadFeedback helper. It stays empty now that
+            # screening moved to the background job — a file that turns out
+            # not to be a bill surfaces later via the Error badge on its
+            # Draft row rather than being refused at upload.
             rejected_files = []
 
             from apps.common.services.content_hash import (
                 compute_file_hash, find_hash_duplicate,
-            )
-            from apps.common.services.document_classification import (
-                classify_document, describe_rejection,
             )
 
             for uploaded_file in files:
@@ -456,22 +505,20 @@ def bills_upload_base(
                     )
                     continue
 
-                # Screen the document BEFORE creating the Draft row, so a
-                # non-bill never becomes a bill the user has to clean up.
-                uploaded_file.seek(0)
-                verdict = classify_document(uploaded_file.read(), file_extension)
-                uploaded_file.seek(0)
-
-                if not verdict['is_bill']:
-                    rejected_files.append(
-                        describe_rejection(uploaded_file.name, verdict)
-                    )
-                    logger.info(
-                        "[%s] Rejected %s — detected as %s (confidence %.2f)",
-                        bill_type_label, uploaded_file.name,
-                        verdict['document_type'], verdict['confidence'],
-                    )
-                    continue
+                # NOTE: document screening (is this actually a bill?) used
+                # to run here. It makes an OpenAI vision call per file, so a
+                # ten-file batch meant ten sequential model calls inside this
+                # request AND inside the open transaction below — minutes of
+                # wall clock, well past the proxy's ~100s patience. The
+                # operator got a 500 while the server quietly finished and
+                # committed, which is why files appeared "already uploaded"
+                # on the retry.
+                #
+                # It now runs as the first step of the background analysis
+                # job (_screen_document_is_bill in tasks.py), so this request
+                # stays a plain write. A refused file is left in Draft with
+                # the reason on ``processing_error`` instead of being turned
+                # away here.
 
                 # Handle PDF splitting for MULTI type. When an async task
                 # function is supplied (#14 in the upload audit), persist
@@ -540,14 +587,31 @@ def bills_upload_base(
                             bill_type_label, bill_id, job.id,
                         )
                     except Exception as enqueue_err:
-                        # Redis down / RQ crash mid-enqueue: log and
-                        # move on. Bill row stays in Draft with
-                        # ``is_processing=False`` and can be manually
-                        # analysed by the user.
+                        # Redis down / RQ crash mid-enqueue. The row used to
+                        # be left in Draft with no job, no is_processing and
+                        # no processing_error — indistinguishable from a bill
+                        # waiting its turn, so it sat there forever and the
+                        # operator had no way to know. Record the reason so
+                        # the Error badge shows it and Analyse becomes a
+                        # Retry the user can actually act on.
                         logger.error(
                             "Failed to enqueue %s bill %s: %s",
                             bill_type_label, bill_id, enqueue_err,
                         )
+                        try:
+                            bill_model.objects.filter(id=bill_id).update(
+                                is_processing=False,
+                                processing_error=(
+                                    "Could not start analysis — the background "
+                                    "queue was unreachable. Press Retry to try "
+                                    "again."
+                                ),
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Could not record enqueue failure for %s bill %s",
+                                bill_type_label, bill_id,
+                            )
 
             transaction.on_commit(_enqueue_after_commit)
 

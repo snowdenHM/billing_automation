@@ -3,9 +3,29 @@ from .base import *  # noqa
 
 DEBUG = False
 
+# A host missing from this list makes Django reject the request outright with
+# "Invalid HTTP_HOST header" (DisallowedHost, HTTP 400) — before any URL
+# routing happens, so it looks nothing like a 404 and never reaches a view.
+#
+# The default below previously omitted ``api.billmunshi.com`` even though
+# CSRF_TRUSTED_ORIGINS further down trusts it, so anything calling that
+# hostname — the Tally TCP bridge included — was refused. It is listed here
+# now, together with the loopback and server-IP entries that base.py already
+# carried, so the three lists agree.
+#
+# NOTE: entries are hostnames only. Django strips the port before matching,
+# so a "host:port" entry such as "localhost:5173" matches nothing — plain
+# "localhost" is what actually allows the Vite dev server through.
 ALLOWED_HOSTS = env.list(
     "ALLOWED_HOSTS",
-    default=["billmunshi.com", "www.billmunshi.com", "localhost:5173"]
+    default=[
+        "billmunshi.com",
+        "www.billmunshi.com",
+        "api.billmunshi.com",
+        "34.51.42.227",
+        "127.0.0.1",
+        "localhost",
+    ],
 )
 
 # If you’re behind nginx/Cloudflare
