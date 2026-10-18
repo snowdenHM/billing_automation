@@ -9,11 +9,11 @@ import logging
 from django.db import transaction
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.organizations.models import Organization
+from apps.common.permissions import OrganizationAPIKeyOrBearerToken
+from apps.common.utils import get_organization_from_request
 
 from ..models import StockItem
 
@@ -23,33 +23,16 @@ logger = logging.getLogger(__name__)
 @extend_schema(tags=["Tally TCP"])
 class MasterAPIView(APIView):
     """
-    Master API View for processing incoming data from Tally.
-    Processes STOCKITEM data and saves directly to database.
-    OPEN FOR TESTING – NO AUTHENTICATION REQUIRED.
+    Stock-item master exchange with the Tally connector.
+
+    Requires the org API key (``Authorization: Api-Key ...``) or an admin
+    bearer token. Was previously AllowAny with the org taken from the URL.
     """
 
-    permission_classes = [AllowAny]
+    permission_classes = [OrganizationAPIKeyOrBearerToken]
 
     def _get_organization(self):
-        org_id = self.kwargs.get("org_id")
-        if org_id:
-            try:
-                return Organization.objects.get(id=org_id)
-            except Organization.DoesNotExist:
-                return None
-        if hasattr(self.request, "auth") and self.request.auth:
-            from apps.organizations.models import OrganizationAPIKey
-            try:
-                return OrganizationAPIKey.objects.get(api_key=self.request.auth).organization
-            except OrganizationAPIKey.DoesNotExist:
-                pass
-        if hasattr(self.request, "organization"):
-            return self.request.organization
-        if hasattr(self.request.user, "memberships") and self.request.user.is_authenticated:
-            membership = self.request.user.memberships.first()
-            if membership:
-                return membership.organization
-        return None
+        return get_organization_from_request(self.request, self.kwargs.get("org_id"))
 
     # Alias
     get_organization = _get_organization
@@ -65,7 +48,7 @@ class MasterAPIView(APIView):
     )
     def get(self, request, *args, **kwargs):
         try:
-            organization = self._get_organization() or Organization.objects.first()
+            organization = self._get_organization()
             if not organization:
                 return Response({"success": False, "error": "No organization found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -110,10 +93,10 @@ class MasterAPIView(APIView):
         try:
             organization = self._get_organization()
             if not organization:
-                try:
-                    organization = Organization.objects.first()
-                except Exception:
-                    organization = None
+                return Response(
+                    {"success": False, "error": "Could not determine organization for this request."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
             raw_data = request.body.decode("utf-8")
 

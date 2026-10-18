@@ -144,6 +144,17 @@ def register_view(request):
 @permission_classes([AllowAny])
 def login_view(request):
     """Authenticate a user with email and password, returning JWT tokens."""
+    email = ((request.data or {}).get("email") or "").strip().lower()
+    ip = get_rate_limit_ip(request)
+    if (
+        is_rate_limited("login-ip", ip, limit=30, window_seconds=900)
+        or is_rate_limited("login-email", email, limit=10, window_seconds=900)
+    ):
+        return Response(
+            {"detail": "Too many login attempts. Please wait a few minutes and try again."},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
     serializer = LoginSerializer(data=request.data, context={"request": request})
     serializer.is_valid(raise_exception=True)
     return Response(serializer.validated_data, status=status.HTTP_200_OK)
@@ -157,6 +168,19 @@ def password_reset_request_view(request):
     serializer = PasswordResetRequestSerializer(data=request.data, context={"request": request})
     serializer.is_valid(raise_exception=True)
     email = serializer.validated_data["email"]
+
+    ip = get_rate_limit_ip(request)
+    if (
+        is_rate_limited("pwreset-ip", ip, limit=20, window_seconds=3600)
+        or is_rate_limited("pwreset-email", email, limit=3, window_seconds=900)
+    ):
+        # Generic body, matching the success reply, so the throttle itself
+        # doesn't become an account-enumeration oracle.
+        return Response(
+            {"detail": "If the email exists, a reset link was sent."},
+            status=status.HTTP_200_OK,
+        )
+
     user = User.objects.filter(email__iexact=email, is_active=True).first()
 
     if user:

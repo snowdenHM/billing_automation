@@ -224,9 +224,9 @@ def _process_zoho_bill(
 
     except model_class.DoesNotExist:
         logger.error("Zoho %s bill %s not found", bill_type, bill_id)
-        return f"Error: Zoho {bill_type} bill {bill_id} not found"
+        raise
     except Exception as exc:
-        logger.error("Background automation failed for Zoho %s bill %s: %s", bill_type, bill_id, exc)
+        logger.exception("Background automation failed for Zoho %s bill %s", bill_type, bill_id)
         try:
             bill = model_class.objects.get(id=bill_id)
             mark_processing_error(bill, f"Automation failed: {exc}")
@@ -234,8 +234,11 @@ def _process_zoho_bill(
             bill.status = "Draft"
             bill.save(update_fields=["status"])
         except Exception:
-            pass
-        return f"Error: Background automation failed for Zoho {bill_type} bill {bill_id}: {exc}"
+            logger.exception("Could not record the failure on Zoho bill %s", bill_id)
+        # Re-raise so RQ records a failed job (matching the Tally task).
+        # Returning an "Error: ..." string filed it under finished jobs,
+        # so nothing watching the queue ever saw Zoho analysis failures.
+        raise
 
 
 # ---------------------------------------------------------------------------

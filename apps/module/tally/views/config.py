@@ -253,19 +253,23 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
         )
 
     def _get_organization(self):
-        org_id = self.kwargs.get("org_id")
-        if org_id:
-            return get_object_or_404(Organization, id=org_id)
-        if hasattr(self.request, "organization"):
-            return self.request.organization
-        if hasattr(self.request.user, "memberships"):
-            membership = self.request.user.memberships.first()
-            if membership:
-                return membership.organization
-        return None
+        # get_organization_from_request enforces that the caller is actually
+        # entitled to the org in the URL; the old version returned it from
+        # the URL unchecked, so an API key issued for one org could read and
+        # write another org's config.
+        return get_organization_from_request(self.request, self.kwargs.get("org_id"))
 
     # Alias for backward compatibility
     get_organization = _get_organization
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        # The serializer needs the org to scope its ledger/parent-ledger
+        # choices. It used to read ``request.user.organization``, which is
+        # not a field on User, so every queryset came out empty and any
+        # write that referenced a parent ledger failed validation.
+        context["organization"] = self._get_organization()
+        return context
 
     @extend_schema(
         summary="Get Ledgers by Parent Type",

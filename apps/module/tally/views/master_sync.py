@@ -221,7 +221,7 @@ def masters_mark_synced(request, org_id):
             elif status_val == "error":
                 obj.tally_synced = False
                 obj.tally_sync_message = entry.get("message") or "Unknown error from Tally"
-                obj.save(update_fields=["tally_sync_message"])
+                obj.save(update_fields=["tally_synced", "tally_sync_message"])
                 updated["error"] += 1
             else:
                 updated["not_found"] += 1

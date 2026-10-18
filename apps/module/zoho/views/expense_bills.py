@@ -46,6 +46,9 @@ from .bill_view_helpers import (
 
 logger = logging.getLogger(__name__)
 
+# Seconds. An HTTP call with no timeout pins a worker indefinitely.
+ZOHO_HTTP_TIMEOUT = 30
+
 
 # ============================================================================
 # Thin helper wrappers (parameterize shared services for expense bills)
@@ -408,13 +411,13 @@ def expense_bill_sync_view(request, org_id, bill_id):
         }
 
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(expense_data))
+            response = requests.post(url, headers=headers, data=json.dumps(expense_data), timeout=ZOHO_HTTP_TIMEOUT)
 
             if response.status_code == 401:
                 new_access_token = refresh_zoho_access_token(current_token)
                 if new_access_token:
                     headers['Authorization'] = f'Zoho-oauthtoken {new_access_token}'
-                    response = requests.post(url, headers=headers, data=json.dumps(expense_data))
+                    response = requests.post(url, headers=headers, data=json.dumps(expense_data), timeout=ZOHO_HTTP_TIMEOUT)
 
             if response.status_code == 201:
                 bill.status = 'Synced'

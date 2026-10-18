@@ -1,3 +1,5 @@
+import logging
+
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 from rest_framework_api_key.models import APIKey  # noqa: F401
@@ -16,6 +18,7 @@ from .models import (
 )
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 class UserDetailSerializer(serializers.ModelSerializer):
@@ -94,10 +97,25 @@ class OrgMembershipSerializer(serializers.ModelSerializer):
         fields = ["id", "organization", "user", "user_email", "email", "role", "is_active", "created_at", "updated_at"]
         read_only_fields = ["id", "created_at", "updated_at"]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance is not None:
+            # Locked on update: the caller is authorised against the
+            # membership's current org, so letting the payload rewrite the
+            # org (or the user) is a tenant escape. Move = remove + invite.
+            for locked in ("organization", "user_email", "email"):
+                if locked in self.fields:
+                    self.fields[locked].read_only = True
+                    self.fields[locked].required = False
+
     def validate(self, attrs):
         """Ensure either user_email or email is provided for new user creation"""
         user_email = attrs.get("user_email") or attrs.get("email")
         organization = attrs.get("organization")
+
+        if self.instance is not None:
+            # Update path: member and org are fixed, nothing to identify.
+            return attrs
 
         # If no email is provided, we need to ensure a user can be identified
         if not user_email:

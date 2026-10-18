@@ -14,6 +14,8 @@ from django.core.files.base import ContentFile
 from pdf2image import convert_from_bytes
 from PyPDF2 import PdfReader
 
+from apps.common.services.tasks import enqueue_bill_processing
+
 logger = logging.getLogger(__name__)
 
 
@@ -122,17 +124,23 @@ def enqueue_pdf_split_async(
         is_processing=True,
         **{type_field: file_type},
     )
-    # Enqueue via ``transaction.on_commit`` at the caller — same guarantee
-    # as regular bill analysis, so the split job only fires if the
-    # surrounding upload transaction actually commits.
-    try:
-        from django.db import transaction
-        transaction.on_commit(
-            lambda: split_task_fn(str(placeholder.id))
-        )
-    except Exception as exc:
-        logger.warning(
-            "Failed to schedule PDF split for placeholder %s: %s",
-            placeholder.id, exc,
-        )
+    # on_commit so the job only fires if the upload transaction commits,
+    # and enqueue_bill_processing so the page rendering runs on an RQ
+    # worker. Calling split_task_fn directly from the callback ran
+    # poppler page-by-page inside the gunicorn worker, which is what
+    # timed out large multi-page uploads.
+    def _schedule():
+        try:
+            enqueue_bill_processing(split_task_fn, str(placeholder.id), timeout=1800)
+        except Exception as exc:
+            logger.exception(
+                "Failed to enqueue PDF split for placeholder %s: %s",
+                placeholder.id, exc,
+            )
+            placeholder.is_processing = False
+            placeholder.processing_error = f"Could not queue PDF split: {exc}"
+            placeholder.save(update_fields=["is_processing", "processing_error"])
+
+    from django.db import transaction
+    transaction.on_commit(_schedule)
     return [placeholder]

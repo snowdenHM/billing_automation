@@ -134,10 +134,17 @@ class OrganizationAPIKeyOrBearerToken(BasePermission):
 
             try:
                 api_key_obj = APIKey.objects.get_from_key(api_key_value)
-                if api_key_obj:
+                # get_from_key() only filters on `revoked`; expiry is
+                # checked separately or an expired key never stops working.
+                if api_key_obj and not api_key_obj.has_expired:
                     org_api_key = OrganizationAPIKey.objects.get(api_key=api_key_obj)
                     request.organization = org_api_key.organization
                     return True
+                if api_key_obj:
+                    logger.warning(
+                        "Rejected expired organization API key (prefix %s).",
+                        api_key_obj.prefix,
+                    )
             except (APIKey.DoesNotExist, OrganizationAPIKey.DoesNotExist):
                 pass
             except Exception as exc:

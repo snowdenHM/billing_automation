@@ -80,8 +80,10 @@ def bills_list_base(request, org_id, bill_model, serializer_class, include_owner
     # it covers every matching bill, not just the page already downloaded.
     bills = apply_bill_search(bills, request.query_params.get('search'))
 
-    # select_related keeps the uploader columns from firing a query per row.
-    bills = bills.select_related('uploaded_by').order_by('-created_at')
+    # select_related keeps the uploader and organization columns from firing
+    # a query per row. ``organization`` is needed because the serializer's
+    # ownership fields touch obj.organization on every bill.
+    bills = bills.select_related('uploaded_by', 'organization').order_by('-created_at')
 
     # Pagination
     paginator = DefaultPagination()

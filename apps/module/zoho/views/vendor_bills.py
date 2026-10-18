@@ -73,6 +73,9 @@ from .helpers import (
 
 logger = logging.getLogger(__name__)
 
+# Seconds. Without it a hung Zoho socket pins a gunicorn worker forever.
+ZOHO_SYNC_TIMEOUT = 30
+
 # Backward-compat alias
 _calculate_string_similarity = calculate_string_similarity
 
@@ -1745,25 +1748,38 @@ def vendor_bill_sync_view(request, org_id, bill_id):
             'Content-Type': 'application/json'
         }
 
+        # Already posted to Zoho: re-syncing would create a second bill
+        # for the same invoice, and Zoho has no idempotency key.
+        if bill.zoho_bill_id:
+            return Response({
+                'error': 'Already Synced',
+                'detail': 'This bill already exists in Zoho Books.',
+                'zoho_bill_id': bill.zoho_bill_id,
+            }, status=status.HTTP_409_CONFLICT)
+
         try:
-            response = requests.post(url, headers=headers, data=payload)
+            response = requests.post(url, headers=headers, data=payload, timeout=ZOHO_SYNC_TIMEOUT)
 
             # Handle token refresh if needed
             if response.status_code == 401:
                 new_access_token = refresh_zoho_access_token(current_token)
                 if new_access_token:
                     headers['Authorization'] = f'Zoho-oauthtoken {new_access_token}'
-                    response = requests.post(url, headers=headers, data=payload)
+                    response = requests.post(url, headers=headers, data=payload, timeout=ZOHO_SYNC_TIMEOUT)
 
             if response.status_code == 201:
-                # Update bill status
-                bill.status = 'Synced'
-                bill.save()
-
                 response_data = response.json()
+                zoho_bill_id = response_data.get('bill', {}).get('bill_id')
+
+                # Persist the remote id before anything else: it is the only
+                # record that the Zoho-side bill exists.
+                bill.zoho_bill_id = str(zoho_bill_id) if zoho_bill_id else None
+                bill.status = 'Synced'
+                bill.save(update_fields=['zoho_bill_id', 'status'])
+
                 return Response({
                     "detail": "Bill synced to Zoho successfully",
-                    "zoho_bill_id": response_data.get('bill', {}).get('bill_id')
+                    "zoho_bill_id": zoho_bill_id,
                 })
             else:
                 response_json = response.json() if response.content else {}
@@ -1777,11 +1793,16 @@ def vendor_bill_sync_view(request, org_id, bill_id):
                 }, status=status.HTTP_400_BAD_REQUEST)
 
         except requests.RequestException as e:
+            # The request may still have reached Zoho and created the bill;
+            # we just never saw the response. Say so instead of inviting a
+            # blind retry that silently duplicates the invoice.
             logger.error(f"Network error during Zoho sync: {str(e)}")
-            return Response(
-                {"detail": f"Network error: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({
+                "detail": (
+                    f"Network error while syncing: {e}. The bill may or may not "
+                    "have been created in Zoho Books — check there before retrying."
+                ),
+            }, status=status.HTTP_504_GATEWAY_TIMEOUT)
 
     except VendorBill.DoesNotExist:
         return Response({"detail": "Vendor bill not found"}, status=status.HTTP_404_NOT_FOUND)

@@ -19,6 +19,16 @@ from unfold.admin import (
 from apps.common.models import DemoRequest, EmailSettings
 
 
+def _user_org_ids(user):
+    """Ids of the organisations *user* is an active member of."""
+    from apps.organizations.models import OrgMembership
+
+    return OrgMembership.objects.filter(
+        user=user, is_active=True
+    ).values_list("organization_id", flat=True)
+
+
+
 @admin.register(DemoRequest)
 class DemoRequestAdmin(UnfoldModelAdmin):
     """Read-mostly view of public demo bookings."""
@@ -174,13 +184,12 @@ class BaseOrgAdmin(UnfoldModelAdmin):
             qs = qs.select_related("organization")
         if request.user.is_superuser:
             return qs
-        # Many-to-many via OrgMembership (preferred)
-        if hasattr(request.user, "organizations"):
-            return qs.filter(organization__in=request.user.organizations.all())
-        # Single FK fallback
-        org_id = getattr(request.user, "organization_id", None)
-        if org_id and hasattr(self.model, "organization_id"):
-            return qs.filter(organization_id=org_id)
+        # Scope to the orgs the user is an active member of. The previous
+        # version probed ``request.user.organizations``, which is not a
+        # relation on User, so it fell through and returned every tenant's
+        # rows to any staff user.
+        if hasattr(self.model, "organization"):
+            return qs.filter(organization__in=_user_org_ids(request.user))
         return qs
 
     def save_model(self, request, obj, form, change):
@@ -200,8 +209,11 @@ class BaseOrgAdmin(UnfoldModelAdmin):
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "organization" and not request.user.is_superuser:
-            if hasattr(request.user, "organizations"):
-                kwargs["queryset"] = request.user.organizations.all()
+            from apps.organizations.models import Organization
+
+            kwargs["queryset"] = Organization.objects.filter(
+                id__in=_user_org_ids(request.user)
+            )
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 

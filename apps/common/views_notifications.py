@@ -59,10 +59,18 @@ def _collect_from(model_cls, org_id, since_dt, module_label):
     # Only surface bills that are in a user-visible state — either
     # analysis has produced data (``analysed_data`` non-empty) or an
     # error was recorded, or the row was flagged as duplicate.
+    # _classify_bill only reads the flags plus the display name, so load
+    # that name here too. Re-fetching the full row inside the loop cost one
+    # extra query per notification, across five models, on a 15s poll.
+    field_names = {f.name for f in model_cls._meta.get_fields()}
+    name_field = (
+        "bill_munshi_name" if "bill_munshi_name" in field_names else "billmunshiName"
+    )
+
     notifications = []
     for bill in qs.only(
         "id", "updated_at", "is_duplicate", "is_processing",
-        "processing_error", "status",
+        "processing_error", "status", name_field,
     ).iterator():
         # Skip drafts still being processed with no result yet.
         if bill.is_processing and not bill.processing_error:
@@ -72,11 +80,7 @@ def _collect_from(model_cls, org_id, since_dt, module_label):
         if bill.status == "Draft" and not bill.processing_error and not bill.is_duplicate:
             continue
 
-        # Reload the full row for message building — the ``.only()`` above
-        # kept the query small; getattr on unloaded fields would refetch
-        # anyway, so this is cheaper as one round trip.
-        full = model_cls.objects.get(pk=bill.id)
-        kind, message = _classify_bill(full)
+        kind, message = _classify_bill(bill)
         notifications.append({
             "id": f"{module_label}-{bill.id}",
             "module": module_label,

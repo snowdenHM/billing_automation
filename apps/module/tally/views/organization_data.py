@@ -8,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_api_key.models import APIKey
 
-from apps.organizations.models import Organization, OrganizationAPIKey
+from apps.organizations.models import Organization, OrganizationAPIKey, OrgMembership
 from apps.module.tally.models import TallyTcpRelease
 
 
@@ -137,16 +137,18 @@ def organization_tally_data(request, org_id):
         # Get organization and verify access
         organization = get_object_or_404(Organization, id=org_id)
 
-        # Check if user has access to this organization
+        # Admin only: the response hands back a live API key that grants
+        # the full Tally TCP surface for this organization.
         if not request.user.is_superuser:
-            # Fix: Use the correct relationship through memberships
-            user_orgs = Organization.objects.filter(
-                memberships__user=request.user,
-                memberships__is_active=True
-            )
-            if organization not in user_orgs:
+            is_admin = OrgMembership.objects.filter(
+                organization=organization,
+                user=request.user,
+                role=OrgMembership.ADMIN,
+                is_active=True,
+            ).exists()
+            if not is_admin:
                 return Response(
-                    {"error": "You don't have access to this organization"},
+                    {"error": "Only an organization admin can view the Tally integration key."},
                     status=status.HTTP_403_FORBIDDEN
                 )
 

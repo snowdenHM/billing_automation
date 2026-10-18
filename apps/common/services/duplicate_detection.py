@@ -10,12 +10,20 @@ Works with any bill model that has:
 """
 import logging
 from contextlib import contextmanager
+from datetime import timedelta
 
+from django.conf import settings
 from django.db import connection, transaction
+from django.utils import timezone
 
 from apps.common.utils import calculate_string_similarity
 
 logger = logging.getLogger(__name__)
+
+# How far back a fuzzy duplicate is looked for. Exact (hash) duplicates are
+# caught separately at upload and are not limited by this.
+DUPLICATE_SCAN_DAYS = getattr(settings, "DUPLICATE_SCAN_DAYS", 365)
+DUPLICATE_SCAN_LIMIT = getattr(settings, "DUPLICATE_SCAN_LIMIT", 500)
 
 
 # Arbitrary 32-bit namespace key for ``pg_try_advisory_xact_lock``.
@@ -85,8 +93,16 @@ def check_duplicate_bill(bill, organization, bill_model, analysed_statuses=None)
         return False, [], 0.0
 
     analyzed_data = bill.analysed_data
-    current_invoice_number = analyzed_data.get("invoiceNumber", "").strip()
-    current_vendor_name = analyzed_data.get("from", {}).get("name", "").strip()
+
+    def _text(value):
+        # The AI emits explicit nulls, and ``.get(k, "")`` returns None when
+        # the key exists with a null value -- then ``.strip()`` raised
+        # AttributeError and took the whole duplicate check down.
+        return (value or "").strip() if isinstance(value, str) or value is None else str(value).strip()
+
+    _from = analyzed_data.get("from") or {}
+    current_invoice_number = _text(analyzed_data.get("invoiceNumber"))
+    current_vendor_name = _text(_from.get("name") if isinstance(_from, dict) else "")
     current_total = analyzed_data.get("total", 0)
     current_date = analyzed_data.get("dateIssued", "")
 
@@ -99,20 +115,32 @@ def check_duplicate_bill(bill, organization, bill_model, analysed_statuses=None)
     max_similarity = 0.0
 
     with _organization_dup_lock(organization.id):
-        potential_duplicates = list(
+        # Bounded window: every analysed bill in the org used to be loaded
+        # and JSON-decoded in Python on each upload, inside this per-org
+        # lock, so uploads queued behind a growing full scan.
+        candidates = (
             bill_model.objects.filter(
                 organization=organization,
                 status__in=analysed_statuses,
-            ).exclude(id=bill.id)
+            )
+            .exclude(id=bill.id)
+            .order_by("-created_at")
         )
+        if DUPLICATE_SCAN_DAYS:
+            cutoff = timezone.now() - timedelta(days=DUPLICATE_SCAN_DAYS)
+            candidates = candidates.filter(created_at__gte=cutoff)
+        potential_duplicates = list(candidates[:DUPLICATE_SCAN_LIMIT])
 
         for other_bill in potential_duplicates:
             if not other_bill.analysed_data:
                 continue
 
             other_data = other_bill.analysed_data
-            other_invoice_number = other_data.get("invoiceNumber", "").strip()
-            other_vendor_name = other_data.get("from", {}).get("name", "").strip()
+            _other_from = other_data.get("from") or {}
+            other_invoice_number = _text(other_data.get("invoiceNumber"))
+            other_vendor_name = _text(
+                _other_from.get("name") if isinstance(_other_from, dict) else ""
+            )
             other_total = other_data.get("total", 0)
             other_date = other_data.get("dateIssued", "")
 

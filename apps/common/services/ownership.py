@@ -142,7 +142,8 @@ def validate_bill_ownership(
         org_name = getattr(organization, "name", "") or ""
         org_gst = getattr(organization, "gst_number", "") or ""
 
-        logger.info(
+        # debug, not info: this runs once per row on every bills-list page.
+        logger.debug(
             "Validating %s ownership — Party: %s (GST: %s) vs Org: %s (GST: %s)",
             bill_type, party_name, party_gst, org_name, org_gst,
         )

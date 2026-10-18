@@ -142,19 +142,41 @@ class TallyConfigSerializer(serializers.ModelSerializer):
     discount_parent_names = serializers.SerializerMethodField()
     freight_parent_names = serializers.SerializerMethodField()
 
+    def _resolve_organization(self):
+        """Organisation whose ledgers this config may reference.
+
+        ``request.user.organization`` does not exist on the User model, so
+        the previous lookup always produced an empty queryset and every
+        write naming a parent ledger failed with "object does not exist".
+        """
+        if self.instance is not None and getattr(self.instance, 'organization', None):
+            return self.instance.organization
+        org = (self.context or {}).get('organization')
+        if org is not None:
+            return org
+        request = (self.context or {}).get('request')
+        if request is not None:
+            org = getattr(request, 'organization', None)
+            if org is not None:
+                return org
+            user = getattr(request, 'user', None)
+            membership = (
+                user.memberships.filter(is_active=True).first()
+                if user is not None and user.is_authenticated
+                else None
+            )
+            if membership:
+                return membership.organization
+        return None
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Set the queryset based on the organization from context or instance
-        if hasattr(self, 'context') and 'request' in self.context:
-            request = self.context['request']
-            if hasattr(request, 'user') and hasattr(request.user, 'organization'):
-                org_queryset = ParentLedger.objects.filter(organization=request.user.organization)
-            else:
-                org_queryset = ParentLedger.objects.none()
-        elif self.instance and hasattr(self.instance, 'organization'):
-            org_queryset = ParentLedger.objects.filter(organization=self.instance.organization)
-        else:
-            org_queryset = ParentLedger.objects.none()
+        organization = self._resolve_organization()
+        org_queryset = (
+            ParentLedger.objects.filter(organization=organization)
+            if organization is not None
+            else ParentLedger.objects.none()
+        )
 
         # Set queryset for all ManyToMany fields
         for field_name in ['igst_parents', 'cgst_parents', 'sgst_parents',
@@ -165,15 +187,11 @@ class TallyConfigSerializer(serializers.ModelSerializer):
                 self.fields[field_name].queryset = org_queryset
 
         # New adjustment FKs pick from the org's full Chart of Accounts.
-        org = None
-        if self.instance and hasattr(self.instance, 'organization'):
-            org = self.instance.organization
-        elif self.context.get('organization'):
-            org = self.context['organization']
-        elif hasattr(self, 'context') and 'request' in self.context:
-            request = self.context['request']
-            org = getattr(getattr(request, 'user', None), 'organization', None)
-        ledger_qs = Ledger.objects.filter(organization=org) if org is not None else Ledger.objects.none()
+        ledger_qs = (
+            Ledger.objects.filter(organization=organization)
+            if organization is not None
+            else Ledger.objects.none()
+        )
         for field_name in ('cess_ledger', 'discount_ledger', 'freight_ledger',
                            'round_off_ledger', 'tds_ledger'):
             if field_name in self.fields:

@@ -343,6 +343,11 @@ class VendorBill(BaseTeamModel):
     bill_belong_your_org = models.BooleanField(default=False, help_text="Whether this bill belongs to your organization")
     description = models.TextField(blank=True, null=True, help_text="Description of the bill")
 
+    zoho_bill_id = models.CharField(
+        max_length=64, blank=True, null=True, db_index=True,
+        help_text="bill_id returned by Zoho Books. Set once the remote bill exists; blocks a re-sync from creating a duplicate.",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     update_at = models.DateTimeField(auto_now=True)
 

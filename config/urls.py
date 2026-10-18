@@ -33,9 +33,10 @@ urlpatterns = [
     path("admin/rq/", include("django_rq.urls")),
 ]
 
-# Serve media files in development
-if settings.DEBUG:
-    # Custom view for all media files with proper iframe headers
-    urlpatterns += [
-        re_path(r'^media/(?P<path>.*)$', serve_bill_file, name='serve_media_file'),
-    ]
+# Media is always served through serve_bill_file, which verifies the signed
+# token the serializers mint. Registering this only under DEBUG left the
+# guard dead in production: /media/ either 404'd or, if the web server
+# aliased it to MEDIA_ROOT, served every tenant's bills with no auth at all.
+urlpatterns += [
+    re_path(r'^media/(?P<path>.*)$', serve_bill_file, name='serve_media_file'),
+]

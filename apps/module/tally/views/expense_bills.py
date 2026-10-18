@@ -47,7 +47,7 @@ from ..models import (
     TallyVendorBill
 )
 from .vendor_bills import (
-    _sync_data_to_xml, _clean_tally_text, _ledger_parent_name,
+    _sync_data_to_xml, _clean_tally_text, _ledger_parent_name, SYNC_FEED_MAX_BILLS,
     _resolve_ledger_by_name,
     EXPENSE_BILL_EMIT_VENDOR_EXTRAS, EXPENSE_BILL_EMIT_LEDGER_EXTRAS,
 )
@@ -1827,7 +1827,7 @@ def expense_bills_sync_list(request, org_id):
         'products__chart_of_accounts',
         'consolidated_products__chart_of_accounts',
         'gst_lines__ledger',
-    ).order_by('-created_at')
+    ).order_by('-created_at')[:SYNC_FEED_MAX_BILLS]
 
     bills_data = []
     for analyzed_bill in analyzed_bills:

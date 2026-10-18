@@ -55,7 +55,7 @@ from ..models import (
     TallyVendorBill
 )
 from .vendor_bills import (
-    _sync_data_to_xml, _clean_tally_text, _ledger_parent_name,
+    _sync_data_to_xml, _clean_tally_text, _ledger_parent_name, SYNC_FEED_MAX_BILLS,
     PAYMENT_EMIT_LEDGER_EXTRAS,
 )
 from ..serializers import (
@@ -1913,7 +1913,7 @@ def payment_bills_sync_list(request, org_id):
         'products__chart_of_accounts',
         'consolidated_products__chart_of_accounts',
         'gst_lines__ledger',
-    ).order_by('-created_at')
+    ).order_by('-created_at')[:SYNC_FEED_MAX_BILLS]
 
     bills_data = []
     skipped = []

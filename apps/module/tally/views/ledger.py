@@ -1,6 +1,7 @@
 # apps/module/tally/views/ledger.py
 """
-Ledger CRUD views (currently LedgerViewSet – open for testing, no auth).
+Ledger CRUD views used by the Tally TCP connector to push the chart of
+accounts into BillMunshi.
 """
 import logging
 
@@ -9,7 +10,8 @@ from drf_spectacular.utils import extend_schema
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 
-from apps.organizations.models import Organization
+from apps.common.permissions import OrganizationAPIKeyOrBearerToken
+from apps.common.utils import get_organization_from_request
 
 from ..models import Ledger, ParentLedger
 from ..serializers import LedgerSerializer, LedgerBulkCreateSerializer
@@ -21,39 +23,25 @@ logger = logging.getLogger(__name__)
 @extend_schema(tags=["Tally TCP"])
 class LedgerViewSet(viewsets.GenericViewSet):
     """
-    Simplified Ledger ViewSet with only GET and POST operations.
-    OPEN FOR TESTING – NO AUTHENTICATION REQUIRED.
+    Ledger list + bulk-create for the Tally connector.
+
+    Requires the org API key (``Authorization: Api-Key ...``) or an admin
+    bearer token. Was previously unauthenticated with the org taken from
+    the URL, which exposed every tenant's chart of accounts.
     """
 
     serializer_class = LedgerSerializer
-    permission_classes = []
+    permission_classes = [OrganizationAPIKeyOrBearerToken]
 
     def get_queryset(self):
         organization = self._get_organization()
         if organization:
             return Ledger.objects.filter(organization=organization).select_related("parent")
-        return Ledger.objects.all().select_related("parent")
+        # Never fall back to Ledger.objects.all().
+        return Ledger.objects.none()
 
     def _get_organization(self):
-        org_id = self.kwargs.get("org_id")
-        if org_id:
-            try:
-                return Organization.objects.get(id=org_id)
-            except Organization.DoesNotExist:
-                return None
-        if hasattr(self.request, "auth") and self.request.auth:
-            from apps.organizations.models import OrganizationAPIKey
-            try:
-                return OrganizationAPIKey.objects.get(api_key=self.request.auth).organization
-            except OrganizationAPIKey.DoesNotExist:
-                pass
-        if hasattr(self.request, "organization"):
-            return self.request.organization
-        if hasattr(self.request.user, "memberships") and self.request.user.is_authenticated:
-            membership = self.request.user.memberships.first()
-            if membership:
-                return membership.organization
-        return None
+        return get_organization_from_request(self.request, self.kwargs.get("org_id"))
 
     # Alias for backward compat
     get_organization = _get_organization
@@ -113,15 +101,10 @@ class LedgerViewSet(viewsets.GenericViewSet):
     def create(self, request, *args, **kwargs):
         organization = self._get_organization()
         if not organization:
-            try:
-                organization = Organization.objects.first()
-                if not organization:
-                    return Response(
-                        {"error": "No organization available. Please create one first."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-            except Exception:
-                return Response({"error": "Could not determine organization"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Could not determine organization for this request."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not request.data:
             return Response({"error": "No data provided"}, status=status.HTTP_400_BAD_REQUEST)

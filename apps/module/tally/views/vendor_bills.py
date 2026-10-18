@@ -65,6 +65,9 @@ from ..serializers import (
 # OpenAI Client – no longer used directly; AI analysis is handled by common services
 logger = logging.getLogger(__name__)
 
+# Most bills handed to the Tally bridge in a single /sync_bills/ response.
+SYNC_FEED_MAX_BILLS = 100
+
 
 # ============================================================================
 # Helper Functions (duplicates removed – now imported from apps.common)
@@ -1200,98 +1203,92 @@ def vendor_bill_verify(request, org_id):
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     try:
-        # Handle consolidation flag from root level or analyzed_data
-        consolidate_flag = request.data.get('consolidate', analyzed_data.get('consolidate', False))
-        logger.info(f"Received consolidate flag: {consolidate_flag}")
-        logger.info(f"Current analyzed_bill consolidate value: {getattr(analyzed_bill, 'consolidate', 'NOT SET')}")
-
-        # Always update the consolidate flag regardless of current value
-        try:
+        with transaction.atomic():
+            # Consolidation flag: root level wins, else analyzed_data.
+            # ``.get(k, default)`` evaluates the default eagerly, so the
+            # fallback must tolerate analyzed_data being None/not a dict.
+            _ad = analyzed_data if isinstance(analyzed_data, dict) else {}
+            consolidate_flag = request.data.get('consolidate', _ad.get('consolidate', False))
             analyzed_bill.consolidate = consolidate_flag
             analyzed_bill.save(update_fields=['consolidate'])
-            logger.info(f"Successfully updated consolidate flag to: {consolidate_flag}")
-        except Exception as consolidate_error:
-            logger.error(f"Failed to update consolidate flag: {str(consolidate_error)}")
-            # If the field doesn't exist, try to save without it but log the issue
-            logger.warning("Consolidate field might not exist in the model")
 
-        verified_bill = update_analyzed_bill_data(analyzed_bill, analyzed_data, organization)
+            verified_bill = update_analyzed_bill_data(analyzed_bill, analyzed_data, organization)
 
-        # Tax reconciliation: Σ(per-line tax) vs bill-level tax. Used to be a
-        # hard 422 block, but the UI now keeps line totals and bill-level
-        # totals in lock-step (the bill-level fields are derived from the
-        # line items), so any residual gap is almost always sub-paisa
-        # floating-point noise. Per product feedback the OCR/line mismatch
-        # must be informational only — the user should always be able to
-        # verify. Downgraded to a logged warning here.
-        TOL = TallyVendorAnalyzedBill.ROUND_OFF_THRESHOLD  # Decimal('1.00')
+            # Tax reconciliation: Σ(per-line tax) vs bill-level tax. Used to be a
+            # hard 422 block, but the UI now keeps line totals and bill-level
+            # totals in lock-step (the bill-level fields are derived from the
+            # line items), so any residual gap is almost always sub-paisa
+            # floating-point noise. Per product feedback the OCR/line mismatch
+            # must be informational only — the user should always be able to
+            # verify. Downgraded to a logged warning here.
+            TOL = TallyVendorAnalyzedBill.ROUND_OFF_THRESHOLD  # Decimal('1.00')
 
-        def _to_decimal(value):
-            if value is None:
-                return Decimal('0')
-            if isinstance(value, Decimal):
-                return value
+            def _to_decimal(value):
+                if value is None:
+                    return Decimal('0')
+                if isinstance(value, Decimal):
+                    return value
+                try:
+                    return Decimal(str(value))
+                except (InvalidOperation, ValueError, TypeError):
+                    return Decimal('0')
+
+            product_qs = list(verified_bill.products.all())
+            line_cgst = sum((_to_decimal(p.cgst) for p in product_qs), Decimal('0'))
+            line_sgst = sum((_to_decimal(p.sgst) for p in product_qs), Decimal('0'))
+            line_igst = sum((_to_decimal(p.igst) for p in product_qs), Decimal('0'))
+            bill_cgst = _to_decimal(verified_bill.cgst)
+            bill_sgst = _to_decimal(verified_bill.sgst)
+            bill_igst = _to_decimal(verified_bill.igst)
+            diffs = {
+                'cgst': abs(line_cgst - bill_cgst),
+                'sgst': abs(line_sgst - bill_sgst),
+                'igst': abs(line_igst - bill_igst),
+            }
+            breaches = {k: float(v) for k, v in diffs.items() if v >= TOL}
+            if breaches:
+                logger.warning(
+                    "Tax reconciliation drift on bill %s (>= ₹%s) — clamping bill-level "
+                    "taxes to Σ(line). diffs=%s line_totals={cgst:%s, sgst:%s, igst:%s} "
+                    "bill_totals={cgst:%s, sgst:%s, igst:%s}",
+                    verified_bill.id, TOL, breaches,
+                    line_cgst, line_sgst, line_igst,
+                    bill_cgst, bill_sgst, bill_igst,
+                )
+                # Clamp bill-level taxes to the line-sum so the sync payload is
+                # self-consistent — otherwise the Tally XML's ledger totals
+                # won't tie back to <total_amount> and Tally rejects it.
+                # Only clamp axes that actually breach; leave clean ones alone.
+                clamp_fields = []
+                if 'cgst' in breaches:
+                    verified_bill.cgst = line_cgst
+                    clamp_fields.append('cgst')
+                if 'sgst' in breaches:
+                    verified_bill.sgst = line_sgst
+                    clamp_fields.append('sgst')
+                if 'igst' in breaches:
+                    verified_bill.igst = line_igst
+                    clamp_fields.append('igst')
+                if clamp_fields:
+                    verified_bill.save(update_fields=clamp_fields)
+
+            # Recompute round-off after products & tax fields are persisted so the
+            # XML sync payload can carry an accurate Round Off entry.
             try:
-                return Decimal(str(value))
-            except (InvalidOperation, ValueError, TypeError):
-                return Decimal('0')
+                verified_bill.compute_round_off()
+            except Exception as round_off_err:
+                logger.warning(
+                    f"Round-off computation failed for bill {verified_bill.id}: {round_off_err}"
+                )
 
-        product_qs = list(verified_bill.products.all())
-        line_cgst = sum((_to_decimal(p.cgst) for p in product_qs), Decimal('0'))
-        line_sgst = sum((_to_decimal(p.sgst) for p in product_qs), Decimal('0'))
-        line_igst = sum((_to_decimal(p.igst) for p in product_qs), Decimal('0'))
-        bill_cgst = _to_decimal(verified_bill.cgst)
-        bill_sgst = _to_decimal(verified_bill.sgst)
-        bill_igst = _to_decimal(verified_bill.igst)
-        diffs = {
-            'cgst': abs(line_cgst - bill_cgst),
-            'sgst': abs(line_sgst - bill_sgst),
-            'igst': abs(line_igst - bill_igst),
-        }
-        breaches = {k: float(v) for k, v in diffs.items() if v >= TOL}
-        if breaches:
-            logger.warning(
-                "Tax reconciliation drift on bill %s (>= ₹%s) — clamping bill-level "
-                "taxes to Σ(line). diffs=%s line_totals={cgst:%s, sgst:%s, igst:%s} "
-                "bill_totals={cgst:%s, sgst:%s, igst:%s}",
-                verified_bill.id, TOL, breaches,
-                line_cgst, line_sgst, line_igst,
-                bill_cgst, bill_sgst, bill_igst,
-            )
-            # Clamp bill-level taxes to the line-sum so the sync payload is
-            # self-consistent — otherwise the Tally XML's ledger totals
-            # won't tie back to <total_amount> and Tally rejects it.
-            # Only clamp axes that actually breach; leave clean ones alone.
-            clamp_fields = []
-            if 'cgst' in breaches:
-                verified_bill.cgst = line_cgst
-                clamp_fields.append('cgst')
-            if 'sgst' in breaches:
-                verified_bill.sgst = line_sgst
-                clamp_fields.append('sgst')
-            if 'igst' in breaches:
-                verified_bill.igst = line_igst
-                clamp_fields.append('igst')
-            if clamp_fields:
-                verified_bill.save(update_fields=clamp_fields)
+            bill.status = TallyVendorBill.BillStatus.VERIFIED
+            bill.save(update_fields=['status'])
 
-        # Recompute round-off after products & tax fields are persisted so the
-        # XML sync payload can carry an accurate Round Off entry.
-        try:
-            verified_bill.compute_round_off()
-        except Exception as round_off_err:
-            logger.warning(
-                f"Round-off computation failed for bill {verified_bill.id}: {round_off_err}"
-            )
-
-        bill.status = TallyVendorBill.BillStatus.VERIFIED
-        bill.save(update_fields=['status'])
-
-        response_data = get_structured_bill_data(verified_bill, organization)
-        return Response({
-            "message": "Bill verified successfully",
-            "analyzed_data": response_data
-        }, status=status.HTTP_200_OK)
+            response_data = get_structured_bill_data(verified_bill, organization)
+            return Response({
+                "message": "Bill verified successfully",
+                "analyzed_data": response_data
+            }, status=status.HTTP_200_OK)
 
     except Exception as e:
         logger.error(f"Bill verification failed: {str(e)}")
@@ -2366,16 +2363,43 @@ def vendor_bills_sync_list(request, org_id):
             # tax ledgers at emit time (see prepare_sync_data). Adding
             # non-existent FKs here would crash Django prefetch validation.
             'consolidated_products__taxes',
+            # Parent groups are read per ledger when building <ledgers>;
+            # without these the feed fired a query per tax line.
+            'products__cgst_ledger__parent',
+            'products__sgst_ledger__parent',
+            'products__igst_ledger__parent',
+            'products__taxes__parent',
         )
         .order_by('-created_at')
     )
 
-    bills_count = analyzed_bills.count()
-    logger.info(f"Found {bills_count} synced bills")
+    # Bounded batch. If the Tally bridge has been offline the backlog can be
+    # arbitrarily large, and building all of it in one request is what times
+    # the connector out. The bridge polls repeatedly, so it drains.
+    analyzed_bills = analyzed_bills[:SYNC_FEED_MAX_BILLS]
 
     bills_data = []
+    # Shared across the batch: the org's TallyConfig and stock-item lookups
+    # are identical for every bill in it.
+    sync_cache = {}
     for analyzed_bill in analyzed_bills:
-        sync_data = prepare_sync_data(analyzed_bill, organization)
+        sync_data = prepare_sync_data(analyzed_bill, organization, cache=sync_cache)
+        dropped = sync_data.get("dropped") or []
+        if dropped:
+            # Don't hand Tally a voucher whose <ledgers> don't add up to
+            # <total_amount> — it either fails the import or books a wrong
+            # figure while we report "Synced". Hold the bill back and say why.
+            reason = (
+                "Not sent to Tally — unmapped ledger(s): "
+                + "; ".join(dropped[:5])
+                + ("; …" if len(dropped) > 5 else "")
+            )
+            logger.error("Withholding bill %s from sync: %s", analyzed_bill.bill_no, reason)
+            bill = analyzed_bill.selected_bill
+            if bill and bill.tally_sync_message != reason:
+                bill.tally_sync_message = reason
+                bill.save(update_fields=["tally_sync_message"])
+            continue
         bills_data.append(sync_data["data"])
 
     # Tally's TDL/TCP connector consumes XML natively and its text parser
@@ -2408,20 +2432,27 @@ def _ledger_parent_name(ledger):
     return getattr(parent, 'parent', "") or ""
 
 
-def _resolve_stock_item(organization, name):
+def _resolve_stock_item(organization, name, cache=None):
     """Look up an existing ``StockItem`` by (organization, name). Returns None
     when not found. Used to pull inline-master extras (``parent``, ``unit``,
     ``gst_rate``, ``hsn_code``) into the voucher payload so the Tally TDL can
     create the item on-the-fly if it doesn't already have it."""
     if not name:
         return None
+    # ``cache`` is a per-request dict: the sync feed resolves the same item
+    # names over and over across a batch of bills, one query each.
+    if cache is not None and name in cache:
+        return cache[name]
     from ..models import StockItem
     try:
-        return StockItem.objects.filter(
+        item = StockItem.objects.filter(
             organization=organization, name=name
         ).first()
     except Exception:
-        return None
+        item = None
+    if cache is not None:
+        cache[name] = item
+    return item
 
 
 def _resolve_ledger_by_name(organization, name):
@@ -2686,7 +2717,7 @@ def _emit_literal_ampersands(xml_text):
     return xml_text.replace('&amp;', '&')
 
 
-def prepare_sync_data(analyzed_bill, organization):
+def prepare_sync_data(analyzed_bill, organization, cache=None):
     """Build the simplified sync payload for Tally TCP.
 
     Top-level shape:
@@ -2753,8 +2784,16 @@ def prepare_sync_data(analyzed_bill, organization):
     # False for legacy reasons) the existing per-item shape is emitted.
     # ------------------------------------------------------------------
     from ..models import TallyConfig
-    tally_config = TallyConfig.objects.filter(organization=organization).first()
+    cache = cache if cache is not None else {}
+    if "tally_config" not in cache:
+        cache["tally_config"] = TallyConfig.objects.filter(organization=organization).first()
+    tally_config = cache["tally_config"]
     use_inventory = bool(getattr(tally_config, 'tally_product_allow_sync', False))
+
+    # Amounts that would be left out of <ledgers> because no ledger is
+    # mapped. <total_amount> still carries them, so emitting such a bill
+    # produces an unbalanced voucher. The caller withholds the bill.
+    dropped_amounts = []
 
     # ------------------------------------------------------------------
     # Items: ZERO tax fields here. All tax info lives in the <taxes>
@@ -2847,7 +2886,9 @@ def prepare_sync_data(analyzed_bill, organization):
             # (the one the quick-add flow writes). Tally uses them only when
             # it has no item by this name; they are ignored otherwise.
             if VENDOR_BILL_EMIT_ITEM_EXTRAS:
-                stock_item = _resolve_stock_item(organization, item_name)
+                stock_item = _resolve_stock_item(
+                    organization, item_name, cache.setdefault("stock_items", {})
+                )
                 item_entry.update({
                     "unit": (getattr(stock_item, 'unit', None) or "Nos"),
                     # Fall back to the line's own GST rate when the stock
@@ -2957,6 +2998,9 @@ def prepare_sync_data(analyzed_bill, organization):
                     "Line has %s amount %s but no ledger — skipping in payload",
                     tax_type, amt,
                 )
+                dropped_amounts.append(
+                    f"{tax_type.upper()} {_fmt_money(amt)} has no tax ledger"
+                )
                 continue
             bucket["amount"] += amt
             if rec["rate"]:
@@ -3003,6 +3047,9 @@ def prepare_sync_data(analyzed_bill, organization):
                     "Sync inventory-OFF: skipping ₹%s with blank purchase ledger "
                     "for bill %s — configure a purchase ledger on the line item.",
                     _fmt_money(total), analyzed_bill.bill_no,
+                )
+                dropped_amounts.append(
+                    f"{_fmt_money(total)} has no purchase ledger"
                 )
                 continue
             ledgers_payload.append({
@@ -3113,7 +3160,7 @@ def prepare_sync_data(analyzed_bill, organization):
                 )
         bill_data = _with_extras
 
-    return {"data": bill_data}
+    return {"data": bill_data, "dropped": dropped_amounts}
 
 
 # ============================================================================

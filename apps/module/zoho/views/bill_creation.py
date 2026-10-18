@@ -10,8 +10,9 @@ Eliminates duplication across create_*_zoho_objects_from_analysis functions:
 
 import logging
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
+from django.db import transaction
 from django.db.models.functions import Lower
 
 from ..models import ZohoVendor
@@ -23,6 +24,20 @@ from .helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _dec(value, default="0"):
+    """Coerce an analysis value to Decimal. Never multiply raw JSON values:
+    a model returning ``"price": "12"`` made ``"12" * 3 == "121212"``."""
+    try:
+        return Decimal(str(value if value not in (None, "") else default))
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal(default)
+
+
+def _line_amount(item):
+    qty = _dec(item.get("quantity", 1), "1")
+    return _dec(item.get("price", 0)) * qty
 
 # ---------------------------------------------------------------------------
 # Schema helpers
@@ -208,62 +223,74 @@ def create_zoho_objects_from_analysis(
             zoho_bill.save()
             logger.info(f"Updated existing {bill_type_label} bill: {zoho_bill.id}")
 
-        # Delete existing products and recreate
-        existing_count = zoho_bill.products.count()
-        if existing_count > 0:
-            zoho_bill.products.all().delete()
-            logger.info(f"Deleted {existing_count} existing products")
-
-        # Create product line items
-        items = relevant_data.get('items', [])
-        logger.info(f"Creating {len(items)} product line items")
-
+        # Rebuild is delete-then-recreate: without a transaction a failure
+        # partway through left the bill with fewer lines than its total.
         created_products = []
-        for idx, item in enumerate(items):
-            try:
-                amount = item.get('price', 0) * item.get('quantity', 1)
-                item_description = item.get('description', f'Item {idx + 1}')
+        failed_products = []
+        with transaction.atomic():
+            # Delete existing products and recreate
+            existing_count = zoho_bill.products.count()
+            if existing_count > 0:
+                zoho_bill.products.all().delete()
+                logger.info(f"Deleted {existing_count} existing products")
 
-                chart_of_accounts = find_appropriate_zoho_coa_ledger(
-                    organization, item_description, ledger_type=ledger_type,
+            # Create product line items
+            items = relevant_data.get('items', [])
+            logger.info(f"Creating {len(items)} product line items")
+
+            for idx, item in enumerate(items):
+                try:
+                    amount = _line_amount(item)
+                    item_description = item.get('description', f'Item {idx + 1}')
+
+                    chart_of_accounts = find_appropriate_zoho_coa_ledger(
+                        organization, item_description, ledger_type=ledger_type,
+                    )
+
+                    product_kwargs = dict(
+                        zohoBill=zoho_bill,
+                        organization=organization,
+                        item_details=item_description[:2000],
+                        amount=safe_numeric_string(amount),
+                        chart_of_accounts=chart_of_accounts,
+                    )
+
+                    # Auto-assign taxes for expense bills
+                    taxes = None
+                    if assign_taxes:
+                        if relevant_data.get('igst', 0) > 0:
+                            taxes = find_appropriate_zoho_tax_ledger(
+                                organization, 'igst', relevant_data.get('igst', 0),
+                            )
+                        elif relevant_data.get('cgst', 0) > 0 or relevant_data.get('sgst', 0) > 0:
+                            taxes = find_appropriate_zoho_tax_ledger(
+                                organization, 'cgst', relevant_data.get('cgst', 0),
+                            )
+                        product_kwargs['taxes'] = taxes
+
+                    product = product_model.objects.create(**product_kwargs)
+                    created_products.append(product)
+
+                    coa_info = (
+                        f" | CoA: {chart_of_accounts.accountName}"
+                        if chart_of_accounts else " | CoA: Not assigned"
+                    )
+                    tax_info = f" | Tax: {taxes.taxName}" if taxes else ""
+                    logger.info(
+                        f"✅ Created product {idx + 1}: "
+                        f"{product.item_details[:50]}{coa_info}{tax_info} - Amount: {product.amount}"
+                    )
+                except Exception as e:
+                    logger.error(f"Error creating product {idx + 1}: {str(e)}")
+                    failed_products.append(f"line {idx + 1}: {e}")
+
+            if failed_products:
+                # Roll back: a bill with some lines missing but the full
+                # invoice total is silent money drift.
+                raise RuntimeError(
+                    "Could not rebuild all line items for Zoho bill "
+                    f"{zoho_bill.id}: " + "; ".join(failed_products[:5])
                 )
-
-                product_kwargs = dict(
-                    zohoBill=zoho_bill,
-                    organization=organization,
-                    item_details=item_description[:2000],
-                    amount=safe_numeric_string(amount),
-                    chart_of_accounts=chart_of_accounts,
-                )
-
-                # Auto-assign taxes for expense bills
-                taxes = None
-                if assign_taxes:
-                    if relevant_data.get('igst', 0) > 0:
-                        taxes = find_appropriate_zoho_tax_ledger(
-                            organization, 'igst', relevant_data.get('igst', 0),
-                        )
-                    elif relevant_data.get('cgst', 0) > 0 or relevant_data.get('sgst', 0) > 0:
-                        taxes = find_appropriate_zoho_tax_ledger(
-                            organization, 'cgst', relevant_data.get('cgst', 0),
-                        )
-                    product_kwargs['taxes'] = taxes
-
-                product = product_model.objects.create(**product_kwargs)
-                created_products.append(product)
-
-                coa_info = (
-                    f" | CoA: {chart_of_accounts.accountName}"
-                    if chart_of_accounts else " | CoA: Not assigned"
-                )
-                tax_info = f" | Tax: {taxes.taxName}" if taxes else ""
-                logger.info(
-                    f"✅ Created product {idx + 1}: "
-                    f"{product.item_details[:50]}{coa_info}{tax_info} - Amount: {product.amount}"
-                )
-            except Exception as e:
-                logger.error(f"Error creating product {idx + 1}: {str(e)}")
-                continue
 
         logger.info(f"Successfully created {len(created_products)} products for bill {zoho_bill.id}")
 

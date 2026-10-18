@@ -8,6 +8,7 @@ duplicating enqueue / status / duplicate-metadata / error-handling logic.
 import logging
 
 import django_rq
+from rq import Retry
 from rq.job import Job
 from django_rq import get_connection
 
@@ -18,10 +19,26 @@ logger = logging.getLogger(__name__)
 # Enqueue / Job status
 # ---------------------------------------------------------------------------
 
+# Keep finished/failed jobs around long enough that the status endpoint can
+# still answer for a bill the user is looking at, and retry transient worker
+# deaths (OOM on a big PDF, deploy restart) instead of leaving the bill stuck
+# with is_processing=True.
+JOB_RESULT_TTL = 24 * 3600
+JOB_FAILURE_TTL = 7 * 24 * 3600
+JOB_RETRY = Retry(max=2, interval=[60, 300])
+
+
 def enqueue_bill_processing(process_fn, *args, queue_name="default", timeout=600):
     """Enqueue *process_fn* on the given RQ queue and return the ``Job``."""
     queue = django_rq.get_queue(queue_name)
-    job = queue.enqueue(process_fn, *args, timeout=timeout)
+    job = queue.enqueue(
+        process_fn,
+        *args,
+        timeout=timeout,
+        result_ttl=JOB_RESULT_TTL,
+        failure_ttl=JOB_FAILURE_TTL,
+        retry=JOB_RETRY,
+    )
     logger.info("Enqueued %s — Job ID: %s", process_fn.__name__, job.id)
     return job
 

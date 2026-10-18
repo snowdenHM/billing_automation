@@ -23,6 +23,9 @@ from apps.common.services.bill_analysis import (
 
 logger = logging.getLogger(__name__)
 
+# Seconds. An HTTP call with no timeout pins a worker indefinitely.
+ZOHO_HTTP_TIMEOUT = 30
+
 
 # ---------------------------------------------------------------------------
 # Credentials
@@ -82,7 +85,7 @@ def refresh_zoho_access_token(current_token):
     )
 
     try:
-        response = requests.post(url)
+        response = requests.post(url, timeout=ZOHO_HTTP_TIMEOUT)
         if response.status_code == 200:
             new_access_token = response.json().get("access_token")
             current_token.accessToken = new_access_token
