@@ -586,8 +586,25 @@ def reconcile_item_line_amounts(json_data):
                 new_price = round(amount / new_qty, 6)
             row["price"] = new_price
             row["quantity"] = int(new_qty) if float(new_qty).is_integer() else new_qty
+
+            # Distinguish a genuine correction from simply filling a blank.
+            #
+            # Summary-style bills (hospital bills, service invoices) print
+            # only an amount per line — no rate, no quantity column. OCR
+            # then reports 0 x 0 for every row and this routine sets
+            # rate = amount, qty = 1. That is the right answer, but it is
+            # not a "correction of a misread": rate x 1 = amount is a
+            # tautology with nothing for the operator to check. Reporting
+            # all fourteen of those as individual warnings buried the one
+            # line that mattered ("14 products are missing item names").
+            #
+            # A real correction is when OCR DID read a rate or quantity and
+            # it disagreed with the printed amount — those still deserve a
+            # per-line callout.
+            trivial_fill = price <= 0 and qty <= 1 and row["quantity"] == 1
             fixes.append({
                 "index": idx,
+                "kind": "filled" if trivial_fill else "corrected",
                 "description": str(row.get("description") or "")[:120],
                 "from": {"price": price, "quantity": qty},
                 "to": {"price": new_price, "quantity": row["quantity"]},
@@ -595,7 +612,21 @@ def reconcile_item_line_amounts(json_data):
             })
         if fixes:
             json_data["_ocr_line_fixes"] = fixes
-            logger.warning("OCR line amounts reconciled to printed amounts: %s", fixes)
+            corrected = [f for f in fixes if f["kind"] == "corrected"]
+            # A page of blank-fills is routine for summary-style bills and
+            # does not deserve a warning; a genuine misread does.
+            if corrected:
+                logger.warning(
+                    "OCR line amounts reconciled to printed amounts "
+                    "(%d corrected, %d filled): %s",
+                    len(corrected), len(fixes) - len(corrected), corrected,
+                )
+            else:
+                logger.info(
+                    "Filled rate/qty from printed amount on %d line(s) — "
+                    "no rate or quantity column on this bill.",
+                    len(fixes),
+                )
         return json_data
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("reconcile_item_line_amounts skipped: %s", exc)
