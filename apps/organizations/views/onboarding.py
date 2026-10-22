@@ -2,6 +2,8 @@
 """
 Organization onboarding flow views.
 """
+import re
+
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -20,6 +22,9 @@ from apps.organizations.serializers import (
     OrgMembershipSerializer,
     OrganizationModuleSerializer,
 )
+
+# Same rule as signup (apps.users.serializers.GSTIN_RE).
+GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z0-9]{13}$")
 
 
 @extend_schema(
@@ -48,7 +53,12 @@ def organization_create_with_module_view(request):
     if not org_name:
         return Response({"detail": "Organization name is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-    gst_number = request.data.get("gst_number", "").strip()
+    gst_number = str(request.data.get("gst_number") or "").strip().upper()
+    if gst_number and not GSTIN_RE.match(gst_number):
+        return Response(
+            {"detail": "Enter a valid 15-character GST No. (e.g. 22AAAAA0000A1Z5)."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     organization = Organization.objects.create(
         name=org_name,
