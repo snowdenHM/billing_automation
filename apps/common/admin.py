@@ -16,7 +16,7 @@ from unfold.admin import (
     StackedInline as UnfoldStackedInline,
 )
 
-from apps.common.models import DemoRequest, EmailSettings
+from apps.common.models import BillActivity, DemoRequest, EmailSettings
 
 
 def _user_org_ids(user):
@@ -267,3 +267,35 @@ class FKLinkMixin:
         label = getattr(related, label_attr, None) if label_attr else None
         label = label or str(fk_id)
         return mark_safe(f'<a href="{url}">{label}</a>')
+
+
+@admin.register(BillActivity)
+class BillActivityAdmin(BaseOrgAdmin):
+    """Read-only. The log is append-only by design; editing it from admin
+    would defeat the point of having it."""
+
+    list_display = (
+        "created_at", "action", "bill_type", "actor_label", "summary", "organization",
+    )
+    list_display_links = ("created_at", "action")
+    list_filter = (
+        "action", "module", "bill_type",
+        ("organization", admin.RelatedOnlyFieldListFilter),
+        "created_at",
+    )
+    list_select_related = ("organization", "actor")
+    search_fields = ("bill_id", "summary", "actor_label")
+    date_hierarchy = "created_at"
+    ordering = ("-created_at",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def get_readonly_fields(self, request, obj=None):
+        return [f.name for f in self.model._meta.fields]

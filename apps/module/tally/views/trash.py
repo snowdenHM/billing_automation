@@ -26,6 +26,9 @@ from apps.module.tally.trash import (
     retention_summary,
 )
 
+from apps.common.models import BillActivity
+from apps.common.services.activity import record_activity
+
 logger = logging.getLogger(__name__)
 
 
@@ -227,6 +230,10 @@ def trash_restore(request, org_id, kind_slug, bill_id):
         )
 
     bill.restore()
+    record_activity(
+        bill, BillActivity.Action.RESTORED,
+        actor=request.user, summary="Restored from Trash",
+    )
     logger.info("Trash: restored %s %s in org %s", kind.slug, bill.pk, organization.id)
 
     return Response({
@@ -274,6 +281,12 @@ def trash_delete_forever(request, org_id, kind_slug, bill_id):
             status=status.HTTP_404_NOT_FOUND,
         )
 
+    # Recorded before the purge: afterwards there is no row to read the
+    # organisation or the name off.
+    record_activity(
+        bill, BillActivity.Action.DELETED,
+        actor=request.user, summary="Deleted permanently",
+    )
     purge_bill(bill)
     logger.info(
         "Trash: %s permanently deleted %s %s in org %s",

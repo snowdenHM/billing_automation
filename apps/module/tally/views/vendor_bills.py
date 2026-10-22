@@ -23,6 +23,10 @@ from rest_framework.response import Response
 
 from apps.common.pagination import DefaultPagination
 from apps.common.permissions import IsOrgAdmin, OrganizationAPIKeyOrBearerToken
+from apps.common.models import BillActivity
+from apps.common.services.activity import (
+    BILL_FIELD_LABELS, diff_fields, record_activity, snapshot_bill_fields,
+)
 from apps.common.utils import (
     get_organization_from_request,
     calculate_string_similarity,
@@ -1221,6 +1225,7 @@ def vendor_bill_verify(request, org_id):
             analyzed_bill.consolidate = consolidate_flag
             analyzed_bill.save(update_fields=['consolidate'])
 
+            _before_verify = snapshot_bill_fields(analyzed_bill)
             verified_bill = update_analyzed_bill_data(analyzed_bill, analyzed_data, organization)
 
             # Tax reconciliation: Σ(per-line tax) vs bill-level tax. Used to be a
@@ -1292,6 +1297,20 @@ def vendor_bill_verify(request, org_id):
 
             bill.status = TallyVendorBill.BillStatus.VERIFIED
             bill.save(update_fields=['status'])
+            _verify_changes = diff_fields(
+                _before_verify,
+                snapshot_bill_fields(verified_bill),
+                labels=BILL_FIELD_LABELS,
+            )
+            record_activity(
+                bill, BillActivity.Action.VERIFIED,
+                actor=request.user,
+                summary=(
+                    f"Verified with {len(_verify_changes)} change(s)"
+                    if _verify_changes else "Verified with no changes"
+                ),
+                changes=_verify_changes,
+            )
 
             response_data = get_structured_bill_data(verified_bill, organization)
             return Response({
@@ -2216,6 +2235,13 @@ def vendor_bill_sync(request, org_id):
         bill.tally_synced = False
         bill.tally_sync_message = ""
         bill.save(update_fields=['status', 'tally_synced', 'tally_sync_message'])
+
+        # Queued, not posted. The POSTED event is written later by Tally's
+        # own status callback, which is the only thing that knows.
+        record_activity(
+            bill, BillActivity.Action.SYNC_REQUESTED,
+            actor=request.user, summary="Sent to Tally",
+        )
 
         # Compose a human-friendly status the FE surfaces:
         #   "pending_tally"  → BillMunshi has queued the bill; Tally has not

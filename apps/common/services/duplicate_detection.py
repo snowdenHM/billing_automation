@@ -270,6 +270,22 @@ def update_bill_duplicate_metadata(bill, duplicate_bills, max_similarity):
             "duplicate_description",
             "duplicate_matched_bills",
         ])
+
+        if formatted_matches:
+            from apps.common.models import BillActivity
+            from apps.common.services.activity import record_activity
+
+            record_activity(
+                bill, BillActivity.Action.DUPLICATE_FLAGGED,
+                summary=bill.duplicate_description,
+                metadata={
+                    "score": bill.duplicate_score,
+                    "matches": [
+                        {"bill_id": m.get("bill_id"), "bill_name": m.get("bill_name")}
+                        for m in formatted_matches[:3]
+                    ],
+                },
+            )
     except Exception as exc:
         logger.exception(
             "Failed to update duplicate metadata for bill %s: %s",

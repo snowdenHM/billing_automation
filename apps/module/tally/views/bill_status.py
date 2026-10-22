@@ -15,6 +15,9 @@ from apps.common.utils import get_organization_from_request
 from ..models import TallyVendorBill, TallyExpenseBill, TallyPaymentBill
 from .helpers import OrganizationAPIKeyOrBearerToken
 
+from apps.common.models import BillActivity
+from apps.common.services.activity import record_activity
+
 logger = logging.getLogger(__name__)
 
 # Callback ``mode`` -> bill model. "payment" was missing earlier, so payment
@@ -136,6 +139,16 @@ def update_bill_tally_sync_status(request, org_id):
             if sync_message is not None:
                 bill.tally_sync_message = sync_message
             bill.save(update_fields=["tally_synced", "tally_sync_message"])
+
+            # Tally's own callback, so there is no user behind it.
+            record_activity(
+                bill,
+                BillActivity.Action.SYNC_CONFIRMED if sync_status
+                else BillActivity.Action.SYNC_FAILED,
+                summary=("Posted to Tally" if sync_status
+                         else "Tally rejected the voucher"),
+                metadata={"tally_message": (sync_message or "")[:500]},
+            )
             return {
                 "success": True,
                 "id": str(bill.id),

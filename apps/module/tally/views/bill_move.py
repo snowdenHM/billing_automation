@@ -8,6 +8,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.common.models import BillActivity
+from apps.common.services.activity import record_activity
 from apps.common.utils import get_organization_from_request
 from apps.organizations.models import Organization
 from ..models import (
@@ -22,6 +24,9 @@ from ..models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Menu-facing names for the two modules a bill can move between.
+MODULE_LABELS = {"vendor": "Purchase Voucher", "expense": "Journal Entry"}
 
 
 @extend_schema(
@@ -326,6 +331,22 @@ def move_tally_bills_between_modules_view(request, org_id):
                         except (TallyVendorConsolidatedProduct.DoesNotExist, TallyExpenseConsolidatedProduct.DoesNotExist):
                             pass
                     source_analyzed_bill.delete()
+
+                # The source row is about to go, so the move is recorded
+                # against the bill that survives it. Both ids are kept so
+                # the two halves of the move can still be tied together.
+                record_activity(
+                    new_bill, BillActivity.Action.MOVED,
+                    actor=request.user,
+                    organization=organization,
+                    summary=f"Moved from {MODULE_LABELS.get(from_module, from_module)} "
+                            f"to {MODULE_LABELS.get(to_module, to_module)}",
+                    metadata={
+                        "from": from_module,
+                        "to": to_module,
+                        "previous_bill_id": str(bill_id),
+                    },
+                )
 
                 source_bill.delete()
 

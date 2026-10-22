@@ -380,3 +380,95 @@ class DemoRequest(TimeStampedModel):
         if self.email:
             self.email = self.email.strip().lower()
         super().save(*args, **kwargs)
+
+class BillActivity(models.Model):
+    """Append-only record of everything that happens to a bill.
+
+    One store for every module and every bill type. The bill is addressed
+    by ``(module, bill_type, bill_id)`` rather than a ForeignKey: the six
+    bill models live in two apps, all use UUID primary keys, and the log
+    must outlive the row it describes -- a deletion is itself an event
+    worth keeping.
+
+    It also carries the raw material for suggestion learning. When a user
+    overrides something the system proposed, the change entry keeps the
+    proposal alongside the chosen value, so "for this vendor, what does
+    this organisation actually pick" is answerable from here without a
+    second capture mechanism.
+    """
+
+    class Module(models.TextChoices):
+        TALLY = "tally", "Tally"
+        ZOHO = "zoho", "Zoho"
+
+    class BillType(models.TextChoices):
+        VENDOR = "vendor", "Purchase Voucher"
+        EXPENSE = "expense", "Journal Entry"
+        PAYMENT = "payment", "Payment Voucher"
+        JOURNAL = "journal", "Journal"
+
+    class Action(models.TextChoices):
+        UPLOADED = "uploaded", "Uploaded"
+        ANALYSIS_QUEUED = "analysis_queued", "Analysis queued"
+        ANALYSIS_COMPLETED = "analysis_completed", "Analysis completed"
+        ANALYSIS_FAILED = "analysis_failed", "Analysis failed"
+        DUPLICATE_FLAGGED = "duplicate_flagged", "Flagged as duplicate"
+        # No standalone "edited" action: every field change today goes
+        # through verify, and is carried on the VERIFIED event's change
+        # set. Add one when a save-without-verify endpoint exists.
+        VERIFIED = "verified", "Verified"
+        SYNC_REQUESTED = "sync_requested", "Sent to accounting software"
+        SYNC_CONFIRMED = "sync_confirmed", "Posted"
+        SYNC_FAILED = "sync_failed", "Posting failed"
+        MOVED = "moved", "Moved"
+        TRASHED = "trashed", "Moved to Trash"
+        RESTORED = "restored", "Restored from Trash"
+        DELETED = "deleted", "Deleted permanently"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "organizations.Organization", on_delete=models.CASCADE,
+        related_name="bill_activities",
+    )
+    module = models.CharField(max_length=16, choices=Module.choices)
+    bill_type = models.CharField(max_length=16, choices=BillType.choices)
+    bill_id = models.UUIDField()
+
+    action = models.CharField(max_length=32, choices=Action.choices)
+    # Null for anything a background job did. ``actor_label`` keeps a
+    # readable name even after the user row is gone.
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="bill_activities",
+    )
+    actor_label = models.CharField(max_length=255, blank=True, default="")
+
+    summary = models.CharField(max_length=255, blank=True, default="")
+    # [{"field": "total", "from": "100.00", "to": "120.00",
+    #   "suggested": "100.00"}] -- ``suggested`` only when the system
+    # proposed something and the user chose otherwise.
+    changes = models.JSONField(default=list, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Bill Activity"
+        verbose_name_plural = "Bill Activity"
+        ordering = ("-created_at", "-id")
+        indexes = [
+            # The per-bill timeline.
+            models.Index(fields=["bill_id", "-created_at"],
+                         name="billactivity_bill_idx"),
+            # The organisation-wide feed, and its filters.
+            models.Index(fields=["organization", "-created_at"],
+                         name="billactivity_org_idx"),
+            models.Index(fields=["organization", "action", "-created_at"],
+                         name="billactivity_org_action_idx"),
+            # Suggestion learning reads by (org, module, bill_type).
+            models.Index(fields=["organization", "module", "bill_type", "-created_at"],
+                         name="billactivity_learn_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.get_action_display()} on {self.bill_type}:{self.bill_id}"

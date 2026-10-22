@@ -94,6 +94,18 @@ def mark_processing_stage(bill, stage):
         logger.exception("Could not record processing stage %s for bill %s", stage, bill.pk)
 
 
+def _log_activity(bill, action, summary="", metadata=None):
+    """Append one lifecycle event. Imported lazily so this module stays
+    importable before the app registry is ready (RQ loads it early)."""
+    from apps.common.models import BillActivity
+    from apps.common.services.activity import record_activity
+
+    record_activity(
+        bill, getattr(BillActivity.Action, action),
+        summary=summary, metadata=metadata,
+    )
+
+
 def mark_processing_start(bill):
     """Set ``is_processing=True`` and clear any previous error."""
     bill.is_processing = True
@@ -101,6 +113,7 @@ def mark_processing_start(bill):
     _save_with_optional_stage(
         bill, ["is_processing", "processing_error"], stage="queued",
     )
+    _log_activity(bill, "ANALYSIS_QUEUED", "Analysis started")
 
 
 def mark_processing_done(bill):
@@ -117,6 +130,7 @@ def mark_processing_done(bill):
     _save_with_optional_stage(
         bill, ["is_processing", "processing_error"], stage="done",
     )
+    _log_activity(bill, "ANALYSIS_COMPLETED", "Analysis completed")
 
 
 def mark_processing_error(bill, error_msg: str):
@@ -125,6 +139,10 @@ def mark_processing_error(bill, error_msg: str):
     bill.processing_error = str(error_msg)
     _save_with_optional_stage(
         bill, ["is_processing", "processing_error"], stage="failed",
+    )
+    _log_activity(
+        bill, "ANALYSIS_FAILED", "Analysis failed",
+        metadata={"error": str(error_msg)[:500]},
     )
 
 

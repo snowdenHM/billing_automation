@@ -10,7 +10,9 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from apps.common.bill_filters import apply_bill_search
+from apps.common.models import BillActivity
 from apps.common.pagination import DefaultPagination
+from apps.common.services.activity import record_activity
 from apps.common.utils import get_organization_from_request
 
 logger = logging.getLogger(__name__)
@@ -148,7 +150,12 @@ def bill_delete_base(request, org_id, bill_id, bill_model):
             status=status.HTTP_409_CONFLICT,
         )
 
-    bill.move_to_trash(user=getattr(request, 'user', None))
+    actor = getattr(request, 'user', None)
+    bill.move_to_trash(user=actor)
+    record_activity(
+        bill, BillActivity.Action.TRASHED,
+        actor=actor, summary="Moved to Trash",
+    )
 
     return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -570,6 +577,15 @@ def bills_upload_base(
             # rollback silently discards the pending callbacks and no
             # ghost jobs are queued for non-existent bill rows (#9 in
             # the upload audit).
+            for created in created_bills:
+                record_activity(
+                    created, BillActivity.Action.UPLOADED,
+                    actor=request.user,
+                    summary=f"Uploaded {getattr(created.file, 'name', '') .rsplit('/', 1)[-1]}"[:255],
+                    organization=organization,
+                    metadata={"file_type": getattr(created, "file_type", "")},
+                )
+
             bill_ids_to_enqueue = [
                 str(b.id) for b in created_bills
                 if str(b.id) not in async_pdf_bill_ids
