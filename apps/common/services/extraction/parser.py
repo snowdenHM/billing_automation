@@ -481,7 +481,12 @@ def parse_tables(pages, warnings):
                     continue
                 desc = (cells[1] if len(cells) > 1 else "").strip()
                 last = to_num(find(rf"({NUM})\s*$", joined))
-                if re.match(r"(Grand\s*)?Total\b", desc, re.I):
+                # A two-column totals row is just ["TOTAL", "69030.00"], so
+                # the label sits in the first cell. Wider tables put the
+                # serial number there and the label in the second.
+                first_cell = (cells[0] if cells else "").strip()
+                if re.match(r"(Grand\s*)?Total\b", desc, re.I) \
+                        or re.match(r"(Grand\s*)?Total\b", first_cell, re.I):
                     totals_rows["grand_total"] = last
                 elif re.search(r"\b([CSI]GST|UTGST|CESS)\b|Round\w*\s*Off|Freight|Packing|Discount", desc, re.I):
                     charges.append({"name": desc, "amount": last, "page": page["index"]})
@@ -566,7 +571,18 @@ def build(pages, ocr_version=None, source_file=None, started=None, keep_layouts=
         or p["consignee"]["address"]["state_code"]
     if not pos_raw and pos_code:
         derived.append("document.place_of_supply")
-    explicit = {re.sub(r"\W.*", "", c["name"]).upper(): c["amount"] for c in charges}
+    def _charge_key(name):
+        """CGST / SGST / IGST / CESS wherever it appears in the charge name.
+
+        Truncating at the first non-word character only works for Tally,
+        which labels the row exactly "CGST". "Output CGST @ 9%" keyed as
+        OUTPUT, so the printed tax was invisible and the grand total never
+        reconciled.
+        """
+        m = re.search(r"\b(CGST|SGST|UTGST|IGST|CESS)\b", name or "", re.I)
+        return m.group(1).upper() if m else re.sub(r"\W.*", "", name or "").upper()
+
+    explicit = {_charge_key(c["name"]): c["amount"] for c in charges}
     if "IGST" in explicit:
         supply = "inter_state"
     elif {"CGST", "SGST", "UTGST"} & explicit.keys():
@@ -621,7 +637,18 @@ def build(pages, ocr_version=None, source_file=None, started=None, keep_layouts=
     other = r2(sum(c["amount"] or 0 for c in charges
                    if not re.search(r"\b([CSI]GST|UTGST|CESS)\b|Round", c["name"], re.I))) or None
     grand = total_rows.get("grand_total")
-    expected_grand = r2((total_rows.get("subtotal") or item_sum) + sum(calc.values()) + (round_off or 0) + (other or 0))
+    # Printed tax wins where the document states it; per-line sums fill the
+    # rest. Taking `taxes` alone would drop an axis the document left to the
+    # lines, and `calc` alone drops one it stated only as a charge row.
+    resolved_tax = {
+        "cgst": taxes["cgst"] if taxes["cgst"] is not None else calc["cgst_amount"],
+        "sgst": taxes["sgst"] if taxes["sgst"] is not None else calc["sgst_amount"],
+        "igst": taxes["igst"] if taxes["igst"] is not None else calc["igst_amount"],
+        "cess": taxes["cess"],
+    }
+    expected_grand = r2((total_rows.get("subtotal") or item_sum)
+                        + sum(v or 0 for v in resolved_tax.values())
+                        + (round_off or 0) + (other or 0))
 
     totals = {
         "line_count": len(items),
@@ -704,7 +731,11 @@ def build(pages, ocr_version=None, source_file=None, started=None, keep_layouts=
         check("totals.items_sum_equals_subtotal", abs(item_sum - total_rows["subtotal"]) <= 0.5,
               expected=total_rows["subtotal"], actual=item_sum)
     for name, key in (("cgst", "cgst_amount"), ("sgst", "sgst_amount"), ("igst", "igst_amount")):
-        if explicit.get(name.upper()) is not None:
+        # Only reconcile when the document states the figure twice. Plenty
+        # of invoices carry tax solely as a charge row and leave the lines
+        # untaxed; comparing a printed 2669.49 against a per-line sum of
+        # zero is not a disagreement, it is one statement and no other.
+        if explicit.get(name.upper()) is not None and calc[key]:
             check(f"totals.{name}_matches_computed", abs(explicit[name.upper()] - calc[key]) <= 1,
                   printed=explicit[name.upper()], computed=calc[key])
     if grand is not None:
