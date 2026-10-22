@@ -430,8 +430,17 @@ def process_analysis_data(bill, json_data, organization):
                         logger.warning(f"🏛️  Finding line item ledger for product '{item.get('description', 'No desc')[:30]}...'")
                         item_ledger = find_appropriate_tax_ledger(organization, float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded), ledger_type='product')
                         
-                        # Determine GST rate from tax amounts for this specific item
-                        gst_rate = calculate_gst_rate(amount_val, float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded))
+                        # Determine GST rate from tax amounts for this specific item.
+                        # amount_val is the line's taxable value, but
+                        # calculate_gst_rate backs the tax out of a tax-
+                        # INCLUSIVE amount — fed the taxable value it reads
+                        # 28% as ~38.9%, which snaps to 40% now that 40% is
+                        # a slab. Adding the line's tax back gives the true rate.
+                        item_tax_total = float(item_igst_rounded + item_cgst_rounded + item_sgst_rounded)
+                        gst_rate = calculate_gst_rate(
+                            amount_val + item_tax_total if amount_val > 0 else amount_val,
+                            float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded),
+                        )
                         
                         # Format GST rate to match choices using normalization
                         formatted_gst_rate = normalize_product_gst(gst_rate)

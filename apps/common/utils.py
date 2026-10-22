@@ -492,6 +492,13 @@ def normalize_company_name_enhanced(name):
 # GST helpers
 # ---------------------------------------------------------------------------
 
+# Slabs a computed / OCR-read rate is snapped to. GST 2.0 (from 22 Sep 2025)
+# uses 0 / 5 / 18 / 40; 12 and 28 stay so a bill dated before then keeps its
+# real rate instead of being pulled to 5 / 18, which would re-price its tax.
+# 40 is last so every tie resolves exactly as it did before it was added.
+STANDARD_GST_RATES = (0, 5, 12, 18, 28, 40)
+
+
 def calculate_gst_rate(amount, igst_val, cgst_val, sgst_val):
     """Calculate GST rate percentage based on tax amounts and item amount.
 
@@ -512,8 +519,7 @@ def calculate_gst_rate(amount, igst_val, cgst_val, sgst_val):
 
         gst_rate = (total_tax / taxable_amount) * 100
 
-        standard_rates = [0, 5, 12, 18, 28]
-        closest_rate = min(standard_rates, key=lambda x: abs(x - gst_rate))
+        closest_rate = min(STANDARD_GST_RATES, key=lambda x: abs(x - gst_rate))
         return str(closest_rate)
 
     except Exception as e:
@@ -525,7 +531,7 @@ def normalize_product_gst(gst_value):
     """Normalize GST value to match GST_CHOICES format.
 
     Returns one of: ``"0%"``, ``"5%"``, ``"12%"``, ``"18%"``, ``"28%"``,
-    ``"Exempted"``, ``"N/A"``.
+    ``"40%"``, ``"Exempted"``, ``"N/A"`` (see ``STANDARD_GST_RATES``).
     """
     if not gst_value:
         return "N/A"
@@ -540,8 +546,7 @@ def normalize_product_gst(gst_value):
     try:
         numeric_str = gst_str.replace('%', '').replace('GST', '').strip()
         gst_numeric = float(numeric_str)
-        standard_rates = [0, 5, 12, 18, 28]
-        closest_rate = min(standard_rates, key=lambda x: abs(x - gst_numeric))
+        closest_rate = min(STANDARD_GST_RATES, key=lambda x: abs(x - gst_numeric))
         return f"{closest_rate}%"
     except (ValueError, AttributeError):
         logger.warning(f"Could not normalize GST value: {gst_value}, defaulting to N/A")

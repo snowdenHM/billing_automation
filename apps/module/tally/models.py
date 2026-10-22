@@ -425,15 +425,16 @@ class GstRateLedgerMapping(BaseOrgModel):
     Per-organization mapping of GST rate → CGST / SGST / IGST ledgers.
 
     Used for line-item level tax assignment on vendor bills with mixed GST rates.
-    One row per (organization, rate). Standard rates: 0, 5, 12, 18, 28.
+    One row per (organization, rate). Standard rates (GST 2.0, from 22 Sep
+    2025): 0, 5, 18, 40. Rows saved earlier for the old 12 / 28 slabs are
+    kept so older bills at those rates still resolve their ledgers.
     """
 
     RATE_CHOICES = [
         (Decimal("0.00"), "0%"),
         (Decimal("5.00"), "5%"),
-        (Decimal("12.00"), "12%"),
         (Decimal("18.00"), "18%"),
-        (Decimal("28.00"), "28%"),
+        (Decimal("40.00"), "40%"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
@@ -766,6 +767,7 @@ class TallyVendorAnalyzedProduct(BaseOrgModel):
         ("12%", "12%"),
         ("18%", "18%"),
         ("28%", "28%"),
+        ("40%", "40%"),
         ("Exempted", "Exempted"),
         ("N/A", "N/A"),
     ]
@@ -1156,6 +1158,7 @@ class TallyVendorConsolidatedProduct(BaseOrgModel):
         ("12%", "12%"),
         ("18%", "18%"),
         ("28%", "28%"),
+        ("40%", "40%"),
         ("Exempted", "Exempted"),
         ("N/A", "N/A"),
     ]
