@@ -6,7 +6,10 @@ unique across every module, so a single route covers Tally and Zoho alike.
 """
 
 import logging
+from collections import Counter, defaultdict
+from datetime import timedelta
 
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import serializers, status
@@ -114,3 +117,86 @@ def bill_activity_list(request, org_id):
     if page is not None:
         return paginator.get_paginated_response(serializer.data)
     return Response(serializer.data)
+
+
+@extend_schema(
+    summary="Extraction and correction statistics",
+    description=(
+        "Aggregates of the activity log: which route read the bills, and "
+        "which fields people keep correcting afterwards. The second is the "
+        "live accuracy signal — a field nobody corrects is a field the "
+        "extractor gets right."
+    ),
+    parameters=[OpenApiParameter("days", int, description="Window, default 30.")],
+    tags=["Activity"],
+)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def activity_stats(request, org_id):
+    organization = get_organization_from_request(request, org_id)
+    if not organization:
+        return Response({"detail": "Organization not found."},
+                        status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        days = max(1, min(int(request.query_params.get("days", 30)), 365))
+    except (TypeError, ValueError):
+        days = 30
+    since = timezone.now() - timedelta(days=days)
+
+    events = BillActivity.objects.filter(organization=organization, created_at__gte=since)
+
+    # --- how bills were read -------------------------------------------
+    routes, models, confidences, shadow_same, shadow_differ = Counter(), Counter(), [], Counter(), Counter()
+    for meta in events.filter(action=BillActivity.Action.EXTRACTED).values_list("metadata", flat=True):
+        meta = meta or {}
+        routes[meta.get("route") or "unknown"] += 1
+        models[meta.get("model") or "unknown"] += 1
+        if isinstance(meta.get("ocr_confidence"), (int, float)):
+            confidences.append(meta["ocr_confidence"])
+        agreement = meta.get("agreement") or {}
+        for f in agreement.get("same") or []:
+            shadow_same[f] += 1
+        for f in agreement.get("differ") or []:
+            shadow_differ[f] += 1
+
+    # --- what people corrected afterwards -------------------------------
+    # A field changed at verify is a field the extractor got wrong. Counted
+    # against how many verifies happened, not against how many changes, so
+    # the rate means "how often this field needs fixing".
+    corrections, verifies = Counter(), 0
+    for changes in events.filter(action=BillActivity.Action.VERIFIED).values_list("changes", flat=True):
+        verifies += 1
+        for change in changes or []:
+            field = change.get("field")
+            if field:
+                corrections[field] += 1
+
+    return Response({
+        "window_days": days,
+        "since": since.isoformat(),
+        "counts": dict(Counter(events.values_list("action", flat=True))),
+        "extraction": {
+            "total": sum(routes.values()),
+            "routes": dict(routes),
+            "models": dict(models),
+            "mean_ocr_confidence": (
+                round(sum(confidences) / len(confidences), 3) if confidences else None
+            ),
+        },
+        # Only populated while shadow mode is running.
+        "shadow_agreement": [
+            {"field": f,
+             "same": shadow_same.get(f, 0),
+             "differ": shadow_differ.get(f, 0),
+             "agreement": round(shadow_same.get(f, 0)
+                                / max(1, shadow_same.get(f, 0) + shadow_differ.get(f, 0)), 3)}
+            for f in sorted(set(shadow_same) | set(shadow_differ))
+        ],
+        "verifies": verifies,
+        "corrections": [
+            {"field": f, "count": c,
+             "rate": round(c / verifies, 3) if verifies else None}
+            for f, c in corrections.most_common()
+        ],
+    })

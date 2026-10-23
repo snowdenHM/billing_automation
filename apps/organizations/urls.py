@@ -1,5 +1,5 @@
 from django.urls import path
-from apps.common.views_activity import bill_activity_list
+from apps.common.views_activity import activity_stats, bill_activity_list
 from apps.common.views_notifications import poll_notifications
 from .views import (
     organization_list_view,
@@ -66,4 +66,5 @@ urlpatterns = [
     # Polling notifications (see #16 in the upload audit)
     path("org/<uuid:org_id>/notifications/", poll_notifications, name="org-notifications-poll"),
     path("org/<uuid:org_id>/activity/", bill_activity_list, name="org-bill-activity"),
+    path("org/<uuid:org_id>/activity/stats/", activity_stats, name="org-activity-stats"),
 ]
