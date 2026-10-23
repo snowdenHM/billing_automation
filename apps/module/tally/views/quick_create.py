@@ -25,7 +25,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.common.permissions import IsOrgAdmin
+from apps.common import roles
+from apps.common.permissions import HasOrgPermission, IsOrgAdmin, requires
 from apps.common.utils import get_organization_from_request
 
 from ..models import Ledger, ParentLedger, StockItem, SyncSource
@@ -101,8 +102,9 @@ def _resolve_parent_ledger(*, organization, parent_id=None, parent_name=None):
     responses={201: LedgerSerializer},
     tags=["Tally · Quick Create"],
 )
+@requires(roles.MANAGE_MASTERS)
 @api_view(["POST"])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def quick_create_vendor(request, org_id):
     organization = get_organization_from_request(request, org_id)
     if not organization:
@@ -178,8 +180,9 @@ def quick_create_vendor(request, org_id):
     responses={201: LedgerSerializer},
     tags=["Tally · Quick Create"],
 )
+@requires(roles.MANAGE_MASTERS)
 @api_view(["POST"])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def quick_create_ledger(request, org_id):
     organization = get_organization_from_request(request, org_id)
     if not organization:
@@ -254,8 +257,9 @@ def quick_create_ledger(request, org_id):
     responses={201: StockItemSerializer},
     tags=["Tally · Quick Create"],
 )
+@requires(roles.MANAGE_MASTERS)
 @api_view(["POST"])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def quick_create_item(request, org_id):
     organization = get_organization_from_request(request, org_id)
     if not organization:

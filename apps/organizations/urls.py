@@ -1,5 +1,13 @@
 from django.urls import path
 from apps.common.views_activity import activity_stats, bill_activity_list
+from apps.common.views_roles import my_permissions
+from apps.common.views_approval import (
+    approval_detail,
+    approval_queue,
+    approve_bill,
+    reject_bill,
+    submit_for_approval,
+)
 from apps.common.views_notifications import poll_notifications
 from .views import (
     organization_list_view,
@@ -67,4 +75,13 @@ urlpatterns = [
     path("org/<uuid:org_id>/notifications/", poll_notifications, name="org-notifications-poll"),
     path("org/<uuid:org_id>/activity/", bill_activity_list, name="org-bill-activity"),
     path("org/<uuid:org_id>/activity/stats/", activity_stats, name="org-activity-stats"),
+
+    path("org/<uuid:org_id>/me/permissions/", my_permissions, name="org-my-permissions"),
+
+    # Approvals. Off unless the organisation turns require_bill_approval on.
+    path("org/<uuid:org_id>/approvals/", approval_queue, name="org-approval-queue"),
+    path("org/<uuid:org_id>/approvals/<uuid:bill_id>/", approval_detail, name="org-approval-detail"),
+    path("org/<uuid:org_id>/approvals/<uuid:bill_id>/submit/", submit_for_approval, name="org-approval-submit"),
+    path("org/<uuid:org_id>/approvals/<uuid:bill_id>/approve/", approve_bill, name="org-approval-approve"),
+    path("org/<uuid:org_id>/approvals/<uuid:bill_id>/reject/", reject_bill, name="org-approval-reject"),
 ]

@@ -1,0 +1,122 @@
+# Local stack: Postgres, Redis, Django, an RQ worker and the Vite dev server.
+#
+#   docker compose up --build
+#   docker compose exec backend python manage.py migrate
+#   docker compose exec backend python manage.py createsuperuser
+#
+# The frontend is built from ../frontend, so the two repositories have to
+# sit side by side — which is how they are checked out.
+#
+# Secrets come from backend/.env, which .dockerignore keeps out of the
+# image; it is read at runtime from the mounted source instead. The
+# settings below are set in `environment`, which compose applies after
+# env_file, so a DATABASE_URL pointing at a laptop's own Postgres cannot
+# accidentally win over the container's.
+
+name: billmunshi
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: billmunshi
+      POSTGRES_USER: billmunshi
+      POSTGRES_PASSWORD: billmunshi
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Exposed so a GUI client can look at the data. Nothing in the
+      # stack reaches Postgres this way.
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U billmunshi -d billmunshi"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend: &backend
+    build:
+      context: .
+    env_file:
+      - path: .env
+        required: false
+    environment: &backend_env
+      DJANGO_SETTINGS_MODULE: config.settings.local
+      DEBUG: "True"
+      SECRET_KEY: django-insecure-local-only
+      ALLOWED_HOSTS: "*"
+      DATABASE_URL: postgres://billmunshi:billmunshi@db:5432/billmunshi
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_URL: redis://redis:6379/0
+      FRONTEND_URL: http://localhost:5173
+      # Everything the extraction work added, off — the same as production.
+      # Turn one on here to try it: `EXTRACTION_OCR_FIRST=1 docker compose up`.
+      EXTRACTION_OCR_FIRST: "False"
+      EXTRACTION_OCR_SHADOW: "False"
+      EXTRACTION_SPLIT_BATCHES: "False"
+    volumes:
+      # Source is mounted, so an edit is live without a rebuild. media and
+      # staticfiles are named volumes so they survive a container being
+      # replaced and do not litter the working tree.
+      - .:/app
+      - media:/app/media
+      - static:/app/staticfiles
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py runserver 0.0.0.0:8000"
+    ports:
+      - "8000:8000"
+
+  worker:
+    <<: *backend
+    environment:
+      <<: *backend_env
+      # One worker process; the default queue is the only one bills use.
+      RQ_WORKER: "1"
+    command: python manage.py rqworker default
+    ports: []
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        # Not for the port — so migrations have run before a job can pick
+        # up a bill and find the table missing.
+        condition: service_started
+
+  frontend:
+    build:
+      context: ../frontend
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+    volumes:
+      - ../frontend:/app
+      # Keeps the image's node_modules; the host's are a different
+      # platform and would shadow them.
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  media:
+  static:

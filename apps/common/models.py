@@ -418,6 +418,9 @@ class BillActivity(models.Model):
         # through verify, and is carried on the VERIFIED event's change
         # set. Add one when a save-without-verify endpoint exists.
         VERIFIED = "verified", "Verified"
+        APPROVAL_SUBMITTED = "approval_submitted", "Submitted for approval"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Sent back"
         SYNC_REQUESTED = "sync_requested", "Sent to accounting software"
         SYNC_CONFIRMED = "sync_confirmed", "Posted"
         SYNC_FAILED = "sync_failed", "Posting failed"
@@ -473,3 +476,75 @@ class BillActivity(models.Model):
 
     def __str__(self):
         return f"{self.get_action_display()} on {self.bill_type}:{self.bill_id}"
+
+
+class BillApproval(models.Model):
+    """A bill waiting for, or carrying, a manager's decision.
+
+    Kept beside the bill rather than on it. ``status`` on the three bill
+    models is a four-value field that the sync filters, the frontend
+    tabs and the Tally payload all read; adding a fifth value to it
+    would change behaviour for every organisation at once, including the
+    ones using the product today. An approval lives here instead, so an
+    organisation that has not switched the workflow on is unaffected by
+    its existence.
+
+    Addressed by ``(module, bill_type, bill_id)`` for the same reasons
+    as :class:`BillActivity`: six bill models, two apps, UUID keys.
+    """
+
+    class State(models.TextChoices):
+        PENDING = "pending", "Waiting for approval"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Sent back"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "organizations.Organization", on_delete=models.CASCADE,
+        related_name="bill_approvals",
+    )
+    module = models.CharField(max_length=16, choices=BillActivity.Module.choices)
+    bill_type = models.CharField(max_length=16, choices=BillActivity.BillType.choices)
+    bill_id = models.UUIDField()
+
+    state = models.CharField(max_length=16, choices=State.choices, default=State.PENDING)
+
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="bill_approvals_submitted",
+    )
+    submitted_at = models.DateTimeField(default=timezone.now)
+    submitted_note = models.CharField(max_length=500, blank=True, default="")
+
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="bill_approvals_decided",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decided_note = models.CharField(max_length=500, blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Bill Approval"
+        verbose_name_plural = "Bill Approvals"
+        ordering = ("-submitted_at", "-id")
+        constraints = [
+            # One live decision per bill. Re-submitting a rejected bill
+            # reuses the row rather than stacking a second one, so "is
+            # this bill approved" is a single lookup with no ordering
+            # question.
+            models.UniqueConstraint(
+                fields=["module", "bill_type", "bill_id"],
+                name="billapproval_one_per_bill",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "state", "-submitted_at"],
+                         name="billapproval_queue_idx"),
+            models.Index(fields=["bill_id"], name="billapproval_bill_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.get_state_display()}: {self.bill_type}:{self.bill_id}"

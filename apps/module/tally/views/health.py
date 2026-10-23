@@ -31,7 +31,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.common.permissions import IsOrgAdmin
+from apps.common import roles
+from apps.common.permissions import HasOrgPermission, IsOrgAdmin, requires
 from apps.common.utils import get_organization_from_request
 
 from ..models import TallyConfig
@@ -116,8 +117,9 @@ def tally_health_ping(request, org_id):
     },
     tags=['Tally Health'],
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def tally_health_status(request, org_id):
     """Report Tally TCP connectivity for the given org."""
     organization = get_organization_from_request(request, org_id)

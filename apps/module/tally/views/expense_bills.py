@@ -24,7 +24,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.common.pagination import DefaultPagination
-from apps.common.permissions import IsOrgAdmin, OrganizationAPIKeyOrBearerToken
+from apps.common import roles
+from apps.common.services import approval as approval_service
+from apps.common.permissions import HasOrgPermission, IsOrgAdmin, requires, OrganizationAPIKeyOrBearerToken
 from apps.common.models import BillActivity
 from apps.common.services.activity import (
     BILL_FIELD_LABELS, diff_fields, record_activity, snapshot_bill_fields,
@@ -466,8 +468,9 @@ def process_pdf_splitting_expense(pdf_file, organization, file_type, uploaded_by
     responses={200: TallyExpenseBillSerializer(many=True)},
     tags=['Tally Expense Bills']
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def expense_bills_list(request, org_id):
     """Get all expense bills for the organization."""
     from .bill_helpers import bills_list_base
@@ -487,8 +490,9 @@ def expense_bills_list(request, org_id):
     responses={201: TallyExpenseBillSerializer(many=True)},
     tags=['Tally Expense Bills']
 )
+@requires(roles.UPLOAD_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 @parser_classes([MultiPartParser, FormParser])
 def expense_bills_upload(request, org_id):
     """Handle single or multiple expense bill file uploads with PDF splitting support"""
@@ -515,8 +519,9 @@ def expense_bills_upload(request, org_id):
     responses={200: "Bill processing status information"},
     tags=['Tally Expense Bills']
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def expense_bill_processing_status(request, org_id, bill_id):
     """Check the processing status of an expense bill"""
     from .bill_helpers import bill_processing_status_base
@@ -534,8 +539,9 @@ def expense_bill_processing_status(request, org_id, bill_id):
     },
     tags=['Tally Expense Bills']
 )
+@requires(roles.ANALYSE_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def expense_bill_analyze(request, org_id):
     """Analyze expense bill using OpenAI"""
     serializer = ExpenseBillAnalysisRequestSerializer(data=request.data)
@@ -832,8 +838,9 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
     responses={200: "TallyExpenseBillDetailSerializer"},
     tags=['Tally Expense Bills']
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def expense_bill_detail(request, org_id, bill_id):
     """Get expense bill detail including analysis data using proper serializer"""
     from ..serializers import TallyExpenseBillDetailSerializer
@@ -1654,8 +1661,9 @@ def get_structured_expense_bill_data(analyzed_bill, organization):
     responses={200: ExpenseBillSyncResponseSerializer},
     tags=['Tally Expense Bills']
 )
+@requires(roles.SYNC_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def expense_bill_sync(request, org_id):
     """Sync verified expense bill with Tally"""
     serializer = ExpenseBillSyncRequestSerializer(data=request.data)
@@ -1672,6 +1680,15 @@ def expense_bill_sync(request, org_id):
 
     try:
         bill = TallyExpenseBill.objects.alive().get(id=bill_id, organization=organization)
+
+        blocked = approval_service.gate_sync(bill, organization)
+        if blocked:
+            message, code = blocked
+            return Response({
+                'error': 'Approval Required',
+                'message': message,
+                'error_code': code,
+            }, status=status.HTTP_409_CONFLICT)
         analyzed_bill = TallyExpenseAnalyzedBill.objects.get(selected_bill=bill)
     except (TallyExpenseBill.DoesNotExist, TallyExpenseAnalyzedBill.DoesNotExist):
         return Response({
@@ -1790,8 +1807,9 @@ def expense_bill_sync_external_handler(sync_data, org_id, organization):
     responses={204: None},
     tags=['Tally Expense Bills']
 )
+@requires(roles.TRASH_BILLS)
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def expense_bill_delete(request, org_id, bill_id):
     """Delete expense bill."""
     from .bill_helpers import bill_delete_base
@@ -1807,8 +1825,9 @@ def expense_bill_delete(request, org_id, bill_id):
     responses={200: TallyExpenseBillSerializer(many=True)},
     tags=['Tally Expense Bills']
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def expense_bills_by_status(request, org_id):
     """Get bills filtered by status."""
     from .bill_helpers import bills_by_status_base
@@ -2097,8 +2116,9 @@ def prepare_expense_sync_data(analyzed_bill, organization):
     },
     tags=['Tally TCP']
 )
+@requires(roles.SYNC_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def expense_bill_sync_external(request, org_id):
     """Accept expense bill payload for external system sync"""
     organization = get_organization_from_request(request, org_id)

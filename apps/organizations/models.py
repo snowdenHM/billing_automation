@@ -39,6 +39,15 @@ class Organization(TimeStampedModel):
     slug = models.SlugField(max_length=255, unique=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=ACTIVE)
     gst_number = models.CharField(max_length=15, blank=True, null=True, help_text="GST registration number")
+    require_bill_approval = models.BooleanField(
+        default=False,
+        help_text=(
+            "When on, a verified bill must be approved by a Manager or Admin "
+            "before it can be posted to Tally or Zoho. Off by default: an "
+            "organisation that has not asked for the extra step keeps "
+            "verifying and syncing exactly as before."
+        ),
+    )
 
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,

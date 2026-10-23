@@ -14,7 +14,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.common.permissions import IsOrgAdmin
+from apps.common import roles
+from apps.common.permissions import HasOrgPermission, IsOrgAdmin, requires
 from apps.common.services.reports import (
     build_report_workbook,
     rows_from_expense_analyzed,
@@ -152,8 +153,9 @@ def _build_and_stream(
 
 
 @extend_schema(summary="Download Tally Purchase Voucher report (xlsx)", tags=["Tally · Reports"])
+@requires(roles.EXPORT_REPORTS)
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def tally_vendor_bills_report(request, org_id):
     return _build_and_stream(
         request,
@@ -168,8 +170,9 @@ def tally_vendor_bills_report(request, org_id):
 
 
 @extend_schema(summary="Download Tally Journal Entry report (xlsx)", tags=["Tally · Reports"])
+@requires(roles.EXPORT_REPORTS)
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def tally_expense_bills_report(request, org_id):
     return _build_and_stream(
         request,
@@ -184,8 +187,9 @@ def tally_expense_bills_report(request, org_id):
 
 
 @extend_schema(summary="Download Tally Payment Voucher report (xlsx)", tags=["Tally · Reports"])
+@requires(roles.EXPORT_REPORTS)
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def tally_payment_bills_report(request, org_id):
     return _build_and_stream(
         request,

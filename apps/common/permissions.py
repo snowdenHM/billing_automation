@@ -155,3 +155,89 @@ class OrganizationAPIKeyOrBearerToken(BasePermission):
             return IsOrgAdmin().has_permission(request, view)
 
         return False
+
+
+class HasOrgPermission(BasePermission):
+    """Allow the action named by the view, if the caller's role permits it.
+
+    Used as ``permission_classes([IsAuthenticated, HasOrgPermission])`` with
+    ``required_permission`` set on the view — a decorator sets that for
+    function views. Falls back to IsOrgAdmin's behaviour when a view names
+    no action, so an endpoint that has not been classified yet keeps the
+    rules it has today rather than silently opening up.
+    """
+
+    def has_permission(self, request, view):
+        from apps.common.roles import can
+
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_superuser or user.is_staff:
+            return True
+
+        action = getattr(view, "required_permission", None)
+        if not action:
+            return IsOrgAdmin().has_permission(request, view)
+
+        org_id = None
+        if hasattr(view, "kwargs") and isinstance(view.kwargs, dict):
+            org_id = view.kwargs.get("org_id")
+        if not org_id:
+            # No organisation in the URL to judge against. Keep the old
+            # "admin of any org" rule rather than guessing.
+            return IsOrgAdmin().has_permission(request, view)
+
+        return can(user, org_id, action)
+
+    def has_object_permission(self, request, view, obj):
+        from apps.common.roles import can
+
+        user = request.user
+        if user.is_superuser or user.is_staff:
+            return True
+        action = getattr(view, "required_permission", None)
+        org = getattr(obj, "organization_id", None) or getattr(obj, "organization", None)
+        org_id = getattr(org, "id", org)
+        if not action or not org_id:
+            return IsOrgAdmin().has_object_permission(request, view, obj)
+        return can(user, org_id, action)
+
+
+def requires(action):
+    """Name the permission an api_view needs.
+
+        @api_view(["POST"])
+        @permission_classes([IsAuthenticated, HasOrgPermission])
+        @requires(roles.UPLOAD_BILLS)
+        def upload_view(request, org_id): ...
+
+    Order matters, and the example above has it right: ``@requires`` goes
+    *above* ``@api_view``. ``api_view`` builds a view class and copies
+    only the attributes it knows about, so an attribute set on the bare
+    function below it never reaches the class the permission reads --
+    every such endpoint silently falls back to admin-only, which is a
+    live product locking out the people it just gave rights to. Putting
+    ``@requires`` on top means it sees ``as_view()``'s result, which
+    carries ``.cls``.
+
+    Applied in the wrong place it raises rather than going quiet.
+    """
+    def decorator(view_func):
+        cls = getattr(view_func, "cls", None)
+        if cls is not None:
+            cls.required_permission = action
+        elif getattr(view_func, "__name__", "") != "handler" and not _is_class_view(view_func):
+            raise TypeError(
+                f"@requires({action!r}) must be placed above @api_view on "
+                f"{getattr(view_func, '__name__', view_func)!r}; below it the "
+                "permission is never seen and the endpoint stays admin-only."
+            )
+        view_func.required_permission = action
+        return view_func
+    return decorator
+
+
+def _is_class_view(view_func):
+    """True for a DRF APIView/ViewSet subclass used as a decorator target."""
+    return isinstance(view_func, type)

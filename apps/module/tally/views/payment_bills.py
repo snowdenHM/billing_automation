@@ -32,7 +32,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.common.pagination import DefaultPagination
-from apps.common.permissions import IsOrgAdmin, OrganizationAPIKeyOrBearerToken
+from apps.common import roles
+from apps.common.services import approval as approval_service
+from apps.common.permissions import HasOrgPermission, IsOrgAdmin, requires, OrganizationAPIKeyOrBearerToken
 from apps.common.models import BillActivity
 from apps.common.services.activity import (
     BILL_FIELD_LABELS, diff_fields, record_activity, snapshot_bill_fields,
@@ -590,8 +592,9 @@ def process_pdf_splitting_payment(pdf_file, organization, file_type, uploaded_by
     responses={200: TallyPaymentBillSerializer(many=True)},
     tags=['Tally Payment Bills']
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def payment_bills_list(request, org_id):
     """Get all payment bills for the organization."""
     from .bill_helpers import bills_list_base
@@ -611,8 +614,9 @@ def payment_bills_list(request, org_id):
     responses={201: TallyPaymentBillSerializer(many=True)},
     tags=['Tally Payment Bills']
 )
+@requires(roles.UPLOAD_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 @parser_classes([MultiPartParser, FormParser])
 def payment_bills_upload(request, org_id):
     """Handle single or multiple payment bill file uploads with PDF splitting support"""
@@ -639,8 +643,9 @@ def payment_bills_upload(request, org_id):
     responses={200: "Bill processing status information"},
     tags=['Tally Payment Bills']
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def payment_bill_processing_status(request, org_id, bill_id):
     """Check the processing status of an payment bill"""
     from .bill_helpers import bill_processing_status_base
@@ -658,8 +663,9 @@ def payment_bill_processing_status(request, org_id, bill_id):
     },
     tags=['Tally Payment Bills']
 )
+@requires(roles.ANALYSE_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def payment_bill_analyze(request, org_id):
     """Analyze payment bill using OpenAI"""
     serializer = PaymentBillAnalysisRequestSerializer(data=request.data)
@@ -958,8 +964,9 @@ def process_existing_payment_analysis_data(bill, existing_data, organization):
     responses={200: "TallyPaymentBillDetailSerializer"},
     tags=['Tally Payment Bills']
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def payment_bill_detail(request, org_id, bill_id):
     """Get payment bill detail including analysis data using proper serializer"""
     from ..serializers import TallyPaymentBillDetailSerializer
@@ -1732,8 +1739,9 @@ def get_structured_payment_bill_data(analyzed_bill, organization):
     responses={200: PaymentBillSyncResponseSerializer},
     tags=['Tally Payment Bills']
 )
+@requires(roles.SYNC_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def payment_bill_sync(request, org_id):
     """Sync verified payment bill with Tally"""
     serializer = PaymentBillSyncRequestSerializer(data=request.data)
@@ -1750,6 +1758,15 @@ def payment_bill_sync(request, org_id):
 
     try:
         bill = TallyPaymentBill.objects.alive().get(id=bill_id, organization=organization)
+
+        blocked = approval_service.gate_sync(bill, organization)
+        if blocked:
+            message, code = blocked
+            return Response({
+                'error': 'Approval Required',
+                'message': message,
+                'error_code': code,
+            }, status=status.HTTP_409_CONFLICT)
         analyzed_bill = TallyPaymentAnalyzedBill.objects.get(selected_bill=bill)
     except (TallyPaymentBill.DoesNotExist, TallyPaymentAnalyzedBill.DoesNotExist):
         return Response({
@@ -1876,8 +1893,9 @@ def payment_bill_sync_external_handler(sync_data, org_id, organization):
     responses={204: None},
     tags=['Tally Payment Bills']
 )
+@requires(roles.TRASH_BILLS)
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def payment_bill_delete(request, org_id, bill_id):
     """Delete payment bill."""
     from .bill_helpers import bill_delete_base
@@ -1893,8 +1911,9 @@ def payment_bill_delete(request, org_id, bill_id):
     responses={200: TallyPaymentBillSerializer(many=True)},
     tags=['Tally Payment Bills']
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def payment_bills_by_status(request, org_id):
     """Get bills filtered by status."""
     from .bill_helpers import bills_by_status_base
@@ -2268,8 +2287,9 @@ def prepare_payment_sync_data(analyzed_bill, organization):
     },
     tags=['Tally TCP']
 )
+@requires(roles.SYNC_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def payment_bill_sync_external(request, org_id):
     """Accept payment bill payload for external system sync"""
     organization = get_organization_from_request(request, org_id)

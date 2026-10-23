@@ -22,7 +22,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.common.pagination import DefaultPagination
-from apps.common.permissions import IsOrgAdmin, OrganizationAPIKeyOrBearerToken
+from apps.common import roles
+from apps.common.services import approval as approval_service
+from apps.common.permissions import HasOrgPermission, IsOrgAdmin, requires, OrganizationAPIKeyOrBearerToken
 from apps.common.models import BillActivity
 from apps.common.services.activity import (
     BILL_FIELD_LABELS, diff_fields, record_activity, snapshot_bill_fields,
@@ -609,8 +611,9 @@ def process_pdf_splitting(pdf_file, organization, file_type, uploaded_by):
     responses={200: TallyVendorBillSerializer(many=True)},
     tags=['Tally Vendor Bills']
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bills_list(request, org_id):
     """Get all vendor bills for the organization."""
     from .bill_helpers import bills_list_base
@@ -630,8 +633,9 @@ def vendor_bills_list(request, org_id):
     responses={201: TallyVendorBillSerializer(many=True)},
     tags=['Tally Vendor Bills']
 )
+@requires(roles.UPLOAD_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 @parser_classes([MultiPartParser, FormParser])
 def vendor_bills_upload(request, org_id):
     """Handle single or multiple vendor bill file uploads with PDF splitting support"""
@@ -658,8 +662,9 @@ def vendor_bills_upload(request, org_id):
     responses={200: "Bill processing status information"},
     tags=['Tally Vendor Bills']
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_processing_status(request, org_id, bill_id):
     """Check the processing status of a vendor bill"""
     from .bill_helpers import bill_processing_status_base
@@ -677,8 +682,9 @@ def vendor_bill_processing_status(request, org_id, bill_id):
     },
     tags=['Tally Vendor Bills']
 )
+@requires(roles.ANALYSE_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_analyze(request, org_id):
     """Analyze vendor bill using OpenAI"""
     serializer = BillAnalysisRequestSerializer(data=request.data)
@@ -1070,8 +1076,9 @@ def process_existing_analysis_data(bill, existing_data, organization):
     responses={200: "TallyVendorBillDetailSerializer"},
     tags=['Tally Vendor Bills']
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_detail(request, org_id, bill_id):
     """Get vendor bill detail including analysis data using proper serializer"""
     from ..serializers import TallyVendorBillDetailSerializer
@@ -1139,8 +1146,9 @@ def calculate_product_gst(amount, product_gst_str, gst_type):
     responses={200: TallyVendorAnalyzedBillSerializer},
     tags=['Tally Vendor Bills']
 )
+@requires(roles.VERIFY_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_verify(request, org_id):
     bill_id = request.data.get('bill_id')
     analyzed_bill_id = request.data.get('analyzed_bill')  # OPTIONAL in your payload
@@ -2148,8 +2156,9 @@ def get_structured_bill_data(analyzed_bill, organization):
     responses={200: BillSyncResponseSerializer},
     tags=['Tally Vendor Bills']
 )
+@requires(roles.SYNC_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_sync(request, org_id):
     """Sync verified vendor bill with Tally"""
     serializer = BillSyncRequestSerializer(data=request.data)
@@ -2166,6 +2175,15 @@ def vendor_bill_sync(request, org_id):
 
     try:
         bill = TallyVendorBill.objects.alive().get(id=bill_id, organization=organization)
+
+        blocked = approval_service.gate_sync(bill, organization)
+        if blocked:
+            message, code = blocked
+            return Response({
+                'error': 'Approval Required',
+                'message': message,
+                'error_code': code,
+            }, status=status.HTTP_409_CONFLICT)
 
         # Handle potential multiple analyzed bills - use the most recent one
         try:
@@ -2316,8 +2334,9 @@ def vendor_bill_sync_external_handler(sync_data, org_id, organization):
     responses={204: None},
     tags=['Tally Vendor Bills']
 )
+@requires(roles.TRASH_BILLS)
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_delete(request, org_id, bill_id):
     """Delete vendor bill."""
     from .bill_helpers import bill_delete_base
@@ -3211,8 +3230,9 @@ def prepare_sync_data(analyzed_bill, organization, cache=None):
     },
     tags=['Tally TCP']
 )
+@requires(roles.SYNC_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_sync_external(request, org_id):
     """Accept bill payload for external system sync"""
     organization = get_organization_from_request(request, org_id)
