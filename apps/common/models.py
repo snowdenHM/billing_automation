@@ -413,6 +413,7 @@ class BillActivity(models.Model):
         ANALYSIS_COMPLETED = "analysis_completed", "Analysis completed"
         ANALYSIS_FAILED = "analysis_failed", "Analysis failed"
         DUPLICATE_FLAGGED = "duplicate_flagged", "Flagged as duplicate"
+        EXTRACTED = "extracted", "Extracted"
         # No standalone "edited" action: every field change today goes
         # through verify, and is carried on the VERIFIED event's change
         # set. Add one when a save-without-verify endpoint exists.

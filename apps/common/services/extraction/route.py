@@ -75,6 +75,10 @@ def analyse(prompt, *, image_b64, mime, file_path=None, file_bytes=None,
                           extension=extension)
     route, why = choose_route(result)
     telemetry = {"route": route, "route_reason": why, **result.summary()}
+    # Carried for the downstream checks, popped by the caller before the
+    # telemetry is logged -- client document text must not reach the log.
+    if result.ok:
+        telemetry["ocr_text"] = result.text
 
     if route == "text":
         try:

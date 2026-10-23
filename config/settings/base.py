@@ -619,6 +619,9 @@ EXTRACTION_OCR_FIRST = env.bool("EXTRACTION_OCR_FIRST", default=False)
 # produced, while still returning the old result. Costs both calls; meant
 # for a few weeks on a subset before EXTRACTION_OCR_FIRST is turned on.
 EXTRACTION_OCR_SHADOW = env.bool("EXTRACTION_OCR_SHADOW", default=False)
+# Organisations on the rollout list even while EXTRACTION_OCR_FIRST is off.
+# Lets the route be proven on one client before it reaches the rest.
+EXTRACTION_OCR_ORG_IDS = env.list("EXTRACTION_OCR_ORG_IDS", default=[])
 # Below this mean OCR confidence the page goes to the vision model instead.
 EXTRACTION_OCR_MIN_CONFIDENCE = env.float("EXTRACTION_OCR_MIN_CONFIDENCE", default=0.90)
 # A near-empty page read confidently is the handwriting case: send the image.

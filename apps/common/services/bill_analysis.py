@@ -208,8 +208,71 @@ def _shadow_agreement(live, shadow):
             "items_shadow": len(shadow.get("items") or [])}
 
 
+def _with_checks(json_data):
+    """Attach arithmetic and identity findings to the analysed data.
+
+    Runs on every bill whichever model read it: a vision reading can be
+    internally inconsistent in exactly the ways a rules reading can, and
+    the same arithmetic catches both. Findings are advisory — they are
+    shown to the operator, never used to reject a bill.
+    """
+    try:
+        from apps.common.services.extraction.checks import run_checks
+
+        # The OCR text rides on the payload rather than in a module
+        # global: these run on RQ workers, and a global would leak one
+        # bill's text into the next bill's checks.
+        ctx = json_data.pop("_ocr_context", {}) if isinstance(json_data, dict) else {}
+        findings = run_checks(
+            json_data,
+            document_text=ctx.get("text"),
+            page_count=ctx.get("pages"),
+        )
+        if findings and isinstance(json_data, dict):
+            json_data["_extraction_checks"] = findings
+    except Exception:
+        logger.exception("Extraction checks failed; continuing without them")
+    return json_data
+
+
+def _ocr_first_enabled(bill):
+    """Global switch, or this bill's organisation on the rollout list.
+
+    Per-organisation so the route can be proven on one client before it
+    reaches the rest. Read per call, so flipping it needs no restart.
+    """
+    if getattr(settings, "EXTRACTION_OCR_FIRST", False):
+        return True
+    allowed = getattr(settings, "EXTRACTION_OCR_ORG_IDS", None) or []
+    org_id = getattr(bill, "organization_id", None)
+    return bool(org_id) and str(org_id) in {str(x) for x in allowed}
+
+
+def _record_extraction(bill, telemetry):
+    """Keep the route and its cost on the bill's own history.
+
+    The saving is a claim about token counts; recorded per bill it stops
+    being a claim. Values from the document never go in — only how it was
+    read.
+    """
+    if bill is None:
+        return
+    try:
+        from apps.common.models import BillActivity
+        from apps.common.services.activity import record_activity
+
+        record_activity(
+            bill, BillActivity.Action.EXTRACTED,
+            summary=f"Read by {telemetry.get('model')} via {telemetry.get('route')}",
+            metadata=telemetry,
+        )
+    except Exception:
+        logger.exception("Could not record extraction telemetry for bill %s",
+                         getattr(bill, "pk", "?"))
+
+
 def _extract(prompt, image_b64, mime, *, file_path=None, file_bytes=None,
-             extension=None):
+             extension=None, bill=None):
     """Vision on the image, unless the OCR-first route is switched on.
 
     Default is the behaviour this replaced, line for line. The flag is
@@ -217,7 +280,7 @@ def _extract(prompt, image_b64, mime, *, file_path=None, file_bytes=None,
     without a restart, and any failure inside the new route falls back
     here rather than failing the bill.
     """
-    if not getattr(settings, "EXTRACTION_OCR_FIRST", False):
+    if not _ocr_first_enabled(bill):
         live = call_ocr_analysis(image_b64, mime, prompt)
         if getattr(settings, "EXTRACTION_OCR_SHADOW", False):
             from apps.common.services.extraction.route import analyse
@@ -230,10 +293,11 @@ def _extract(prompt, image_b64, mime, *, file_path=None, file_bytes=None,
                     prompt, image_b64=image_b64, mime=mime,
                     file_path=file_path, file_bytes=file_bytes, extension=extension,
                 )
-                logger.info(
-                    "extraction shadow: %s",
-                    {**telemetry, "agreement": _shadow_agreement(live, shadow)},
-                )
+                telemetry.pop("ocr_text", None)
+                telemetry = {**telemetry, "shadow": True,
+                             "agreement": _shadow_agreement(live, shadow)}
+                logger.info("extraction shadow: %s", telemetry)
+                _record_extraction(bill, telemetry)
             except Exception:
                 logger.exception("extraction shadow run failed (live result unaffected)")
         return live
@@ -245,14 +309,21 @@ def _extract(prompt, image_b64, mime, *, file_path=None, file_bytes=None,
             prompt, image_b64=image_b64, mime=mime,
             file_path=file_path, file_bytes=file_bytes, extension=extension,
         )
+        # Strip the document text first. Everything below either logs or
+        # stores this dict, and the text is client invoice content.
+        ocr_text = telemetry.pop("ocr_text", None)
+        if ocr_text and isinstance(data, dict):
+            data["_ocr_context"] = {"text": ocr_text,
+                                    "pages": telemetry.get("ocr_pages")}
         logger.info("extraction route: %s", telemetry)
+        _record_extraction(bill, telemetry)
         return data
     except Exception:
         logger.exception("OCR-first route failed; using vision on the image")
         return call_ocr_analysis(image_b64, mime, prompt)
 
 
-def analyze_bill_bytes(file_content, file_extension, prompt):
+def analyze_bill_bytes(file_content, file_extension, prompt, bill=None):
     """Full pipeline from raw bytes: bytes -> image -> OpenAI OCR -> validated JSON dict.
 
     Convenience wrapper for Zoho-style callers that receive ``(bytes, ext)``
@@ -260,8 +331,8 @@ def analyze_bill_bytes(file_content, file_extension, prompt):
     """
     image_b64, mime = prepare_bill_image_from_bytes(file_content, file_extension)
     json_data = _extract(prompt, image_b64, mime, file_bytes=file_content,
-                         extension=file_extension)
-    return reconcile_item_line_amounts(ensure_gst_fields(json_data))
+                         extension=file_extension, bill=bill)
+    return _with_checks(reconcile_item_line_amounts(ensure_gst_fields(json_data)))
 
 
 # ---------------------------------------------------------------------------
@@ -987,7 +1058,7 @@ def get_journal_bill_prompt():
 # High-level convenience: file → analysed JSON
 # ---------------------------------------------------------------------------
 
-def analyze_bill_file(file_path, file_name, prompt):
+def analyze_bill_file(file_path, file_name, prompt, bill=None):
     """Full pipeline: read file → image → OpenAI OCR → validated JSON dict.
 
     Args:
@@ -1000,5 +1071,5 @@ def analyze_bill_file(file_path, file_name, prompt):
     Raises on failure.
     """
     image_b64, mime = prepare_bill_image(file_path, file_name)
-    json_data = _extract(prompt, image_b64, mime, file_path=file_path)
-    return reconcile_item_line_amounts(ensure_gst_fields(json_data))
+    json_data = _extract(prompt, image_b64, mime, file_path=file_path, bill=bill)
+    return _with_checks(reconcile_item_line_amounts(ensure_gst_fields(json_data)))

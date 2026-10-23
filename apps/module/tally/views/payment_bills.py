@@ -202,7 +202,7 @@ def analyze_payment_bill_with_ai(bill, organization):
     logger.info(f"Starting AI analysis for payment bill {bill.id}, file: {bill.file.name}")
 
     try:
-        json_data = analyze_bill_file(bill.file.path, bill.file.name, get_expense_bill_prompt())
+        json_data = analyze_bill_file(bill.file.path, bill.file.name, get_expense_bill_prompt(), bill=bill)
         logger.info(f"AI analysis successful for payment bill {bill.id}")
     except Exception as e:
         logger.error(f"AI analysis failed for payment bill {bill.id}: {e}")

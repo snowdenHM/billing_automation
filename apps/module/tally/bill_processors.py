@@ -88,7 +88,7 @@ def analyze_bill_with_ai(bill, organization):
 
     try:
         json_data = analyze_bill_file(
-            bill.file.path, bill.file.name, get_vendor_bill_prompt()
+            bill.file.path, bill.file.name, get_vendor_bill_prompt(), bill=bill
         )
         logger.info("AI analysis successful for bill %s", bill.id)
     except Exception as exc:
@@ -119,7 +119,7 @@ def analyze_expense_bill_with_ai(bill, organization):
 
     try:
         json_data = analyze_bill_file(
-            bill.file.path, bill.file.name, get_expense_bill_prompt()
+            bill.file.path, bill.file.name, get_expense_bill_prompt(), bill=bill
         )
         logger.info("AI analysis successful for expense bill %s", bill.id)
     except Exception as exc:
@@ -143,7 +143,7 @@ def analyze_payment_bill_with_ai(bill, organization):
 
     try:
         json_data = analyze_bill_file(
-            bill.file.path, bill.file.name, get_expense_bill_prompt()
+            bill.file.path, bill.file.name, get_expense_bill_prompt(), bill=bill
         )
         logger.info("AI analysis successful for payment voucher %s", bill.id)
     except Exception as exc:
