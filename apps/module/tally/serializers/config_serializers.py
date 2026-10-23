@@ -64,6 +64,26 @@ class TallyConfigSerializer(serializers.ModelSerializer):
         queryset=ParentLedger.objects.none(),
         required=False
     )
+    customer_parents = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=ParentLedger.objects.none(),
+        required=False
+    )
+    sales_coa_parents = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=ParentLedger.objects.none(),
+        required=False
+    )
+    receipt_parents = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=ParentLedger.objects.none(),
+        required=False
+    )
+    rcm_parents = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=ParentLedger.objects.none(),
+        required=False
+    )
     chart_of_accounts_parents = serializers.PrimaryKeyRelatedField(
         many=True,
         queryset=ParentLedger.objects.none(),
@@ -133,6 +153,10 @@ class TallyConfigSerializer(serializers.ModelSerializer):
     cgst_parent_names = serializers.SerializerMethodField()
     sgst_parent_names = serializers.SerializerMethodField()
     vendor_parent_names = serializers.SerializerMethodField()
+    customer_parent_names = serializers.SerializerMethodField()
+    sales_coa_parent_names = serializers.SerializerMethodField()
+    receipt_parent_names = serializers.SerializerMethodField()
+    rcm_parent_names = serializers.SerializerMethodField()
     coa_parent_names = serializers.SerializerMethodField()
     expense_coa_parent_names = serializers.SerializerMethodField()
     tds_parent_names = serializers.SerializerMethodField()
@@ -182,7 +206,9 @@ class TallyConfigSerializer(serializers.ModelSerializer):
         for field_name in ['igst_parents', 'cgst_parents', 'sgst_parents',
                           'vendor_parents', 'chart_of_accounts_parents',
                           'chart_of_accounts_expense_parents', 'tds_parents', 'payment_parents',
-                          'round_off_parents', 'cess_parents', 'discount_parents', 'freight_parents']:
+                          'round_off_parents', 'cess_parents', 'discount_parents', 'freight_parents',
+                          'customer_parents', 'sales_coa_parents', 'receipt_parents',
+                          'rcm_parents']:
             if field_name in self.fields:
                 self.fields[field_name].queryset = org_queryset
 
@@ -207,6 +233,7 @@ class TallyConfigSerializer(serializers.ModelSerializer):
             'vendor_parents', 'chart_of_accounts_parents', 'chart_of_accounts_expense_parents',
             'tds_parents', 'payment_parents',
             'round_off_parents', 'cess_parents', 'discount_parents', 'freight_parents',
+            'customer_parents', 'sales_coa_parents', 'receipt_parents', 'rcm_parents',
             # Direct Ledger FKs for Additional Adjustments Mapping
             'cess_ledger', 'discount_ledger', 'freight_ledger', 'round_off_ledger', 'tds_ledger',
             'cess_ledger_name', 'discount_ledger_name', 'freight_ledger_name',
@@ -216,12 +243,16 @@ class TallyConfigSerializer(serializers.ModelSerializer):
             'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names',
             'tds_parent_names', 'payment_parent_names',
             'round_off_parent_names', 'cess_parent_names', 'discount_parent_names', 'freight_parent_names',
+            'customer_parent_names', 'sales_coa_parent_names', 'receipt_parent_names',
+            'rcm_parent_names',
         ]
         read_only_fields = ['id', 'igst_parent_names', 'cgst_parent_names', 'sgst_parent_names',
                            'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names',
                            'tds_parent_names', 'payment_parent_names',
                            'round_off_parent_names', 'cess_parent_names', 'discount_parent_names',
                            'freight_parent_names',
+                           'customer_parent_names', 'sales_coa_parent_names', 'receipt_parent_names',
+                           'rcm_parent_names',
                            'cess_ledger_name', 'discount_ledger_name', 'freight_ledger_name',
                            'round_off_ledger_name', 'tds_ledger_name']
 
@@ -273,3 +304,19 @@ class TallyConfigSerializer(serializers.ModelSerializer):
     def get_freight_parent_names(self, obj) -> List[str]:
         return [parent.parent for parent in obj.freight_parents.all()]
 
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_customer_parent_names(self, obj) -> List[str]:
+        return [parent.parent for parent in obj.customer_parents.all()]
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_sales_coa_parent_names(self, obj) -> List[str]:
+        return [parent.parent for parent in obj.sales_coa_parents.all()]
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_receipt_parent_names(self, obj) -> List[str]:
+        return [parent.parent for parent in obj.receipt_parents.all()]
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_rcm_parent_names(self, obj) -> List[str]:
+        return [parent.parent for parent in obj.rcm_parents.all()]

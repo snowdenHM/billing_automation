@@ -12,7 +12,7 @@ from rest_framework.response import Response
 
 from apps.common.utils import get_organization_from_request
 
-from ..models import TallyVendorBill, TallyExpenseBill, TallyPaymentBill
+from ..models import TallyVendorBill, TallyExpenseBill, TallyPaymentBill, TallyReceiptBill, TallySalesBill
 from .helpers import OrganizationAPIKeyOrBearerToken
 
 from apps.common.models import BillActivity
@@ -26,6 +26,8 @@ _MODE_MODELS = {
     "vendor": TallyVendorBill,
     "expense": TallyExpenseBill,
     "payment": TallyPaymentBill,
+    "sales": TallySalesBill,
+    "receipt": TallyReceiptBill,
 }
 
 

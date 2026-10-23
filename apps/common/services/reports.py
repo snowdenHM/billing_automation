@@ -155,9 +155,14 @@ def rows_from_vendor_analyzed(bill, analyzed_bill):
 
     Falls back to bill-level totals when there are no products.
     """
-    vendor = getattr(analyzed_bill, "vendor", None)
+    # The sales stack names the party ``customer``; everything else about
+    # the row is identical, so one builder serves both rather than a
+    # near-copy that would drift.
+    vendor = getattr(analyzed_bill, "vendor", None) or getattr(analyzed_bill, "customer", None)
     vendor_name = _ledger_name(vendor) if vendor else (
-        getattr(analyzed_bill, "vendor_name", "") or ""
+        getattr(analyzed_bill, "vendor_name", "")
+        or getattr(analyzed_bill, "customer_name", "")
+        or ""
     )
     gstin = ""
     for attr in ("gst_in", "gstin", "gst_number", "vendor_gstin"):

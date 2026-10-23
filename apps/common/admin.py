@@ -16,7 +16,9 @@ from unfold.admin import (
     StackedInline as UnfoldStackedInline,
 )
 
-from apps.common.models import BillActivity, DemoRequest, EmailSettings
+from apps.common.models import (
+    BillActivity, DemoRequest, EmailSettings, ExtractionSettings,
+)
 
 
 def _user_org_ids(user):
@@ -299,3 +301,128 @@ class BillActivityAdmin(BaseOrgAdmin):
 
     def get_readonly_fields(self, request, obj=None):
         return [f.name for f in self.model._meta.fields]
+
+
+@admin.register(ExtractionSettings)
+class ExtractionSettingsAdmin(UnfoldModelAdmin):
+    """Singleton admin for how bills get read.
+
+    Every field here can be left empty, and empty means "use whatever
+    the deployment's environment says". That is what makes it safe to
+    experiment from this page: clearing a field is a complete undo, not
+    a jump to some other default.
+    """
+
+    list_display = ("__str__", "ocr_first", "ocr_assist", "vision_detail", "updated_at")
+    list_display_links = ("__str__",)
+    filter_horizontal = ("rollout_organizations",)
+    readonly_fields = ("updated_at", "effective_now")
+
+    fieldsets = (
+        ("What is in force right now", {
+            "fields": ("effective_now",),
+            "description": (
+                "The values actually being used, after this row and the "
+                "environment are combined. Check here after saving rather "
+                "than guessing from the fields below."
+            ),
+        }),
+        ("Route", {
+            "fields": ("ocr_first", "ocr_assist", "ocr_shadow", "rollout_organizations"),
+            "description": (
+                "<b>Leave everything unset to keep today's behaviour:</b> the "
+                "page image goes to the vision model, which is what ships "
+                "now.<br><br>"
+                "Measured on 21 of this client's scanned bills, agreement "
+                "with that route on every field: "
+                "<b>OCR-first 10%</b>, <b>OCR assist 24%</b>, and the current "
+                "route against itself <b>80%</b>. Both alternatives are "
+                "cheaper and both were worse here, because these bills OCR "
+                "at a median confidence of 0.73 and the model trusts the "
+                "text's misread digits.<br><br>"
+                "They are expected to do well on clean, born-digital "
+                "invoices. Prove that with <b>Shadow mode</b> on one "
+                "organisation before switching anything on."
+            ),
+        }),
+        ("Models and image detail", {
+            "fields": ("vision_model", "text_model", "vision_detail"),
+            "description": (
+                "Only drop detail to <b>low</b> with OCR assist on. On its "
+                "own it removes resolution the model needs and saves "
+                "fractions of a cent."
+            ),
+        }),
+        ("When OCR text is trusted", {
+            "fields": ("ocr_min_confidence", "ocr_min_chars"),
+            "classes": ("collapse",),
+            "description": (
+                "These gate the OCR-first route. Worth knowing before "
+                "tuning them: in the measurement above, OCR confidence did "
+                "<b>not</b> predict whether the answer was right — the 0.40 "
+                "band agreed 83% of the time and the 0.90 band 42%. "
+                "Confidence says how sure OCR is about characters, not "
+                "whether the right number reached the right field."
+            ),
+        }),
+        ("Uploads", {
+            "fields": ("split_batches",),
+            "classes": ("collapse",),
+        }),
+        (None, {"fields": ("updated_at",)}),
+    )
+
+    @admin.display(description="Effective configuration")
+    def effective_now(self, obj):
+        from django.utils.html import format_html
+        from apps.common.extraction_config import get_extraction_config
+
+        config = get_extraction_config()
+        route = (
+            "OCR text → cheap model (OCR-first)" if config.ocr_first
+            else "OCR text + page image → vision model (assist)" if config.ocr_assist
+            else "page image → vision model (today's route)"
+        )
+        rows = [
+            ("Route", route),
+            ("Vision model", config.vision_model),
+            ("Text model", config.text_model),
+            ("Image detail", config.vision_detail),
+            ("Shadow mode", "on" if config.ocr_shadow else "off"),
+            ("Split batch scans", "on" if config.split_batches else "off"),
+            ("OCR confidence gate", f"{config.ocr_min_confidence:.2f}"),
+            ("Rollout organisations", str(len(config.rollout_org_ids)) or "0"),
+        ]
+        return format_html(
+            "<table style='border-spacing:0 2px'>{}</table>",
+            format_html("".join(
+                "<tr><td style='padding-right:16px;opacity:.7'>{}</td>"
+                "<td><b>{}</b></td></tr>".format(k, v) for k, v in rows
+            )),
+        )
+
+    def has_add_permission(self, request):
+        return not ExtractionSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        from django.shortcuts import redirect
+
+        obj = ExtractionSettings.load()
+        return redirect(
+            "admin:{app}_{model}_change".format(
+                app=self.opts.app_label, model=self.opts.model_name,
+            ),
+            obj.pk,
+        )
+
+    def save_model(self, request, obj, form, change):
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
+        messages.success(
+            request,
+            "Extraction settings saved. The next bill analysed uses them — "
+            "no restart needed. Check 'What is in force right now' above.",
+        )

@@ -17,7 +17,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.common import roles
 from apps.common.models import BillActivity
+from apps.common.permissions import HasOrgPermission, requires
 from apps.common.pagination import DefaultPagination
 from apps.common.utils import get_organization_from_request
 
@@ -130,9 +132,27 @@ def bill_activity_list(request, org_id):
     parameters=[OpenApiParameter("days", int, description="Window, default 30.")],
     tags=["Activity"],
 )
+@requires(roles.MANAGE_SETTINGS)
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def activity_stats(request, org_id):
+    """Extraction quality for the whole organisation, across every module.
+
+    Admin-only, and that is the point of it. The numbers here are how
+    often our own extractor was wrong, which is an engineering
+    instrument, not a customer-facing one: a client reading "invoice
+    number corrected 40% of the time" has one question, and it is not a
+    question about bills. It is also a noisy measure — a derived field
+    recomputing, or somebody reformatting a date, both count as
+    corrections — so it overstates error and should never be quoted to
+    anyone outside the team.
+
+    Not scoped to a module on purpose: the events come from Tally and
+    Zoho alike, and extraction quality is a property of the extractor,
+    not of whichever accounting package a bill is bound for. The
+    per-module split below is there so a difference between them is
+    visible rather than averaged away.
+    """
     organization = get_organization_from_request(request, org_id)
     if not organization:
         return Response({"detail": "Organization not found."},
@@ -165,12 +185,37 @@ def activity_stats(request, org_id):
     # against how many verifies happened, not against how many changes, so
     # the rate means "how often this field needs fixing".
     corrections, verifies = Counter(), 0
-    for changes in events.filter(action=BillActivity.Action.VERIFIED).values_list("changes", flat=True):
+    verified_events = events.filter(action=BillActivity.Action.VERIFIED)
+    for changes in verified_events.values_list("changes", flat=True):
         verifies += 1
         for change in changes or []:
             field = change.get("field")
             if field:
                 corrections[field] += 1
+
+    # Split by module so Tally and Zoho are visible separately rather
+    # than averaged into one number that describes neither.
+    by_module = {}
+    for module, _ in BillActivity.Module.choices:
+        module_events = events.filter(module=module)
+        module_verifies = module_events.filter(action=BillActivity.Action.VERIFIED).count()
+        module_corrections = Counter()
+        for changes in module_events.filter(
+            action=BillActivity.Action.VERIFIED
+        ).values_list("changes", flat=True):
+            for change in changes or []:
+                if change.get("field"):
+                    module_corrections[change["field"]] += 1
+        by_module[module] = {
+            "uploaded": module_events.filter(
+                action=BillActivity.Action.UPLOADED).count(),
+            "verifies": module_verifies,
+            "corrections": sum(module_corrections.values()),
+            "clean_rate": (
+                round(1 - min(1, sum(module_corrections.values()) / module_verifies), 3)
+                if module_verifies else None
+            ),
+        }
 
     return Response({
         "window_days": days,
@@ -193,6 +238,7 @@ def activity_stats(request, org_id):
                                 / max(1, shadow_same.get(f, 0) + shadow_differ.get(f, 0)), 3)}
             for f in sorted(set(shadow_same) | set(shadow_differ))
         ],
+        "by_module": by_module,
         "verifies": verifies,
         "corrections": [
             {"field": f, "count": c,

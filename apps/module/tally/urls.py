@@ -19,6 +19,15 @@ from .views import (
     tally_health_ping,
     tally_health_status,
     # Vendor bills
+    sales_bills_list,
+    sales_bills_upload,
+    sales_bill_detail,
+    sales_bill_delete,
+    sales_bill_analyze,
+    sales_bill_verify,
+    sales_bill_sync,
+    sales_bills_sync_list,
+    sales_bill_sync_external,
     vendor_bills_list,
     vendor_bills_upload,
     vendor_bill_detail,
@@ -39,6 +48,15 @@ from .views import (
     expense_bills_sync_list,
     expense_bill_sync_external,
     # Payment vouchers
+    receipt_bills_list,
+    receipt_bills_upload,
+    receipt_bill_detail,
+    receipt_bill_delete,
+    receipt_bill_analyze,
+    receipt_bill_verify,
+    receipt_bill_sync,
+    receipt_bills_sync_list,
+    receipt_bill_sync_external,
     payment_bills_list,
     payment_bills_upload,
     payment_bill_detail,
@@ -50,11 +68,14 @@ from .views import (
     payment_bill_sync_external,
 )
 from .views.bill_reports import (
+    tally_receipt_bills_report,
+    tally_sales_bills_report,
     tally_vendor_bills_report,
     tally_expense_bills_report,
     tally_payment_bills_report,
 )
 from .views.quick_create import (
+    quick_create_customer,
     quick_create_vendor,
     quick_create_ledger,
     quick_create_item,
@@ -127,6 +148,19 @@ urlpatterns = [
         path('vendor-bills/sync_bills/', vendor_bills_sync_list, name='vendor-bills-sync-list'),
         path('vendor-bills/sync_external/', vendor_bill_sync_external, name='vendor-bill-sync-external'),
 
+        # Function-based sales invoice endpoints. Same route shape as the
+        # purchase feed above, so the Tally connector's Sales handler
+        # differs from its Purchase handler only in the path segment.
+        path('sales-bills/', sales_bills_list, name='sales-bills-list'),
+        path('sales-bills/upload/', sales_bills_upload, name='sales-bills-upload'),
+        path('sales-bills/<uuid:bill_id>/delete/', sales_bill_delete, name='sales-bill-delete'),
+        path('sales-bills/analyze/', sales_bill_analyze, name='sales-bill-analyze'),
+        path('sales-bills/<uuid:bill_id>/details/', sales_bill_detail, name='sales-bill-detail'),
+        path('sales-bills/verify/', sales_bill_verify, name='sales-bill-verify'),
+        path('sales-bills/sync/', sales_bill_sync, name='sales-bill-sync'),
+        path('sales-bills/sync_bills/', sales_bills_sync_list, name='sales-bills-sync-list'),
+        path('sales-bills/sync_external/', sales_bill_sync_external, name='sales-bill-sync-external'),
+
         # Tally Bill Moving Between Modules
         path('bills/move/', move_tally_bills_between_modules_view, name='tally-bills-move'),
 
@@ -143,6 +177,7 @@ urlpatterns = [
 
         # Quick-create masters from bill detail / standalone pages
         path('quick-create/vendor/', quick_create_vendor, name='quick-create-vendor'),
+        path('quick-create/customer/', quick_create_customer, name='quick-create-customer'),
         path('quick-create/ledger/', quick_create_ledger, name='quick-create-ledger'),
         path('quick-create/item/',   quick_create_item,   name='quick-create-item'),
 
@@ -152,6 +187,8 @@ urlpatterns = [
 
         # XLSX report downloads (one per bill type, ?status= filter)
         path('vendor-bills/report/', tally_vendor_bills_report, name='vendor-bills-report'),
+        path('sales-bills/report/', tally_sales_bills_report, name='sales-bills-report'),
+        path('receipt-vouchers/report/', tally_receipt_bills_report, name='receipt-vouchers-report'),
         path('expense-bills/report/', tally_expense_bills_report, name='expense-bills-report'),
         path('payment-vouchers/report/', tally_payment_bills_report, name='payment-vouchers-report'),
 
@@ -165,6 +202,17 @@ urlpatterns = [
         path('payment-vouchers/sync/', payment_bill_sync, name='payment-voucher-sync'),
         path('payment-vouchers/sync_bills/', payment_bills_sync_list, name='payment-vouchers-sync-list'),
         path('payment-vouchers/sync_external/', payment_bill_sync_external, name='payment-voucher-sync-external'),
+
+        # Receipt vouchers. Same route shape as the payment feed above.
+        path('receipt-vouchers/', receipt_bills_list, name='receipt-vouchers-list'),
+        path('receipt-vouchers/upload/', receipt_bills_upload, name='receipt-vouchers-upload'),
+        path('receipt-vouchers/<uuid:bill_id>/delete/', receipt_bill_delete, name='receipt-voucher-delete'),
+        path('receipt-vouchers/analyze/', receipt_bill_analyze, name='receipt-voucher-analyze'),
+        path('receipt-vouchers/<uuid:bill_id>/details/', receipt_bill_detail, name='receipt-voucher-detail'),
+        path('receipt-vouchers/verify/', receipt_bill_verify, name='receipt-voucher-verify'),
+        path('receipt-vouchers/sync/', receipt_bill_sync, name='receipt-voucher-sync'),
+        path('receipt-vouchers/sync_bills/', receipt_bills_sync_list, name='receipt-vouchers-sync-list'),
+        path('receipt-vouchers/sync_external/', receipt_bill_sync_external, name='receipt-voucher-sync-external'),
 
         # Alias for the TCP-facing pull endpoint. The Tally connector was
         # built against `payment-bills/sync_bills/` (the integration doc

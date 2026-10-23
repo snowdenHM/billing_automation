@@ -15,6 +15,7 @@ import logging
 from apps.common.services.bill_analysis import (
     analyze_bill_file,
     get_expense_bill_prompt,
+    get_sales_bill_prompt,
     get_vendor_bill_prompt,
 )
 from apps.common.services.duplicate_detection import check_duplicate_bill
@@ -32,6 +33,15 @@ def _get_vendor_process_fn():
         from .views.vendor_bills import process_analysis_data
     except (ImportError, ModuleNotFoundError):
         from .views import process_analysis_data  # flat views.py on server
+    return process_analysis_data
+
+
+def _get_sales_process_fn():
+    """Return the sales ``process_analysis_data`` regardless of views structure."""
+    try:
+        from .views.sales_bills import process_analysis_data
+    except (ImportError, ModuleNotFoundError):
+        from .views import process_analysis_data
     return process_analysis_data
 
 
@@ -61,6 +71,18 @@ def check_duplicate_tally_vendor_bill(bill, organization):
     """Delegate to apps.common.services.duplicate_detection.check_duplicate_bill."""
     from .models import TallyVendorBill
     return check_duplicate_bill(bill, organization, TallyVendorBill)
+
+
+def check_duplicate_tally_receipt_bill(bill, organization):
+    """Delegate to apps.common.services.duplicate_detection.check_duplicate_bill."""
+    from .models import TallyReceiptBill
+    return check_duplicate_bill(bill, organization, TallyReceiptBill)
+
+
+def check_duplicate_tally_sales_bill(bill, organization):
+    """Delegate to apps.common.services.duplicate_detection.check_duplicate_bill."""
+    from .models import TallySalesBill
+    return check_duplicate_bill(bill, organization, TallySalesBill)
 
 
 def check_duplicate_tally_expense_bill(bill, organization):
@@ -152,3 +174,35 @@ def analyze_payment_bill_with_ai(bill, organization):
 
     process_payment_analysis_data = _get_payment_process_fn()
     return process_payment_analysis_data(bill, json_data, organization)
+
+
+def analyze_sales_bill_with_ai(bill, organization):
+    """Analyze a sales invoice with AI and persist results.
+
+    Its own prompt rather than the vendor one: both read the same
+    document shape, but a sales invoice has to be told which party is
+    the customer, or the model files the seller's own letterhead as the
+    party and every sale posts against our own ledger.
+    """
+    logger.info("Starting AI analysis for sales invoice %s, file: %s", bill.id, bill.file.name)
+
+    try:
+        json_data = analyze_bill_file(
+            bill.file.path, bill.file.name, get_sales_bill_prompt(), bill=bill
+        )
+        logger.info("AI analysis successful for sales invoice %s", bill.id)
+    except Exception as exc:
+        logger.error("AI analysis failed for sales invoice %s: %s", bill.id, exc)
+        return {"success": False, "error": str(exc), "analyzed_bill": None}
+
+    try:
+        process_analysis_data = _get_sales_process_fn()
+        analyzed_bill = process_analysis_data(bill, json_data, organization)
+        return {"success": True, "analyzed_bill": analyzed_bill, "error": None}
+    except Exception as exc:
+        logger.error("Error processing analysis data for sales invoice %s: %s", bill.id, exc)
+        return {
+            "success": False,
+            "error": f"Error processing analysis data: {exc}",
+            "analyzed_bill": None,
+        }

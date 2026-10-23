@@ -31,6 +31,22 @@ logger = logging.getLogger(__name__)
 
 
 def _setting(name, default):
+    """Config value, admin row first, environment second.
+
+    Kept as a shim so the call sites below read the same as they did
+    when these were plain settings.
+    """
+    from apps.common.extraction_config import get_extraction_config
+
+    config = get_extraction_config()
+    mapped = {
+        "EXTRACTION_OCR_MIN_CONFIDENCE": config.ocr_min_confidence,
+        "EXTRACTION_OCR_MIN_CHARS": config.ocr_min_chars,
+        "EXTRACTION_TEXT_MODEL": config.text_model,
+        "EXTRACTION_VISION_MODEL": config.vision_model,
+    }
+    if name in mapped:
+        return mapped[name]
     return getattr(settings, name, default)
 
 

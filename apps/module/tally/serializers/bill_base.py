@@ -307,6 +307,22 @@ class BaseBillDetailSerializer(serializers.ModelSerializer):
     analyzed_bill = serializers.SerializerMethodField()
     next_bill = serializers.SerializerMethodField()
     previous_bill = serializers.SerializerMethodField()
+    # The list serializer signs this; without the same declaration here
+    # DRF serialises the bare FileField URL, which ``serve_bill_file``
+    # rejects — so the document pane on every detail page showed "You do
+    # not have access to this file" where the bill should be.
+    file = serializers.SerializerMethodField()
+
+    def get_file(self, obj):
+        """A short-lived, HMAC-signed URL for the bill file.
+
+        Same contract as the list serializer: ``/media/bills/…`` is only
+        reachable through ``apps.common.views.serve_bill_file``, and that
+        view verifies the signature.
+        """
+        if not obj.file:
+            return None
+        return generate_signed_bill_file_url(obj.file, request=self.context.get('request'))
 
     # Common fields for all detail serializers
     base_fields = [

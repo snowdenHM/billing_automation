@@ -68,6 +68,8 @@ from ..serializers import (
 )
 
 # OpenAI Client – no longer used directly; AI analysis is handled by common services
+from ..reverse_charge import RCM_RATE_MARKER, sync_rcm_lines
+
 logger = logging.getLogger(__name__)
 
 
@@ -1087,6 +1089,12 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
                 if not final_amt or final_amt == 0:
                     setattr(analyzed_bill, ledger_field, None)
 
+        # Reverse charge is a property of the bill, not of any one tax
+        # line. Only honoured when the key is present, so a client that
+        # does not know about it cannot switch it off by omission.
+        if 'is_reverse_charge' in analyzed_data:
+            analyzed_bill.is_reverse_charge = bool(analyzed_data.get('is_reverse_charge'))
+
         # ------------------------------------------------------------------
         # Multi-rate GST lines — replaces the single bill-level CGST/SGST/IGST
         # values. The frontend now sends ``analyzed_data.gst_lines`` as an
@@ -1104,6 +1112,12 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
 
             for entry in gst_lines_payload:
                 if not isinstance(entry, dict):
+                    continue
+                # Liability rows are derived, not entered. The UI shows
+                # them and so sends them back; recreating them here
+                # would turn each into an input line and double the
+                # credit on the next pass.
+                if str(entry.get('rate') or '').startswith(RCM_RATE_MARKER):
                     continue
                 amount = _to_decimal(entry.get('amount'))
                 tax_type = (entry.get('tax_type') or '').upper().strip()
@@ -1161,6 +1175,10 @@ def update_analyzed_expense_bill_data(analyzed_bill, analyzed_data, organization
                 analyzed_bill.sgst_taxes = ledgers_by_type['SGST']
             if ledgers_by_type['IGST']:
                 analyzed_bill.igst_taxes = ledgers_by_type['IGST']
+
+            # Reverse charge, after the rollup above so the bill-level
+            # totals count the input side once rather than twice.
+            sync_rcm_lines(analyzed_bill, organization)
 
         # Determine GST type — bill-level first, gst_lines sum as fallback.
         # A mixed-rate bill's bill-level fields may be zero while gst_lines
@@ -1386,6 +1404,24 @@ def update_analyzed_expense_products(analyzed_bill, expense_items, organization)
             total_debit += amt
         elif analyzed_bill.round_off_debit_or_credit == 'credit':
             total_credit += amt
+
+    # Reverse charge adds, for every input GST row, a matching credit
+    # against the RCM payable ledger. Those rows are derived rather than
+    # entered, so they are not in ``expense_items`` and not in the
+    # bill-level rollup above — but they are real postings, and a check
+    # that cannot see them demands the party be credited the GROSS
+    # amount. Under RCM the supplier is owed only the base: the tax is
+    # self-assessed, Dr input and Cr liability, netting to zero.
+    #
+    # Computed from the input figures rather than read back from the
+    # rows, so this holds whether or not the mirror rows have been
+    # written yet this request.
+    if getattr(analyzed_bill, 'is_reverse_charge', False):
+        total_credit += (
+            float(analyzed_bill.igst or 0)
+            + float(analyzed_bill.cgst or 0)
+            + float(analyzed_bill.sgst or 0)
+        )
 
     # Check if debit and credit amounts are equal (including all components)
     # (allowing for small rounding differences)

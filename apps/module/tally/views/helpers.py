@@ -55,7 +55,8 @@ def _gstin_pan(gstin):
 
 def find_tally_vendor_ledger(company_name, organization, vendor_gst=None,
                              similarity_threshold=0.70, use_config_threshold=False,
-                             gst_search_scope='parents', fallback_all_ledgers=False):
+                             gst_search_scope='parents', fallback_all_ledgers=False,
+                             party_parents_field='vendor_parents'):
     """
     Find matching vendor ledger using GST → exact name → similarity.
 
@@ -68,6 +69,11 @@ def find_tally_vendor_ledger(company_name, organization, vendor_gst=None,
         gst_search_scope: 'parents' = search only under vendor parents,
                           'all' = search all org ledgers for GST
         fallback_all_ledgers: If True and no TallyConfig, search all non-root ledgers
+        party_parents_field: Which TallyConfig group scopes the search.
+                          'vendor_parents' for purchases (Sundry Creditors),
+                          'customer_parents' for sales (Sundry Debtors). The
+                          two must not share a scope: a customer offered as a
+                          vendor posts the sale against the wrong side.
     """
     from ..models import TallyConfig, Ledger
 
@@ -79,7 +85,7 @@ def find_tally_vendor_ledger(company_name, organization, vendor_gst=None,
 
         # Determine vendor ledger queryset
         if tally_config:
-            vendor_parent_ledgers = tally_config.vendor_parents.all()
+            vendor_parent_ledgers = getattr(tally_config, party_parents_field).all()
             if not vendor_parent_ledgers.exists():
                 logger.warning(f"No vendor parent ledgers configured in TallyConfig for org {organization.id}")
                 return None
@@ -276,7 +282,8 @@ def find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_typ
 
 def find_or_create_tally_vendor_ledger(vendor_name, vendor_data, organization,
                                        default_parent_name="Sundry Creditors",
-                                       create_default_parent=True):
+                                       create_default_parent=True,
+                                       party_parents_field='vendor_parents'):
     """
     Find existing vendor ledger or create a new one using TallyConfig.
 
@@ -286,6 +293,8 @@ def find_or_create_tally_vendor_ledger(vendor_name, vendor_data, organization,
         organization: Organization instance
         default_parent_name: Fallback parent ledger name
         create_default_parent: If True, create default parent when TallyConfig absent
+        party_parents_field: Which TallyConfig group a newly created ledger is
+                          filed under — see find_tally_vendor_ledger.
     """
     from ..models import TallyConfig, Ledger, ParentLedger
 
@@ -313,7 +322,7 @@ def find_or_create_tally_vendor_ledger(vendor_name, vendor_data, organization,
         parent_ledger = None
 
         if tally_config:
-            vendor_parents = tally_config.vendor_parents.all()
+            vendor_parents = getattr(tally_config, party_parents_field).all()
             if vendor_parents.exists():
                 parent_ledger = vendor_parents.first()
 
@@ -384,6 +393,10 @@ def find_or_create_tally_tax_ledger(ledger_name, tax_type, organization):
                 'COA': tally_config.chart_of_accounts_parents,
                 'CHART_OF_ACCOUNTS': tally_config.chart_of_accounts_parents,
                 'PURCHASE': tally_config.chart_of_accounts_parents,
+                # Sales lines belong to the revenue accounts, not the
+                # purchase ones; without this a sales ledger created on
+                # the fly lands under Purchase Accounts.
+                'SALES': tally_config.sales_coa_parents,
                 # Adjustments (discount/cess/freight/other) don't get a
                 # dedicated slot on TallyConfig — book them alongside the
                 # chart-of-accounts / purchase ledgers, which is where

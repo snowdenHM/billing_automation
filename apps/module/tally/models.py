@@ -28,6 +28,8 @@ from apps.common.validators import (
 UNIQUE_TALLY_VENDOR_BILL_NAME = "uniq_tally_vendorbill_org_name"
 UNIQUE_TALLY_EXPENSE_BILL_NAME = "uniq_tally_expensebill_org_name"
 UNIQUE_TALLY_PAYMENT_BILL_NAME = "uniq_tally_paymentbill_org_name"
+UNIQUE_TALLY_SALES_BILL_NAME = "uniq_tally_salesbill_org_name"
+UNIQUE_TALLY_RECEIPT_BILL_NAME = "uniq_tally_receiptbill_org_name"
 
 
 # -----------------------------
@@ -294,6 +296,43 @@ class TallyConfig(BaseOrgModel):
         related_name="vendor_tally_configs",
         verbose_name="Vendor Parent Ledgers",
         db_table='tally_config_vendor_parents'
+    )
+    # Sales side. Separate groups rather than reusing the vendor ones:
+    # on a sales invoice the party is a debtor and the line ledger is a
+    # sales account, and an operator offered the purchase accounts here
+    # would post revenue to the wrong side of the books.
+    customer_parents = models.ManyToManyField(
+        'ParentLedger',
+        blank=True,
+        related_name="customer_tally_configs",
+        verbose_name="Customer Parent Ledgers",
+        db_table='tally_config_customer_parents'
+    )
+    sales_coa_parents = models.ManyToManyField(
+        'ParentLedger',
+        blank=True,
+        related_name="sales_coa_tally_configs",
+        verbose_name="Sales COA Parent Ledgers",
+        db_table='tally_config_sales_coa_parents'
+    )
+    receipt_parents = models.ManyToManyField(
+        'ParentLedger',
+        blank=True,
+        related_name="receipt_tally_configs",
+        verbose_name="Receipt Parent Ledgers",
+        db_table='tally_config_receipt_parents'
+    )
+    # Where the RCM liability sits. Separate from the ordinary GST
+    # groups: the input-credit ledger and the payable ledger are
+    # different accounts even though both live under Duties & Taxes,
+    # and posting the liability to the credit ledger would cancel the
+    # credit out.
+    rcm_parents = models.ManyToManyField(
+        'ParentLedger',
+        blank=True,
+        related_name="rcm_tally_configs",
+        verbose_name="RCM Payable Parent Ledgers",
+        db_table='tally_config_rcm_parents'
     )
     chart_of_accounts_parents = models.ManyToManyField(
         'ParentLedger',
@@ -967,6 +1006,23 @@ class TallyExpenseAnalyzedBill(BaseOrgModel):
     bill_no = models.CharField(max_length=50, blank=True, null=True)
     bill_date = models.DateField(blank=True, null=True)
     due_date = models.DateField(blank=True, null=True)
+    # Reverse charge. Under RCM the recipient pays the GST instead of the
+    # supplier, so the same tax figure appears twice on the voucher: once
+    # as input credit (debit) and once as the liability owed to the
+    # government (credit). The input rows are the ordinary GST lines; the
+    # credit rows are built from them by
+    # ``apps.module.tally.reverse_charge.sync_rcm_lines``.
+    #
+    # Off by default, which is every existing bill, so nothing already in
+    # the system changes shape.
+    is_reverse_charge = models.BooleanField(
+        default=False,
+        help_text=(
+            "Reverse charge: the recipient pays the GST. Adds a matching "
+            "credit entry per GST line against the RCM payable ledger."
+        ),
+    )
+
     gst_type = models.CharField(max_length=20, choices=GSTType.choices, default=GSTType.UNKNOWN)
 
     total = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
@@ -1564,6 +1620,23 @@ class TallyPaymentAnalyzedBill(BaseOrgModel):
     bill_no = models.CharField(max_length=50, blank=True, null=True)
     bill_date = models.DateField(blank=True, null=True)
     due_date = models.DateField(blank=True, null=True)
+    # Reverse charge. Under RCM the recipient pays the GST instead of the
+    # supplier, so the same tax figure appears twice on the voucher: once
+    # as input credit (debit) and once as the liability owed to the
+    # government (credit). The input rows are the ordinary GST lines; the
+    # credit rows are built from them by
+    # ``apps.module.tally.reverse_charge.sync_rcm_lines``.
+    #
+    # Off by default, which is every existing bill, so nothing already in
+    # the system changes shape.
+    is_reverse_charge = models.BooleanField(
+        default=False,
+        help_text=(
+            "Reverse charge: the recipient pays the GST. Adds a matching "
+            "credit entry per GST line against the RCM payable ledger."
+        ),
+    )
+
     gst_type = models.CharField(max_length=20, choices=GSTType.choices, default=GSTType.UNKNOWN)
 
     total = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
@@ -1920,3 +1993,781 @@ class TallyTcpRelease(models.Model):
     def __str__(self):
         marker = " (active)" if self.is_active else ""
         return f"Tally TCP v{self.version}{marker}"
+
+
+# =============================================================================
+# Sales Vouchers (Upload + Analysed)
+#
+# Structural mirror of the Purchase (vendor) stack — same fields, same
+# behaviour, own tables. Three things differ, and only three:
+#
+#   * the party is a customer, so the FK is ``customer`` and it points at
+#     a Ledger under a Sundry Debtors group rather than Sundry Creditors;
+#   * the sync payload emits ``voucher_type: "Sales"`` and the party tag
+#     is ``<customer_name>``, not ``<vendor_name>``;
+#   * GST is output tax (payable), not input credit, so the ledgers an
+#     operator picks sit under the output side of Duties & Taxes. Nothing
+#     in the model enforces that — which ledger is right is the
+#     organisation's own chart of accounts, and TallyConfig scopes the
+#     choices.
+#
+# Everything else is deliberately identical to the vendor stack, so the
+# connector work on the Tally side is the Purchase handler with the
+# voucher type changed.
+# =============================================================================
+
+class TallySalesBill(BaseOrgModel, TrashableMixin):
+    class BillStatus(models.TextChoices):
+        DRAFT = "Draft", "Draft"
+        ANALYSED = "Analysed", "Analysed"
+        VERIFIED = "Verified", "Verified"
+        SYNCED = "Synced", "Synced"
+
+    class BillType(models.TextChoices):
+        SINGLE = "Single Invoice/File", "Single Invoice/File"
+        MULTI = "Multiple Invoice/File", "Multiple Invoice/File"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    bill_munshi_name = models.CharField(max_length=100, blank=True, null=True)
+    file = models.FileField(
+        upload_to=bill_upload_path,
+        validators=[validate_file_extension, validate_bill_file_size],
+    )
+    file_type = models.CharField(
+        choices=BillType.choices, max_length=100, blank=True, null=True, default=BillType.SINGLE,
+    )
+    analysed_data = models.JSONField(default=dict, blank=True, null=True)
+    status = models.CharField(
+        max_length=10, choices=BillStatus.choices, default=BillStatus.DRAFT, blank=True,
+    )
+    process = models.BooleanField(
+        default=False,
+        help_text="HAS-been-analysed flag: True once AI analysis has produced ``analysed_data``.",
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tally_sales_bills",
+        null=True, blank=True,
+        help_text="User who uploaded this sales invoice",
+    )
+
+    is_duplicate = models.BooleanField(default=False)
+    duplicate_description = models.TextField(blank=True, null=True)
+    duplicate_score = models.FloatField(null=True, blank=True)
+    duplicate_matched_bills = models.JSONField(default=list, blank=True)
+
+    is_processing = models.BooleanField(default=False)
+    processing_error = models.TextField(blank=True, null=True)
+    processing_stage = models.CharField(
+        max_length=20,
+        choices=ProcessingStage.choices,
+        default=ProcessingStage.QUEUED,
+        blank=True,
+    )
+    job_id = models.CharField(max_length=100, blank=True, null=True)
+    content_hash = models.CharField(max_length=64, blank=True, null=True, db_index=True)
+
+    tally_synced = models.BooleanField(default=False)
+    tally_sync_message = models.TextField(blank=True, null=True)
+
+    bill_belong_your_org = models.BooleanField(default=False)
+    description = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Tally Sales Invoice"
+        verbose_name_plural = "Tally Sales Invoices"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "bill_munshi_name"],
+                name=UNIQUE_TALLY_SALES_BILL_NAME,
+                condition=Q(created_at__gte=NAME_UNIQUENESS_ENFORCED_FROM),
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.bill_munshi_name or f"TallySalesBill:{self.id}"
+
+    def save(self, *args, **kwargs):
+        """Autogenerate ``bill_munshi_name`` as ``YYYYMMDDTS00001`` if missing."""
+        return save_with_unique_name(
+            self,
+            super().save,
+            name_field="bill_munshi_name",
+            code="TS",
+            constraint=UNIQUE_TALLY_SALES_BILL_NAME,
+            should_generate=not self.bill_munshi_name,
+            args=args,
+            kwargs=kwargs,
+        )
+
+
+class TallySalesAnalyzedBill(BaseOrgModel):
+    class GSTType(models.TextChoices):
+        IGST = "IGST", "IGST"
+        CGST_SGST = "CGST_SGST", "CGST+SGST"
+        UNKNOWN = "Unknown", "Unknown"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    selected_bill = models.ForeignKey(
+        TallySalesBill, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="analysed_headers",
+    )
+    # The party. Named ``customer`` rather than ``vendor`` because on a
+    # sales invoice it is one, and because the two stacks are otherwise
+    # identical enough that a shared name would hide which side a bit of
+    # code is on.
+    customer = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="customer_tally_sales_analysed_bills",
+    )
+
+    bill_no = models.CharField(max_length=50, blank=True, null=True)
+    bill_date = models.DateField(blank=True, null=True)
+    due_date = models.DateField(blank=True, null=True)
+
+    total = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    igst = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    igst_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="igst_tally_sales_analysed_bills",
+    )
+    cgst = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    cgst_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="cgst_tally_sales_analysed_bills",
+    )
+    sgst = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    sgst_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="sgst_tally_sales_analysed_bills",
+    )
+
+    discount = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    discount_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="discount_tally_sales_analysed_bills",
+    )
+
+    cess = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    cess_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="cess_tally_sales_analysed_bills",
+    )
+
+    freight = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    freight_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="freight_tally_sales_analysed_bills",
+    )
+
+    round_off = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    round_off_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="round_off_tally_sales_analysed_bills",
+    )
+
+    gst_type = models.CharField(max_length=20, choices=GSTType.choices, default=GSTType.UNKNOWN)
+    note = models.TextField(blank=True, null=True, default="Enter Your Description")
+
+    consolidate = models.BooleanField(
+        default=False,
+        help_text="If True, sync as single consolidated line item. If False, sync all individual line items.",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Tally Sales Analysed Invoice"
+        verbose_name_plural = "Tally Sales Analysed Invoices"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["selected_bill"],
+                name="uq_tally_sales_analyzed_selected_bill",
+                condition=models.Q(selected_bill__isnull=False),
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (self.selected_bill.bill_munshi_name if self.selected_bill else None) or f"SalesAnalysed:{self.id}"
+
+    def validate_gst_calculations(self):
+        if not any([self.total, self.igst, self.cgst, self.sgst]):
+            return
+        igst = self.igst or Decimal("0")
+        cgst = self.cgst or Decimal("0")
+        sgst = self.sgst or Decimal("0")
+        if igst < 0 or cgst < 0 or sgst < 0:
+            raise ValidationError("GST amounts cannot be negative")
+        if igst > 0 and (cgst > 0 or sgst > 0):
+            raise ValidationError("Cannot have both IGST and CGST/SGST for the same transaction")
+
+    def clean(self):
+        super().clean()
+        self.validate_gst_calculations()
+
+    def save(self, *args, **kwargs):
+        skip_validation = kwargs.pop('skip_validation', False)
+        if not skip_validation:
+            self.full_clean()
+        super().save(*args, **kwargs)
+
+    ROUND_OFF_THRESHOLD = Decimal("1.00")
+
+    def compute_round_off(self, save=True):
+        """Recompute round_off. Same formula as the vendor stack."""
+        from decimal import Decimal as _D
+        subtotal = sum(
+            (p.amount or _D("0")) for p in self.products.all()
+        ) if self.pk else _D("0")
+        expected = (
+            subtotal + (self.igst or _D("0")) + (self.cgst or _D("0"))
+            + (self.sgst or _D("0")) + (self.cess or _D("0"))
+            + (self.discount or _D("0")) + (self.freight or _D("0"))
+        )
+        diff = ((self.total or _D("0")) - expected).quantize(_D("0.01"))
+
+        self.round_off = diff if abs(diff) < self.ROUND_OFF_THRESHOLD else _D("0")
+
+        if self.round_off and self.round_off != _D("0") and not self.round_off_taxes_id:
+            org = getattr(self, 'organization', None) if self.organization_id else None
+            self.round_off_taxes = _pick_round_off_ledger(org)
+
+        if save:
+            self.save(skip_validation=True, update_fields=['round_off', 'round_off_taxes'])
+        return self.round_off
+
+
+class TallySalesAnalyzedProduct(BaseOrgModel):
+    """Analysed line items from sales invoices."""
+
+    GST_CHOICES = [
+        ("0%", "0%"),
+        ("5%", "5%"),
+        ("12%", "12%"),
+        ("18%", "18%"),
+        ("28%", "28%"),
+        ("40%", "40%"),
+        ("Exempted", "Exempted"),
+        ("N/A", "N/A"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    sales_bill_analyzed = models.ForeignKey(
+        TallySalesAnalyzedBill, on_delete=models.CASCADE, related_name="products"
+    )
+
+    item_name = models.CharField(max_length=2000, blank=True, null=True)
+    item_details = models.TextField(blank=True, null=True)
+    # The sales ledger this line is credited to, the counterpart of the
+    # purchase ledger on a vendor bill.
+    taxes = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
+
+    price = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
+    quantity = models.PositiveIntegerField(blank=True, null=True, default=0)
+    amount = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
+
+    product_gst = models.CharField(max_length=50, choices=GST_CHOICES, blank=True, null=True)
+    igst = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    cgst = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    sgst = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+
+    cgst_ledger = models.ForeignKey(
+        Ledger, on_delete=models.SET_NULL, blank=True, null=True,
+        related_name="cgst_tally_sales_products",
+        help_text="Per-line CGST tax ledger (resolved from rate mapping or chosen manually).",
+    )
+    sgst_ledger = models.ForeignKey(
+        Ledger, on_delete=models.SET_NULL, blank=True, null=True,
+        related_name="sgst_tally_sales_products",
+        help_text="Per-line SGST tax ledger.",
+    )
+    igst_ledger = models.ForeignKey(
+        Ledger, on_delete=models.SET_NULL, blank=True, null=True,
+        related_name="igst_tally_sales_products",
+        help_text="Per-line IGST tax ledger.",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Tally Sales Analysed Line Item"
+        verbose_name_plural = "Tally Sales Analysed Line Items"
+
+    def __str__(self) -> str:
+        return self.item_name or f"SalesProduct:{self.id}"
+
+    @property
+    def gst_rate_decimal(self):
+        if not self.product_gst:
+            return Decimal("0")
+        m = re.match(r"^\s*([\d.]+)\s*%?\s*$", str(self.product_gst))
+        if not m:
+            return Decimal("0")
+        try:
+            return Decimal(m.group(1))
+        except Exception:
+            return Decimal("0")
+
+
+class TallySalesConsolidatedProduct(BaseOrgModel):
+    """One rolled-up line for a sales invoice, used when consolidate=True."""
+
+    GST_CHOICES = TallySalesAnalyzedProduct.GST_CHOICES
+
+    id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
+    sales_bill_analyzed = models.ForeignKey(
+        "TallySalesAnalyzedBill", on_delete=models.CASCADE, related_name="consolidated_products",
+    )
+
+    item_name = models.CharField(max_length=2000, blank=True, null=True)
+    item_details = models.TextField(blank=True, null=True)
+    taxes = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
+
+    price = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
+    quantity = models.PositiveIntegerField(blank=True, null=True, default=1)
+    amount = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
+
+    product_gst = models.CharField(max_length=50, choices=GST_CHOICES, blank=True, null=True)
+    igst = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    cgst = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    sgst = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+
+    original_items_count = models.IntegerField(
+        default=0, help_text="How many individual lines were rolled into this one.",
+    )
+    consolidation_notes = models.TextField(
+        blank=True, null=True, help_text="Readable breakdown of what was rolled up.",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Tally Sales Consolidated Line Item"
+        verbose_name_plural = "Tally Sales Consolidated Line Items"
+
+    def __str__(self) -> str:
+        return self.item_name or f"SalesConsolidated:{self.id}"
+
+
+# =============================================================================
+# Receipt Vouchers (Upload + Analysed)
+#
+# Structural mirror of the Payment stack — same fields, same DR/CR
+# machinery, own tables. What differs:
+#
+#   * the party is the customer who paid, so the FK is ``customer`` and
+#     it points at a Ledger under a Sundry Debtors group;
+#   * money arrives rather than leaves, so the Bank/Cash row defaults to
+#     DEBIT where the payment voucher defaults to CREDIT;
+#   * the Bank/Cash ledger is scoped by ``TallyConfig.receipt_parents``;
+#   * the sync payload emits ``voucher_type: "Receipt"``.
+#
+# Everything else is identical, which is the point: the Tally connector's
+# Receipt handler is its Payment handler with the voucher type changed.
+# =============================================================================
+
+class TallyReceiptBill(BaseOrgModel, TrashableMixin):
+    class BillStatus(models.TextChoices):
+        DRAFT = "Draft", "Draft"
+        ANALYSED = "Analysed", "Analysed"
+        VERIFIED = "Verified", "Verified"
+        SYNCED = "Synced", "Synced"
+
+    class BillType(models.TextChoices):
+        SINGLE = "Single Invoice/File", "Single Invoice/File"
+        MULTI = "Multiple Invoice/File", "Multiple Invoice/File"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    bill_munshi_name = models.CharField(max_length=100, blank=True, null=True)
+    file = models.FileField(
+        upload_to=bill_upload_path,
+        validators=[validate_file_extension, validate_bill_file_size],
+    )
+    file_type = models.CharField(
+        choices=BillType.choices, max_length=100, blank=True, null=True, default=BillType.SINGLE,
+    )
+    analysed_data = models.JSONField(default=dict, blank=True, null=True)
+    status = models.CharField(
+        max_length=10, choices=BillStatus.choices, default=BillStatus.DRAFT, blank=True,
+    )
+    process = models.BooleanField(
+        default=False,
+        help_text="HAS-been-analysed flag: True once AI analysis has produced ``analysed_data``.",
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tally_receipt_bills",
+        null=True, blank=True,
+        help_text="User who uploaded this receipt voucher",
+    )
+
+    is_duplicate = models.BooleanField(default=False)
+    duplicate_description = models.TextField(blank=True, null=True)
+    duplicate_score = models.FloatField(null=True, blank=True)
+    duplicate_matched_bills = models.JSONField(default=list, blank=True)
+
+    is_processing = models.BooleanField(default=False)
+    processing_error = models.TextField(blank=True, null=True)
+    # Coarse progress for the upload -> analysis pipeline, so the list can
+    # show a real progress bar instead of an indeterminate spinner. Written
+    # by the background task as it moves between steps; see
+    # STAGE_PERCENT for the mapping the API exposes.
+    processing_stage = models.CharField(
+        max_length=20,
+        choices=ProcessingStage.choices,
+        default=ProcessingStage.QUEUED,
+        blank=True,
+        help_text="Which step of background analysis this bill is on.",
+    )
+    job_id = models.CharField(max_length=100, blank=True, null=True)
+    content_hash = models.CharField(
+        max_length=64, blank=True, null=True, db_index=True,
+        help_text="SHA-256 hex digest of the uploaded file for exact-duplicate detection",
+    )
+
+    tally_synced = models.BooleanField(default=False)
+    tally_sync_message = models.TextField(blank=True, null=True)
+
+    bill_belong_your_org = models.BooleanField(default=False)
+    description = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Tally Receipt Voucher"
+        verbose_name_plural = "Tally Receipt Vouchers"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "bill_munshi_name"],
+                name=UNIQUE_TALLY_RECEIPT_BILL_NAME,
+                # Partial: historical rows keep their (sometimes duplicated) names.
+                condition=Q(created_at__gte=NAME_UNIQUENESS_ENFORCED_FROM),
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.bill_munshi_name or f"TallyReceiptBill:{self.id}"
+
+    def save(self, *args, **kwargs):
+        """Autogenerate ``bill_munshi_name`` as ``YYYYMMDDTP00001`` if missing.
+
+        ``TP`` prefix = Tally Receipt (mirrors ``TE`` for expense/journal).
+        """
+        return save_with_unique_name(
+            self,
+            super().save,
+            name_field="bill_munshi_name",
+            code="TR",
+            constraint=UNIQUE_TALLY_RECEIPT_BILL_NAME,
+            should_generate=not self.bill_munshi_name,
+            args=args,
+            kwargs=kwargs,
+        )
+
+
+class TallyReceiptAnalyzedBill(BaseOrgModel):
+    class GSTType(models.TextChoices):
+        IGST = "IGST", "IGST"
+        CGST_SGST = "CGST_SGST", "CGST+SGST"
+        UNKNOWN = "Unknown", "Unknown"
+
+    class DebitCredit(models.TextChoices):
+        CREDIT = "credit", "Credit"
+        DEBIT = "debit", "Debit"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    selected_bill = models.ForeignKey(
+        TallyReceiptBill, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="analysed_headers",
+    )
+    # For a Receipt Voucher the "customer" slot holds the *Bank / Cash*
+    # ledger the user picks. Blank by default (see product spec) — the
+    # operator must choose it themselves. Kept as an FK to Ledger so we
+    # reuse all the existing ledger widgets on the frontend.
+    customer = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="customer_tally_receipt_analysed_bills",
+    )
+    customer_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True,
+        # A receipt is money arriving, so the Bank/Cash row is a DEBIT —
+        # the opposite default to the payment voucher this mirrors.
+        default=DebitCredit.DEBIT,
+    )
+    customer_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"),
+    )
+
+    # Client Correction 26: the "Customer" slot above is now a plain customer
+    # ledger picker used for identification only — it is deliberately
+    # NOT posted to the sync XML (no name/GST leak into <customer>). The
+    # actual Bank/Cash ledger the money arrives *into* lives here,
+    # populated from a dropdown scoped to ``TallyConfig.receipt_parents``.
+    # It is required for verify + sync and is emitted as the Bank/Cash
+    # posting (Dr/Cr from ``customer_debit_or_credit``, default CREDIT)
+    # in ``prepare_receipt_sync_data`` — see receipt_bills.py.
+    receipt_mode = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="receipt_mode_tally_receipt_analysed_bills",
+    )
+
+    voucher = models.CharField(max_length=255, blank=True, null=True)
+    bill_no = models.CharField(max_length=50, blank=True, null=True)
+    bill_date = models.DateField(blank=True, null=True)
+    due_date = models.DateField(blank=True, null=True)
+    gst_type = models.CharField(max_length=20, choices=GSTType.choices, default=GSTType.UNKNOWN)
+
+    total = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    igst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    igst_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="igst_tally_receipt_analysed_bills",
+    )
+    igst_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+    cgst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    cgst_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="cgst_tally_receipt_analysed_bills",
+    )
+    cgst_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+    sgst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    sgst_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="sgst_tally_receipt_analysed_bills",
+    )
+    sgst_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+
+    tds = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    tds_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="tds_tally_receipt_analysed_bills",
+    )
+    tds_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+
+    other_adjustment = models.DecimalField(
+        max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"),
+    )
+    other_adjustment_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="other_adjustment_tally_receipt_analysed_bills",
+    )
+    other_adjustment_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+
+    round_off = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    round_off_taxes = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE, blank=True, null=True,
+        related_name="round_off_tally_receipt_analysed_bills",
+    )
+    round_off_debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=10, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+
+    note = models.CharField(max_length=100, blank=True, null=True, default="Enter Your Description")
+
+    consolidate = models.BooleanField(
+        default=True,
+        help_text=(
+            "Receipt vouchers default to consolidated line items — most "
+            "users only care about ledger-level totals in a receipt."
+        ),
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Tally Receipt Analysed Voucher"
+        verbose_name_plural = "Tally Receipt Analysed Vouchers"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["selected_bill"],
+                name="uq_tally_receipt_analyzed_selected_bill",
+                condition=models.Q(selected_bill__isnull=False),
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (self.selected_bill.bill_munshi_name if self.selected_bill else None) or f"ReceiptAnalysed:{self.id}"
+
+    def save(self, *args, **kwargs):
+        skip_validation = kwargs.pop("skip_validation", False)
+        if not skip_validation:
+            self.full_clean()
+        super().save(*args, **kwargs)
+
+    ROUND_OFF_THRESHOLD = Decimal("1.00")
+
+    def compute_round_off(self, save=True):
+        """Recompute round_off for a receipt voucher.
+
+        Mirrors ``TallyExpenseAnalyzedBill.compute_round_off`` — same
+        DR == CR balancing rule, same tolerance. Kept as an independent
+        method so future receipt-specific rules can diverge without
+        touching the expense side.
+        """
+        from decimal import Decimal as _D
+
+        def _sum_side(side):
+            total = _D("0")
+            if self.pk:
+                for product in self.products.all():
+                    if product.debit_or_credit == side:
+                        total += product.amount or _D("0")
+            for amount, dc in (
+                (self.igst, self.igst_debit_or_credit),
+                (self.cgst, self.cgst_debit_or_credit),
+                (self.sgst, self.sgst_debit_or_credit),
+                (self.tds, self.tds_debit_or_credit),
+                (self.other_adjustment, self.other_adjustment_debit_or_credit),
+                (self.customer_amount, self.customer_debit_or_credit),
+            ):
+                if dc == side and amount:
+                    total += amount
+            return total
+
+        dr_total = _sum_side(self.DebitCredit.DEBIT)
+        cr_total = _sum_side(self.DebitCredit.CREDIT)
+        residual = (dr_total - cr_total).quantize(_D("0.01"))
+
+        if abs(residual) >= self.ROUND_OFF_THRESHOLD or residual == _D("0"):
+            self.round_off = _D("0")
+        else:
+            self.round_off = abs(residual)
+            self.round_off_debit_or_credit = (
+                self.DebitCredit.CREDIT if residual > 0 else self.DebitCredit.DEBIT
+            )
+            if not self.round_off_taxes_id:
+                org = getattr(self, "organization", None) if self.organization_id else None
+                self.round_off_taxes = _pick_round_off_ledger(org)
+
+        if save:
+            self.save(
+                skip_validation=True,
+                update_fields=["round_off", "round_off_debit_or_credit", "round_off_taxes"],
+            )
+        return self.round_off
+
+
+class TallyReceiptAnalyzedProduct(BaseOrgModel):
+    class DebitCredit(models.TextChoices):
+        CREDIT = "credit", "Credit"
+        DEBIT = "debit", "Debit"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    receipt_bill = models.ForeignKey(
+        TallyReceiptAnalyzedBill, related_name="products", on_delete=models.CASCADE,
+    )
+
+    item_details = models.CharField(max_length=2000, blank=True, null=True)
+    chart_of_accounts = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=50, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Tally Receipt Analysed Voucher Product"
+        verbose_name_plural = "Tally Receipt Analysed Voucher Products"
+
+    def __str__(self) -> str:
+        if self.receipt_bill and self.receipt_bill.selected_bill:
+            return self.receipt_bill.selected_bill.bill_munshi_name or f"ReceiptProduct:{self.id}"
+        return f"ReceiptProduct:{self.id}"
+
+
+class TallyReceiptConsolidatedProduct(BaseOrgModel):
+    """Consolidated product line for Tally Receipt Vouchers.
+
+    Mirrors ``TallyExpenseConsolidatedProduct`` — kept separate so
+    receipt-side aggregation logic can diverge later (different tax
+    treatment for TDS-on-receipt, for instance).
+    """
+    class DebitCredit(models.TextChoices):
+        CREDIT = "credit", "Credit"
+        DEBIT = "debit", "Debit"
+
+    id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
+    receipt_bill = models.ForeignKey(
+        "TallyReceiptAnalyzedBill", on_delete=models.CASCADE,
+        related_name="consolidated_products",
+    )
+
+    item_details = models.CharField(max_length=2000, blank=True, null=True)
+    chart_of_accounts = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
+    debit_or_credit = models.CharField(
+        choices=DebitCredit.choices, max_length=50, blank=True, null=True, default=DebitCredit.DEBIT,
+    )
+
+    original_entries_count = models.IntegerField(default=0)
+    consolidation_notes = models.TextField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Consolidated Tally Receipt Product"
+        verbose_name_plural = "Consolidated Tally Receipt Products"
+
+    def __str__(self):
+        return f"Consolidated Receipt: {self.item_details[:50] if self.item_details else 'Multiple Entries'} ({self.original_entries_count} entries)"
+
+
+class TallyReceiptGstLine(BaseOrgModel):
+    """Per-rate GST entry on a Tally Receipt Voucher.
+
+    Kept identical in shape to ``TallyExpenseGstLine`` so the same
+    frontend GST-lines table renders for both voucher types.
+    """
+
+    class TaxType(models.TextChoices):
+        CGST = "CGST", "CGST"
+        SGST = "SGST", "SGST"
+        IGST = "IGST", "IGST"
+
+    class DebitCredit(models.TextChoices):
+        DEBIT = "debit", "Debit"
+        CREDIT = "credit", "Credit"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
+    receipt_bill = models.ForeignKey(
+        TallyReceiptAnalyzedBill, on_delete=models.CASCADE, related_name="gst_lines",
+    )
+    rate = models.CharField(max_length=10, blank=True, default="")
+    tax_type = models.CharField(max_length=10, choices=TaxType.choices)
+    amount = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal("0"))
+    ledger = models.ForeignKey(
+        Ledger, on_delete=models.SET_NULL, blank=True, null=True,
+        related_name="tally_receipt_gst_lines",
+    )
+    debit_or_credit = models.CharField(
+        max_length=10, choices=DebitCredit.choices, default=DebitCredit.DEBIT,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Tally Receipt GST Line"
+        verbose_name_plural = "Tally Receipt GST Lines"
+        ordering = ["rate", "tax_type"]
+
+    def __str__(self) -> str:
+        return f"{self.tax_type} {self.rate} ₹{self.amount} ({self.debit_or_credit})"

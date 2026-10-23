@@ -406,6 +406,8 @@ class BillActivity(models.Model):
         EXPENSE = "expense", "Journal Entry"
         PAYMENT = "payment", "Payment Voucher"
         JOURNAL = "journal", "Journal"
+        SALES = "sales", "Sales Voucher"
+        RECEIPT = "receipt", "Receipt Voucher"
 
     class Action(models.TextChoices):
         UPLOADED = "uploaded", "Uploaded"
@@ -548,3 +550,141 @@ class BillApproval(models.Model):
 
     def __str__(self):
         return f"{self.get_state_display()}: {self.bill_type}:{self.bill_id}"
+
+
+class ExtractionSettings(models.Model):
+    """Singleton row holding the bill-reading route configuration.
+
+    These were environment variables, which meant a redeploy to try a
+    different route and no way to roll one back in a hurry. They are
+    the kind of setting somebody wants to flip while watching what
+    happens, so they belong somewhere a person can reach.
+
+    Every field is **nullable or blank on purpose**: empty means "use
+    whatever the environment says", so this row only ever overrides what
+    an operator has deliberately set. A fresh install behaves exactly as
+    it did before the row existed, and clearing a field hands control
+    back to the deployment rather than to a hardcoded default.
+
+    Read through :func:`apps.common.extraction_config.get_extraction_config`,
+    which caches it and falls back to settings if the table is missing.
+    """
+
+    SINGLETON_PK = 1
+
+    DETAIL_CHOICES = [
+        ("high", "High — full resolution, ~1,200 tokens a page"),
+        ("low", "Low — flat 85 tokens a page; only safe with OCR assist"),
+    ]
+
+    # --- which route reads a bill -----------------------------------
+    ocr_first = models.BooleanField(
+        null=True, blank=True, verbose_name="OCR-first route",
+        help_text=(
+            "Read the bill with on-device OCR and send the TEXT to the cheap "
+            "model, falling back to the vision model when OCR is poor. "
+            "Measured on this client's scans: 10% of bills matched the "
+            "current route on every field. Empty = follow EXTRACTION_OCR_FIRST."
+        ),
+    )
+    ocr_assist = models.BooleanField(
+        null=True, blank=True, verbose_name="OCR assist",
+        help_text=(
+            "Send the OCR text ALONGSIDE the page image rather than instead "
+            "of it, which allows a low-detail image. Cheaper, but measured "
+            "at 24% full-field agreement on this client's scans — the model "
+            "anchors on OCR's misread digits. Empty = follow "
+            "EXTRACTION_OCR_ASSIST."
+        ),
+    )
+    ocr_shadow = models.BooleanField(
+        null=True, blank=True, verbose_name="Shadow mode",
+        help_text=(
+            "Run the OCR route alongside the live one and record what it "
+            "would have produced, while still returning the live result. "
+            "Costs both calls. Empty = follow EXTRACTION_OCR_SHADOW."
+        ),
+    )
+    rollout_organizations = models.ManyToManyField(
+        "organizations.Organization", blank=True,
+        related_name="extraction_rollout",
+        verbose_name="OCR-first for these organisations only",
+        help_text=(
+            "Organisations on the OCR-first route even while the global "
+            "switch above is off. Lets a route be proven on one client "
+            "before it reaches the rest."
+        ),
+    )
+
+    # --- models and detail -------------------------------------------
+    vision_model = models.CharField(
+        max_length=64, blank=True, default="",
+        help_text="Empty = follow EXTRACTION_VISION_MODEL (gpt-4o).",
+    )
+    text_model = models.CharField(
+        max_length=64, blank=True, default="",
+        help_text="Empty = follow EXTRACTION_TEXT_MODEL (gpt-4o-mini).",
+    )
+    vision_detail = models.CharField(
+        max_length=8, blank=True, default="", choices=DETAIL_CHOICES,
+        help_text=(
+            "Image detail on the vision call. Only drop to low with OCR "
+            "assist on — on its own it trades accuracy for fractions of a "
+            "cent. Empty = follow EXTRACTION_VISION_DETAIL."
+        ),
+    )
+
+    # --- when OCR text is considered good enough ----------------------
+    ocr_min_confidence = models.FloatField(
+        null=True, blank=True,
+        help_text=(
+            "Below this mean OCR confidence the page goes to the vision "
+            "model. Note: measured here, confidence did NOT predict whether "
+            "the answer was right. Empty = follow "
+            "EXTRACTION_OCR_MIN_CONFIDENCE (0.90)."
+        ),
+    )
+    ocr_min_chars = models.IntegerField(
+        null=True, blank=True,
+        help_text=(
+            "A near-empty page read confidently is the handwriting case: "
+            "send the image. Empty = follow EXTRACTION_OCR_MIN_CHARS."
+        ),
+    )
+
+    # --- upload handling ----------------------------------------------
+    split_batches = models.BooleanField(
+        null=True, blank=True, verbose_name="Split batch scans",
+        help_text=(
+            "Split an upload that OCR says is several bills in one file. "
+            "Empty = follow EXTRACTION_SPLIT_BATCHES."
+        ),
+    )
+
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="+",
+    )
+
+    class Meta:
+        verbose_name = "Extraction Settings"
+        verbose_name_plural = "Extraction Settings"
+
+    def __str__(self):
+        return "Extraction Settings"
+
+    def save(self, *args, **kwargs):
+        self.pk = self.SINGLETON_PK
+        super().save(*args, **kwargs)
+        from apps.common.extraction_config import invalidate_extraction_config
+        invalidate_extraction_config()
+
+    def delete(self, *args, **kwargs):
+        """Refuse to delete: the row is the configuration, not a record."""
+        return
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=cls.SINGLETON_PK)
+        return obj

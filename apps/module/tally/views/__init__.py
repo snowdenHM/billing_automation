@@ -35,6 +35,17 @@ from .bill_status import update_bill_tally_sync_status
 from .health import tally_health_ping, tally_health_status
 
 # Vendor bill views
+from .sales_bills import (
+    sales_bills_list,
+    sales_bills_upload,
+    sales_bill_detail,
+    sales_bill_delete,
+    sales_bill_analyze,
+    sales_bill_verify,
+    sales_bill_sync,
+    sales_bills_sync_list,
+    sales_bill_sync_external,
+)
 from .vendor_bills import (
     vendor_bills_list,
     vendor_bills_upload,
@@ -61,6 +72,20 @@ from .expense_bills import (
 )
 
 # Payment voucher views (structural clone of expense — see payment_bills.py)
+# Receipt voucher views (structural clone of payment — see receipt_bills.py)
+from .receipt_bills import (
+    receipt_bills_list,
+    receipt_bills_upload,
+    receipt_bill_detail,
+    receipt_bill_delete,
+    receipt_bill_analyze,
+    receipt_bill_verify,
+    receipt_bill_sync,
+    receipt_bills_sync_list,
+    receipt_bill_sync_external,
+    process_receipt_analysis_data,
+)
+
 from .payment_bills import (
     payment_bills_list,
     payment_bills_upload,
@@ -124,6 +149,25 @@ __all__ = [
     "vendor_bill_sync",
     "vendor_bills_sync_list",
     "vendor_bill_sync_external",
+    "sales_bills_list",
+    "sales_bills_upload",
+    "sales_bill_detail",
+    "sales_bill_delete",
+    "sales_bill_analyze",
+    "sales_bill_verify",
+    "sales_bill_sync",
+    "sales_bills_sync_list",
+    "sales_bill_sync_external",
+    "receipt_bills_list",
+    "receipt_bills_upload",
+    "receipt_bill_detail",
+    "receipt_bill_delete",
+    "receipt_bill_analyze",
+    "receipt_bill_verify",
+    "receipt_bill_sync",
+    "receipt_bills_sync_list",
+    "receipt_bill_sync_external",
+    "process_receipt_analysis_data",
     # Expense bills
     "expense_bills_list",
     "expense_bills_upload",

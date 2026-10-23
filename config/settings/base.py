@@ -615,6 +615,24 @@ OPENAI_MAX_RETRIES = env.int("OPENAI_MAX_RETRIES", default=2)
 # common path becomes OCR text to a small model and only the rest costs a
 # vision call.
 EXTRACTION_OCR_FIRST = env.bool("EXTRACTION_OCR_FIRST", default=False)
+# A different trade from EXTRACTION_OCR_FIRST, and independent of it.
+# Rather than REPLACING the image with OCR text, send both: the text
+# carries the characters, the page carries the layout. The image can
+# then go at "low" detail, which is a flat 85 tokens against roughly
+# 1,200 for a high-detail scan.
+#
+# Measured on this client's bills: input 1,232 -> 372 tokens, about 27%
+# off the call once output is counted (output is the larger half of the
+# bill either way). Unlike the OCR-first route this cannot read LESS
+# than today — the model still sees the whole page — so the risk is
+# confusion from bad OCR text, not blindness.
+#
+# Off by default until it has been scored against the current route.
+EXTRACTION_OCR_ASSIST = env.bool("EXTRACTION_OCR_ASSIST", default=False)
+# Per-image detail for the vision call. "low" is only safe alongside
+# EXTRACTION_OCR_ASSIST; on its own it would cost accuracy to save
+# fractions of a cent.
+EXTRACTION_VISION_DETAIL = env.str("EXTRACTION_VISION_DETAIL", default="high")
 # Runs the new route alongside the old one and logs what it would have
 # produced, while still returning the old result. Costs both calls; meant
 # for a few weeks on a subset before EXTRACTION_OCR_FIRST is turned on.

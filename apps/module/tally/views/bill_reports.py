@@ -30,6 +30,10 @@ from ..models import (
     TallyExpenseBill,
     TallyPaymentAnalyzedBill,
     TallyPaymentBill,
+    TallyReceiptAnalyzedBill,
+    TallyReceiptBill,
+    TallySalesAnalyzedBill,
+    TallySalesBill,
     TallyVendorAnalyzedBill,
     TallyVendorBill,
 )
@@ -200,4 +204,38 @@ def tally_payment_bills_report(request, org_id):
         row_builder=rows_from_expense_analyzed,
         filename_stub="tally-payment-vouchers",
         sheet_title="Payment Vouchers",
+    )
+
+
+@extend_schema(summary="Download Tally Sales Voucher report (xlsx)", tags=["Tally · Reports"])
+@requires(roles.EXPORT_REPORTS)
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated, HasOrgPermission])
+def tally_sales_bills_report(request, org_id):
+    return _build_and_stream(
+        request,
+        org_id,
+        bill_model=TallySalesBill,
+        analyzed_model=TallySalesAnalyzedBill,
+        analyzed_bill_related_name="analysed_headers",
+        row_builder=rows_from_vendor_analyzed,
+        filename_stub="tally-sales-vouchers",
+        sheet_title="Sales Vouchers",
+    )
+
+
+@extend_schema(summary="Download Tally Receipt Voucher report (xlsx)", tags=["Tally · Reports"])
+@requires(roles.EXPORT_REPORTS)
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated, HasOrgPermission])
+def tally_receipt_bills_report(request, org_id):
+    return _build_and_stream(
+        request,
+        org_id,
+        bill_model=TallyReceiptBill,
+        analyzed_model=TallyReceiptAnalyzedBill,
+        analyzed_bill_related_name="analysed_headers",
+        row_builder=rows_from_expense_analyzed,
+        filename_stub="tally-receipt-vouchers",
+        sheet_title="Receipt Vouchers",
     )

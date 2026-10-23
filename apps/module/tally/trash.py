@@ -15,6 +15,8 @@ from apps.common.models import get_trash_retention_days, trash_cutoff
 from apps.module.tally.models import (
     TallyExpenseBill,
     TallyPaymentBill,
+    TallyReceiptBill,
+    TallySalesBill,
     TallyVendorBill,
 )
 
@@ -51,6 +53,12 @@ TRASH_KINDS = {
     ),
     "payment-voucher": TrashKind(
         "payment-voucher", TallyPaymentBill, "Payment Voucher", "/tally/payment-voucher"
+    ),
+    "sales-voucher": TrashKind(
+        "sales-voucher", TallySalesBill, "Sales Voucher", "/tally/sales-bill"
+    ),
+    "receipt-voucher": TrashKind(
+        "receipt-voucher", TallyReceiptBill, "Receipt Voucher", "/tally/receipt-voucher"
     ),
 }
 

@@ -20,7 +20,10 @@ from apps.common.services.tasks import (
     update_bill_duplicate_fields,
 )
 
-from .models import TallyExpenseBill, TallyPaymentBill, TallyVendorBill
+from .models import (
+    TallyExpenseBill, TallyPaymentBill, TallyReceiptBill, TallySalesBill,
+    TallyVendorBill,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,16 +32,24 @@ __all__ = [
     "enqueue_vendor_bill_processing",
     "enqueue_expense_bill_processing",
     "enqueue_payment_bill_processing",
+    "enqueue_sales_bill_processing",
+    "enqueue_receipt_bill_processing",
     "enqueue_pdf_split_vendor",
     "enqueue_pdf_split_expense",
     "enqueue_pdf_split_payment",
+    "enqueue_pdf_split_sales",
+    "enqueue_pdf_split_receipt",
     "get_job_status",
     "process_vendor_bill_analysis",
     "process_expense_bill_analysis",
     "process_payment_bill_analysis",
+    "process_sales_bill_analysis",
+    "process_receipt_bill_analysis",
     "split_pdf_bill_vendor",
     "split_pdf_bill_expense",
     "split_pdf_bill_payment",
+    "split_pdf_bill_sales",
+    "split_pdf_bill_receipt",
     "process_multiple_bills",
 ]
 
@@ -60,6 +71,16 @@ def enqueue_expense_bill_processing(bill_id):
 def enqueue_payment_bill_processing(bill_id):
     """Enqueue a payment voucher for background processing."""
     return enqueue_bill_processing(process_payment_bill_analysis, bill_id)
+
+
+def enqueue_sales_bill_processing(bill_id):
+    """Enqueue a sales invoice for background processing."""
+    return enqueue_bill_processing(process_sales_bill_analysis, bill_id)
+
+
+def enqueue_receipt_bill_processing(bill_id):
+    """Enqueue a receipt voucher for background processing."""
+    return enqueue_bill_processing(process_receipt_bill_analysis, bill_id)
 
 
 def enqueue_pdf_split_vendor(bill_id):
@@ -169,6 +190,34 @@ def split_pdf_bill_payment(bill_id, **kwargs):
     )
 
 
+def enqueue_pdf_split_receipt(bill_id):
+    """Enqueue the page-by-page splitting of a placeholder receipt-voucher PDF."""
+    return enqueue_bill_processing(split_pdf_bill_receipt, bill_id)
+
+
+def split_pdf_bill_receipt(bill_id, **kwargs):
+    """RQ entry point: split a placeholder receipt-voucher PDF into per-page bills."""
+    return _split_pdf_placeholder(
+        bill_id,
+        model_class=TallyReceiptBill,
+        enqueue_analysis_fn=enqueue_receipt_bill_processing,
+    )
+
+
+def enqueue_pdf_split_sales(bill_id):
+    """Enqueue the page-by-page splitting of a placeholder sales-invoice PDF."""
+    return enqueue_bill_processing(split_pdf_bill_sales, bill_id)
+
+
+def split_pdf_bill_sales(bill_id, **kwargs):
+    """RQ entry point: split a placeholder sales-invoice PDF into per-page bills."""
+    return _split_pdf_placeholder(
+        bill_id,
+        model_class=TallySalesBill,
+        enqueue_analysis_fn=enqueue_sales_bill_processing,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Task processors
 # ---------------------------------------------------------------------------
@@ -183,6 +232,8 @@ def _requeue_analysis(model_class):
         TallyVendorBill: enqueue_vendor_bill_processing,
         TallyExpenseBill: enqueue_expense_bill_processing,
         TallyPaymentBill: enqueue_payment_bill_processing,
+        TallySalesBill: enqueue_sales_bill_processing,
+        TallyReceiptBill: enqueue_receipt_bill_processing,
     }
     return mapping[model_class]
 
@@ -357,6 +408,31 @@ def process_payment_bill_analysis(bill_id, **kwargs):
         model_class=TallyPaymentBill,
         get_functions=lambda: (analyze_payment_bill_with_ai, check_duplicate_tally_payment_bill),
         bill_type="payment",
+    )
+
+
+def process_receipt_bill_analysis(bill_id, **kwargs):
+    """Background task: AI-analyse a receipt voucher, then check duplicates."""
+    from .bill_processors import check_duplicate_tally_receipt_bill
+    from .views.receipt_bills import analyze_receipt_bill_with_ai
+
+    return _process_tally_bill(
+        bill_id,
+        model_class=TallyReceiptBill,
+        get_functions=lambda: (analyze_receipt_bill_with_ai, check_duplicate_tally_receipt_bill),
+        bill_type="receipt",
+    )
+
+
+def process_sales_bill_analysis(bill_id, **kwargs):
+    """Background task: AI-analyse a sales invoice, then check duplicates."""
+    from .bill_processors import analyze_sales_bill_with_ai, check_duplicate_tally_sales_bill
+
+    return _process_tally_bill(
+        bill_id,
+        model_class=TallySalesBill,
+        get_functions=lambda: (analyze_sales_bill_with_ai, check_duplicate_tally_sales_bill),
+        bill_type="sales",
     )
 
 

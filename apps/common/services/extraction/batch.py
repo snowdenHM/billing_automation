@@ -48,7 +48,9 @@ def maybe_split(bill, *, enqueue_analysis_fn):
     True means the caller must stop: this bill has been replaced by the
     ones that came out of it, and each has its own job queued.
     """
-    if not getattr(settings, "EXTRACTION_SPLIT_BATCHES", False):
+    from apps.common.extraction_config import get_extraction_config
+
+    if not get_extraction_config().split_batches:
         return False
 
     name = (getattr(bill.file, "name", "") or "").lower()

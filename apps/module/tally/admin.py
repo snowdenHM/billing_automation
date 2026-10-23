@@ -21,6 +21,12 @@ from .models import (
     TallyExpenseConsolidatedProduct,
     TallyPaymentBill,
     TallyPaymentAnalyzedBill,
+    TallySalesBill,
+    TallySalesAnalyzedBill,
+    TallySalesAnalyzedProduct,
+    TallyReceiptBill,
+    TallyReceiptAnalyzedBill,
+    TallyReceiptAnalyzedProduct,
     TallyPaymentAnalyzedProduct,
     TallyPaymentConsolidatedProduct,
     StockItem
@@ -852,3 +858,65 @@ class TallyPaymentConsolidatedProductAdmin(BaseOrgAdmin):
         return super().get_queryset(request).select_related(
             "organization", "payment_bill", "payment_bill__selected_bill",
         )
+
+
+# ============================================================================
+# Sales Vouchers
+# ============================================================================
+
+@admin.register(TallySalesBill)
+class TallySalesBillAdmin(_TallyBillAdminBase):
+    """Admin interface for Tally Sales Invoices."""
+    pass
+
+
+class TallySalesAnalyzedProductInline(UnfoldTabularInline):
+    model = TallySalesAnalyzedProduct
+    extra = 0
+    fields = ("item_name", "taxes", "price", "quantity", "amount", "product_gst")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(TallySalesAnalyzedBill)
+class TallySalesAnalyzedBillAdmin(BaseOrgAdmin):
+    list_display = ("__str__", "customer", "bill_no", "bill_date", "due_date", "total", "organization")
+    # ``customer`` is printed on every row; without the join each row
+    # costs an extra query just to render the party's name.
+    list_select_related = ("customer", "organization")
+    list_filter = (("organization", admin.RelatedOnlyFieldListFilter), "created_at", "bill_date")
+    search_fields = ("bill_no", "customer__name", "selected_bill__bill_munshi_name")
+    inlines = [TallySalesAnalyzedProductInline]
+    autocomplete_fields = ("organization", "customer", "selected_bill")
+    readonly_fields = ("created_at",)
+    date_hierarchy = "created_at"
+    list_per_page = 50
+
+
+# ============================================================================
+# Receipt Vouchers
+# ============================================================================
+
+@admin.register(TallyReceiptBill)
+class TallyReceiptBillAdmin(_TallyBillAdminBase):
+    """Admin interface for Tally Receipt Vouchers."""
+    pass
+
+
+class TallyReceiptAnalyzedProductInline(UnfoldTabularInline):
+    model = TallyReceiptAnalyzedProduct
+    extra = 0
+    fields = ("item_details", "chart_of_accounts", "amount", "debit_or_credit")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(TallyReceiptAnalyzedBill)
+class TallyReceiptAnalyzedBillAdmin(BaseOrgAdmin):
+    list_display = ("__str__", "customer", "bill_no", "bill_date", "total", "organization")
+    list_select_related = ("customer", "organization")
+    list_filter = (("organization", admin.RelatedOnlyFieldListFilter), "created_at", "bill_date")
+    search_fields = ("bill_no", "customer__name", "selected_bill__bill_munshi_name", "voucher")
+    inlines = [TallyReceiptAnalyzedProductInline]
+    autocomplete_fields = ("organization", "customer", "selected_bill")
+    readonly_fields = ("created_at",)
+    date_hierarchy = "created_at"
+    list_per_page = 50

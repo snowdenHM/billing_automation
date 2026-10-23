@@ -294,6 +294,9 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
             "chart_of_accounts_parents", "chart_of_accounts_expense_parents",
             "tds_parents", "payment_parents",
             "round_off_parents", "cess_parents", "discount_parents", "freight_parents",
+            # Sales side.
+            "customer_parents", "sales_coa_parents", "receipt_parents",
+            "rcm_parents",
         ]
         if parent_type not in valid_parent_types:
             return Response(

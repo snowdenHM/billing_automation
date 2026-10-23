@@ -22,6 +22,8 @@ _BILL_KINDS = {
     "TallyVendorBill": (BillActivity.Module.TALLY, BillActivity.BillType.VENDOR),
     "TallyExpenseBill": (BillActivity.Module.TALLY, BillActivity.BillType.EXPENSE),
     "TallyPaymentBill": (BillActivity.Module.TALLY, BillActivity.BillType.PAYMENT),
+    "TallySalesBill": (BillActivity.Module.TALLY, BillActivity.BillType.SALES),
+    "TallyReceiptBill": (BillActivity.Module.TALLY, BillActivity.BillType.RECEIPT),
     "VendorBill": (BillActivity.Module.ZOHO, BillActivity.BillType.VENDOR),
     "ExpenseBill": (BillActivity.Module.ZOHO, BillActivity.BillType.EXPENSE),
     "JournalBill": (BillActivity.Module.ZOHO, BillActivity.BillType.JOURNAL),

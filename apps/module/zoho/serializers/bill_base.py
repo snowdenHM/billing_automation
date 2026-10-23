@@ -111,7 +111,11 @@ class BaseZohoBillDetailSerializer(serializers.Serializer):
     id = serializers.UUIDField(read_only=True)
     billmunshiName = serializers.CharField(read_only=True)
     bill_munshi_name = serializers.CharField(source="billmunshiName", read_only=True)
-    file = serializers.FileField(read_only=True)
+    # Signed, like the list serializer's. A bare FileField yields the
+    # unsigned ``/media/bills/…`` URL, which ``serve_bill_file`` refuses
+    # — the document pane then reads "You do not have access to this
+    # file" where the bill should be.
+    file = serializers.SerializerMethodField()
     fileType = serializers.CharField(read_only=True)
     file_type = serializers.CharField(source="fileType", read_only=True)
     status = serializers.CharField(read_only=True)
@@ -125,6 +129,14 @@ class BaseZohoBillDetailSerializer(serializers.Serializer):
 
     # Subclasses must set this
     zoho_bill_serializer_class = None
+
+    def get_file(self, obj):
+        """A short-lived, HMAC-signed URL for the bill file."""
+        if not getattr(obj, "file", None):
+            return None
+        return generate_signed_bill_file_url(
+            obj.file, request=self.context.get("request")
+        )
 
     def get_zoho_bill(self, obj):
         """Re-serialize the nested zoho_bill with organization context."""

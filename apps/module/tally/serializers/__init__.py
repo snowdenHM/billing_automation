@@ -28,6 +28,15 @@ from .expense_serializers import (
     ExpenseBillVerificationSerializer,
     ExpenseBillSyncResponseSerializer
 )
+from .sales_serializers import (
+    TallySalesBillSerializer,
+    TallySalesBillDetailSerializer,
+    TallySalesAnalyzedBillSerializer,
+    TallySalesAnalyzedProductSerializer,
+    SalesBillUploadSerializer,
+    SalesBillVerificationSerializer,
+    SalesBillSyncResponseSerializer,
+)
 from .payment_serializers import (
     TallyPaymentBillSerializer,
     TallyPaymentBillDetailSerializer,
@@ -39,9 +48,22 @@ from .payment_serializers import (
     PaymentBillSyncResponseSerializer,
 )
 
+from .receipt_serializers import (
+    TallyReceiptBillSerializer,
+    TallyReceiptBillDetailSerializer,
+    TallyReceiptAnalyzedBillSerializer,
+    TallyReceiptAnalyzedProductSerializer,
+    ReceiptBillUploadSerializer,
+    ReceiptBillAnalysisRequestSerializer,
+    ReceiptBillVerificationSerializer,
+    ReceiptBillSyncResponseSerializer,
+)
+
 # Backward compatibility - alias for expense sync request
 ExpenseBillSyncRequestSerializer = BillSyncRequestSerializer
 PaymentBillSyncRequestSerializer = BillSyncRequestSerializer
+SalesBillSyncRequestSerializer = BillSyncRequestSerializer
+ReceiptBillSyncRequestSerializer = BillSyncRequestSerializer
 
 __all__ = [
     # Base classes
@@ -88,4 +110,23 @@ __all__ = [
     'PaymentBillVerificationSerializer',
     'PaymentBillSyncRequestSerializer',
     'PaymentBillSyncResponseSerializer',
+    # Sales Voucher
+    'TallySalesBillSerializer',
+    'TallySalesBillDetailSerializer',
+    'TallySalesAnalyzedBillSerializer',
+    'TallySalesAnalyzedProductSerializer',
+    'SalesBillUploadSerializer',
+    'SalesBillVerificationSerializer',
+    'SalesBillSyncRequestSerializer',
+    'SalesBillSyncResponseSerializer',
+    # Receipt Voucher
+    'TallyReceiptBillSerializer',
+    'TallyReceiptBillDetailSerializer',
+    'TallyReceiptAnalyzedBillSerializer',
+    'TallyReceiptAnalyzedProductSerializer',
+    'ReceiptBillUploadSerializer',
+    'ReceiptBillAnalysisRequestSerializer',
+    'ReceiptBillVerificationSerializer',
+    'ReceiptBillSyncRequestSerializer',
+    'ReceiptBillSyncResponseSerializer',
 ]

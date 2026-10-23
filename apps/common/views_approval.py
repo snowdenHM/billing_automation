@@ -27,12 +27,13 @@ logger = logging.getLogger(__name__)
 def _bill_models():
     """The six bill models, imported late to stay clear of app loading."""
     from apps.module.tally.models import (
-        TallyExpenseBill, TallyPaymentBill, TallyVendorBill,
+        TallyExpenseBill, TallyPaymentBill, TallyReceiptBill, TallySalesBill,
+        TallyVendorBill,
     )
     from apps.module.zoho.models import ExpenseBill, JournalBill, VendorBill
 
-    return (TallyVendorBill, TallyExpenseBill, TallyPaymentBill,
-            VendorBill, ExpenseBill, JournalBill)
+    return (TallyVendorBill, TallyExpenseBill, TallyPaymentBill, TallySalesBill,
+            TallyReceiptBill, VendorBill, ExpenseBill, JournalBill)
 
 
 def find_bill(bill_id, organization):

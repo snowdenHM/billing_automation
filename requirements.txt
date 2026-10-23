@@ -68,3 +68,11 @@ typing-inspection
 tzdata
 uritemplate
 urllib3
+
+# On-device OCR for the text-first extraction route. Pulls onnxruntime
+# and ~300MB of model weights on first use, so the image gets bigger and
+# the first bill after a deploy is slower than the rest.
+#
+# Apache-2.0 code; the model WEIGHTS are Modified OpenRAIL-M, which
+# carries use restrictions — reviewed and accepted for this deployment.
+indra-ocr==1.1.2

@@ -134,7 +134,7 @@ class TallyExpenseAnalyzedBillSerializer(serializers.ModelSerializer):
             'other_adjustment', 'other_adjustment_taxes', 'other_adjustment_debit_or_credit',
             # round_off was missing → save persisted but reload dropped it.
             'round_off', 'round_off_taxes', 'round_off_debit_or_credit',
-            'note', 'consolidate', 'products', 'created_at'
+            'note', 'consolidate', 'is_reverse_charge', 'products', 'created_at'
         ]
         read_only_fields = ['id', 'created_at', 'vendor_name', 'selected_bill_name', 'products']
 

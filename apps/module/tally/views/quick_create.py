@@ -155,6 +155,86 @@ def quick_create_vendor(request, org_id):
 
 
 # ---------------------------------------------------------------------------
+# Customer (sales party)
+# ---------------------------------------------------------------------------
+
+@extend_schema(
+    summary="Quick-create Customer ledger",
+    description=(
+        "Creates a customer Ledger for the sales side. Same as the vendor "
+        "create, with Sundry Debtors as the default parent."
+    ),
+    request={
+        "application/json": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+                "name": {"type": "string"},
+                "gst_in": {"type": "string"},
+                "parent_ledger_id": {"type": "string", "format": "uuid"},
+                "parent_ledger_name": {"type": "string"},
+                "alias": {"type": "string"},
+                "opening_balance": {"type": "number"},
+            },
+        },
+    },
+    responses={201: LedgerSerializer},
+    tags=["Tally · Quick Create"],
+)
+@requires(roles.MANAGE_MASTERS)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, HasOrgPermission])
+def quick_create_customer(request, org_id):
+    organization = get_organization_from_request(request, org_id)
+    if not organization:
+        return _org_not_found_response(org_id)
+
+    data = request.data or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return Response(
+            {"error": "MISSING_NAME", "message": "Customer name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Ledger names are unique per organisation across both sides, so a
+    # customer that shares a name with an existing vendor is reported as
+    # the duplicate it is rather than quietly creating a second ledger
+    # Tally would rename to "XYZ (2)".
+    existing = Ledger.objects.filter(organization=organization, name__iexact=name).first()
+    if existing:
+        return Response(
+            {
+                "error": "DUPLICATE_LEDGER",
+                "message": f"A ledger named '{name}' already exists in this organization.",
+                "existing_ledger": LedgerSerializer(existing, context={"request": request}).data,
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    parent = _resolve_parent_ledger(
+        organization=organization,
+        parent_id=data.get("parent_ledger_id"),
+        parent_name=data.get("parent_ledger_name") or "Sundry Debtors",
+    )
+
+    with transaction.atomic():
+        ledger = Ledger.objects.create(
+            organization=organization,
+            name=name,
+            parent=parent,
+            gst_in=(data.get("gst_in") or "").strip() or None,
+            alias=(data.get("alias") or "").strip() or None,
+            opening_balance=data.get("opening_balance") or 0,
+            source=SyncSource.BILLMUNSHI,
+            tally_synced=False,
+        )
+
+    serializer = LedgerSerializer(ledger, context={"request": request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+# ---------------------------------------------------------------------------
 # Ledger (Purchase / Expense — anything that isn't a vendor)
 # ---------------------------------------------------------------------------
 
