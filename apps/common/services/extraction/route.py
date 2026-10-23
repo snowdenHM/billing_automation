@@ -56,7 +56,7 @@ def choose_route(ocr_result):
     return "text", f"OCR confidence {ocr_result.mean_confidence:.2f}"
 
 
-def analyse(prompt, *, image_b64, mime, file_path=None, file_bytes=None,
+def analyse(prompt, *, images, mime, file_path=None, file_bytes=None,
             extension=None):
     """Extract a bill, cheaply where that is safe. Returns ``(json, telemetry)``.
 
@@ -65,7 +65,7 @@ def analyse(prompt, *, image_b64, mime, file_path=None, file_bytes=None,
     attempt.
     """
     from apps.common.services.bill_analysis import (
-        call_ocr_analysis, call_text_analysis,
+        call_text_analysis, call_vision_analysis,
     )
 
     text_model = _setting("EXTRACTION_TEXT_MODEL", "gpt-4o-mini")
@@ -87,12 +87,12 @@ def analyse(prompt, *, image_b64, mime, file_path=None, file_bytes=None,
             return data, telemetry
         except Exception as exc:
             # The cheap path failing is not the bill failing.
-            logger.warning("Text extraction failed (%s); using %s on the image",
+            logger.warning("Text extraction failed (%s); using %s on the pages",
                            exc, vision_model)
             telemetry["text_model_error"] = f"{type(exc).__name__}: {exc}"[:200]
             telemetry["route"] = "vision"
             telemetry["route_reason"] = "text model failed"
 
-    data = call_ocr_analysis(image_b64, mime, prompt, model=vision_model)
+    data = call_vision_analysis(images, mime, prompt, model=vision_model)
     telemetry["model"] = vision_model
     return data, telemetry

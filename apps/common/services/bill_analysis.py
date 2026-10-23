@@ -141,6 +141,73 @@ def _prepare_pdf_image_from_bytes(pdf_bytes):
     return base64.b64encode(buf.read()).decode("utf-8"), "image/jpeg"
 
 
+# Most bills are one or two pages. The cap stops a batch scan that slipped
+# through as a single bill from costing a hundred page-images in one call.
+MAX_BILL_PAGES = 8
+
+
+def _encode_page(image):
+    """One rendered PDF page as base64 JPEG, enhanced for reading."""
+    from PIL import Image, ImageEnhance
+
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    image = ImageEnhance.Contrast(image).enhance(1.2)
+    image = ImageEnhance.Sharpness(image).enhance(1.1)
+
+    width, height = image.size
+    if width < 1000 or height < 1000:
+        scale = max(1000 / width, 1000 / height)
+        image = image.resize((int(width * scale), int(height * scale)),
+                             Image.Resampling.LANCZOS)
+
+    buf = BytesIO()
+    image.save(buf, format="JPEG", quality=95)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode("utf-8")
+
+
+def _pdf_pages_from_bytes(pdf_bytes):
+    """Every page of a PDF, not just the first.
+
+    Rendering only page one meant a multi-page invoice silently lost
+    everything after it — including the totals, which sit on the last
+    page. The single-page helpers above are left as they were; this is
+    what the analysis path uses now.
+    """
+    from pdf2image import convert_from_bytes
+
+    if not pdf_bytes.startswith(b"%PDF"):
+        raise ValueError("Invalid PDF file format")
+    if len(pdf_bytes) < 100:
+        raise ValueError("PDF file too small (possibly corrupted)")
+
+    images = convert_from_bytes(
+        pdf_bytes, first_page=1, last_page=MAX_BILL_PAGES, dpi=200, fmt="jpeg",
+    )
+    if not images:
+        raise ValueError("No images generated from PDF")
+    return [_encode_page(i) for i in images], "image/jpeg"
+
+
+def prepare_bill_pages(file_path, file_name):
+    """``(list_of_base64, mime)`` for a bill on disk. Images give one page."""
+    if file_name.lower().endswith(".pdf"):
+        with open(file_path, "rb") as f:
+            return _pdf_pages_from_bytes(f.read())
+    b64, mime = _prepare_raw_image(file_path, file_name.lower())
+    return [b64], mime
+
+
+def prepare_bill_pages_from_bytes(file_content, file_extension):
+    """``(list_of_base64, mime)`` from raw bytes."""
+    ext = (file_extension or "").lower().lstrip(".")
+    if ext == "pdf":
+        return _pdf_pages_from_bytes(file_content)
+    b64, mime = prepare_bill_image_from_bytes(file_content, file_extension)
+    return [b64], mime
+
+
 def _prepare_raw_image(file_path, file_name_lower):
     """Read an image file and return its base64 encoding + MIME type."""
     with open(file_path, "rb") as f:
@@ -271,7 +338,7 @@ def _record_extraction(bill, telemetry):
                          getattr(bill, "pk", "?"))
 
 
-def _extract(prompt, image_b64, mime, *, file_path=None, file_bytes=None,
+def _extract(prompt, images, mime, *, file_path=None, file_bytes=None,
              extension=None, bill=None):
     """Vision on the image, unless the OCR-first route is switched on.
 
@@ -281,7 +348,7 @@ def _extract(prompt, image_b64, mime, *, file_path=None, file_bytes=None,
     here rather than failing the bill.
     """
     if not _ocr_first_enabled(bill):
-        live = call_ocr_analysis(image_b64, mime, prompt)
+        live = call_vision_analysis(images, mime, prompt)
         if getattr(settings, "EXTRACTION_OCR_SHADOW", False):
             from apps.common.services.extraction.route import analyse
 
@@ -290,7 +357,7 @@ def _extract(prompt, image_b64, mime, *, file_path=None, file_bytes=None,
             # Costs both calls; that is the price of finding out safely.
             try:
                 shadow, telemetry = analyse(
-                    prompt, image_b64=image_b64, mime=mime,
+                    prompt, images=images, mime=mime,
                     file_path=file_path, file_bytes=file_bytes, extension=extension,
                 )
                 telemetry.pop("ocr_text", None)
@@ -306,7 +373,7 @@ def _extract(prompt, image_b64, mime, *, file_path=None, file_bytes=None,
 
     try:
         data, telemetry = analyse(
-            prompt, image_b64=image_b64, mime=mime,
+            prompt, images=images, mime=mime,
             file_path=file_path, file_bytes=file_bytes, extension=extension,
         )
         # Strip the document text first. Everything below either logs or
@@ -319,8 +386,8 @@ def _extract(prompt, image_b64, mime, *, file_path=None, file_bytes=None,
         _record_extraction(bill, telemetry)
         return data
     except Exception:
-        logger.exception("OCR-first route failed; using vision on the image")
-        return call_ocr_analysis(image_b64, mime, prompt)
+        logger.exception("OCR-first route failed; using vision on the pages")
+        return call_vision_analysis(images, mime, prompt)
 
 
 def analyze_bill_bytes(file_content, file_extension, prompt, bill=None):
@@ -329,8 +396,8 @@ def analyze_bill_bytes(file_content, file_extension, prompt, bill=None):
     Convenience wrapper for Zoho-style callers that receive ``(bytes, ext)``
     instead of ``(file_path, file_name)``.
     """
-    image_b64, mime = prepare_bill_image_from_bytes(file_content, file_extension)
-    json_data = _extract(prompt, image_b64, mime, file_bytes=file_content,
+    images, mime = prepare_bill_pages_from_bytes(file_content, file_extension)
+    json_data = _extract(prompt, images, mime, file_bytes=file_content,
                          extension=file_extension, bill=bill)
     return _with_checks(reconcile_item_line_amounts(ensure_gst_fields(json_data)))
 
@@ -365,6 +432,36 @@ def call_ocr_analysis(image_base64, mime_type, prompt, model=None,
         max_tokens=max_tokens,
         temperature=temperature,
     )
+
+
+def call_vision_analysis(images, mime_type, prompt, model=None,
+                         max_tokens=2000, temperature=0.1):
+    """Send every page of a bill to the vision model in one call.
+
+    ``images`` is a list of base64 strings, one per page, in order. Sending
+    them together rather than one at a time is the point: a total on page
+    three belongs to the items on page one, and two separate calls cannot
+    put them back together.
+    """
+    client = _get_openai_client()
+    model = model or getattr(settings, "EXTRACTION_VISION_MODEL", "gpt-4o")
+
+    content = [{"type": "text", "text": prompt}]
+    if len(images) > 1:
+        content.append({"type": "text", "text":
+            f"This bill has {len(images)} pages, in order. Read them as one "
+            "document: later pages continue the item list and usually carry "
+            "the totals."})
+    for b64 in images:
+        content.append({"type": "image_url", "image_url": {
+            "url": f"data:{mime_type};base64,{b64}", "detail": "high"}})
+
+    response = client.chat.completions.create(
+        model=model, response_format={"type": "json_object"},
+        messages=[{"role": "user", "content": content}],
+        max_tokens=max_tokens, temperature=temperature,
+    )
+    return parse_openai_json_response(response.choices[0].message.content)
 
 
 def call_text_analysis(document_text, prompt, model=None,
@@ -1070,6 +1167,6 @@ def analyze_bill_file(file_path, file_name, prompt, bill=None):
         ``dict`` — the extracted JSON data (with GST fields ensured).
     Raises on failure.
     """
-    image_b64, mime = prepare_bill_image(file_path, file_name)
-    json_data = _extract(prompt, image_b64, mime, file_path=file_path, bill=bill)
+    images, mime = prepare_bill_pages(file_path, file_name)
+    json_data = _extract(prompt, images, mime, file_path=file_path, bill=bill)
     return _with_checks(reconcile_item_line_amounts(ensure_gst_fields(json_data)))
