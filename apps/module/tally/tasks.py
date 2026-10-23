@@ -173,6 +173,20 @@ def split_pdf_bill_payment(bill_id, **kwargs):
 # Task processors
 # ---------------------------------------------------------------------------
 
+def _requeue_analysis(model_class):
+    """The enqueue function for whichever bill type is being split.
+
+    Looked up by model rather than passed down, so the splitter stays
+    free of the module-specific task functions.
+    """
+    mapping = {
+        TallyVendorBill: enqueue_vendor_bill_processing,
+        TallyExpenseBill: enqueue_expense_bill_processing,
+        TallyPaymentBill: enqueue_payment_bill_processing,
+    }
+    return mapping[model_class]
+
+
 def _screen_document_is_bill(bill, bill_type):
     """Return True when ``bill``'s file looks like a bill worth analysing.
 
@@ -243,6 +257,18 @@ def _process_tally_bill(bill_id, *, model_class, get_functions, bill_type):
         logger.info("Starting background analysis for %s bill %s", bill_type, bill_id)
 
         analyze_fn, duplicate_fn = get_functions()
+
+        # Step -1 — is this one bill, or a stack of them in one file?
+        #
+        # People scan a pile of shop bills into a single PDF. Read whole it
+        # becomes one voucher carrying several vendors' items; split, it
+        # becomes the bills it actually is. The decision needs an OCR pass,
+        # which is why it lives here and not in the upload request. When it
+        # splits, this job is done — each new bill has its own queued.
+        from apps.common.services.extraction.batch import maybe_split
+
+        if maybe_split(bill, enqueue_analysis_fn=_requeue_analysis(model_class)):
+            return f"Split {bill_type} bill {bill_id} into separate bills"
 
         # Step 0 — is this even a bill?
         #

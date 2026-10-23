@@ -144,3 +144,51 @@ def enqueue_pdf_split_async(
     from django.db import transaction
     transaction.on_commit(_schedule)
     return [placeholder]
+
+
+def split_pdf_by_groups(pdf_bytes, groups, organization, file_type, uploaded_by,
+                        bill_model, filename_prefix="BM-Bill"):
+    """One bill per group of pages, each keeping its pages together as a PDF.
+
+    ``split_pdf_to_bills`` makes one bill per page, which is right for a
+    batch of single-page shop bills and wrong for a three-page invoice.
+    This takes the grouping decided from the OCR text and gives each group
+    its own sub-PDF, so a bill that runs across pages stays one bill.
+
+    *groups* is what ``extraction.pages.group_pages`` returns:
+    ``[{"pages": [0, 1], "reason": "..."}, ...]``.
+    """
+    from PyPDF2 import PdfWriter
+
+    reader = PdfReader(BytesIO(pdf_bytes))
+    page_count = len(reader.pages)
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+
+    field_names = {f.name for f in bill_model._meta.get_fields()}
+    type_field = "file_type" if "file_type" in field_names else "fileType"
+
+    created = []
+    for n, group in enumerate(groups, start=1):
+        indexes = [i for i in group.get("pages", []) if 0 <= i < page_count]
+        if not indexes:
+            continue
+
+        writer = PdfWriter()
+        for i in indexes:
+            writer.add_page(reader.pages[i])
+        buf = BytesIO()
+        writer.write(buf)
+        buf.seek(0)
+
+        bill = bill_model.objects.create(
+            file=ContentFile(buf.read(), name=f"{filename_prefix}-{stamp}-{n}.pdf"),
+            organization=organization,
+            uploaded_by=uploaded_by,
+            **{type_field: file_type},
+        )
+        created.append(bill)
+        logger.info(
+            "Split bill %s: pages %s of %d (%s)",
+            bill.pk, [i + 1 for i in indexes], page_count, group.get("reason", ""),
+        )
+    return created

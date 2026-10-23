@@ -622,6 +622,11 @@ EXTRACTION_OCR_SHADOW = env.bool("EXTRACTION_OCR_SHADOW", default=False)
 # Organisations on the rollout list even while EXTRACTION_OCR_FIRST is off.
 # Lets the route be proven on one client before it reaches the rest.
 EXTRACTION_OCR_ORG_IDS = env.list("EXTRACTION_OCR_ORG_IDS", default=[])
+# Split an upload that OCR says is several bills in one file. Needs an OCR
+# pass, so it is a no-op wherever indra-ocr is not installed. Off by
+# default: a wrong split is visible to the operator, but it is still a
+# change in what they see after an upload.
+EXTRACTION_SPLIT_BATCHES = env.bool("EXTRACTION_SPLIT_BATCHES", default=False)
 # Below this mean OCR confidence the page goes to the vision model instead.
 EXTRACTION_OCR_MIN_CONFIDENCE = env.float("EXTRACTION_OCR_MIN_CONFIDENCE", default=0.90)
 # A near-empty page read confidently is the handwriting case: send the image.
