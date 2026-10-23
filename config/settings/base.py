@@ -606,6 +606,26 @@ TRASH_RETENTION_DAYS = env.int("TRASH_RETENTION_DAYS", default=30)
 OPENAI_REQUEST_TIMEOUT = env.float("OPENAI_REQUEST_TIMEOUT", default=60.0)
 OPENAI_MAX_RETRIES = env.int("OPENAI_MAX_RETRIES", default=2)
 
+# ---------------------------------------------------------------------------
+# Extraction route: OCR first, vision as the fallback
+# ---------------------------------------------------------------------------
+# Off by default. Unset, every bill goes to the vision model as an image,
+# exactly as before. Measured on 96 real client bills: indra-ocr reads them
+# well (median confidence 0.95) and 71% clear the threshold below, so the
+# common path becomes OCR text to a small model and only the rest costs a
+# vision call.
+EXTRACTION_OCR_FIRST = env.bool("EXTRACTION_OCR_FIRST", default=False)
+# Runs the new route alongside the old one and logs what it would have
+# produced, while still returning the old result. Costs both calls; meant
+# for a few weeks on a subset before EXTRACTION_OCR_FIRST is turned on.
+EXTRACTION_OCR_SHADOW = env.bool("EXTRACTION_OCR_SHADOW", default=False)
+# Below this mean OCR confidence the page goes to the vision model instead.
+EXTRACTION_OCR_MIN_CONFIDENCE = env.float("EXTRACTION_OCR_MIN_CONFIDENCE", default=0.90)
+# A near-empty page read confidently is the handwriting case: send the image.
+EXTRACTION_OCR_MIN_CHARS = env.int("EXTRACTION_OCR_MIN_CHARS", default=200)
+EXTRACTION_TEXT_MODEL = env.str("EXTRACTION_TEXT_MODEL", default="gpt-4o-mini")
+EXTRACTION_VISION_MODEL = env.str("EXTRACTION_VISION_MODEL", default="gpt-4o")
+
 # ------------------------------------------------------------
 # Upload screening — "is this actually a bill?"
 # ------------------------------------------------------------

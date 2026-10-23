@@ -186,6 +186,72 @@ def prepare_bill_image_from_bytes(file_content, file_extension):
     return base64.b64encode(file_content).decode("utf-8"), mime
 
 
+_SHADOW_FIELDS = ("invoiceNumber", "dateIssued", "total", "igst", "cgst", "sgst")
+
+
+def _shadow_agreement(live, shadow):
+    """Per-field agreement between the live result and the shadow one.
+
+    Field names only, never values: this goes to the application log and
+    the values are client invoice data.
+    """
+    if not isinstance(live, dict) or not isinstance(shadow, dict):
+        return {"comparable": False}
+    same, differ = [], []
+    for f in _SHADOW_FIELDS:
+        a, b = live.get(f), shadow.get(f)
+        if a in (None, "") and b in (None, ""):
+            continue
+        (same if str(a).strip() == str(b).strip() else differ).append(f)
+    return {"comparable": True, "same": same, "differ": differ,
+            "items_live": len(live.get("items") or []),
+            "items_shadow": len(shadow.get("items") or [])}
+
+
+def _extract(prompt, image_b64, mime, *, file_path=None, file_bytes=None,
+             extension=None):
+    """Vision on the image, unless the OCR-first route is switched on.
+
+    Default is the behaviour this replaced, line for line. The flag is
+    read per call rather than at import so a rollout can be flipped
+    without a restart, and any failure inside the new route falls back
+    here rather than failing the bill.
+    """
+    if not getattr(settings, "EXTRACTION_OCR_FIRST", False):
+        live = call_ocr_analysis(image_b64, mime, prompt)
+        if getattr(settings, "EXTRACTION_OCR_SHADOW", False):
+            from apps.common.services.extraction.route import analyse
+
+            # Run the new route for the log only and return the old result
+            # regardless, so a wrong answer from it cannot reach a client.
+            # Costs both calls; that is the price of finding out safely.
+            try:
+                shadow, telemetry = analyse(
+                    prompt, image_b64=image_b64, mime=mime,
+                    file_path=file_path, file_bytes=file_bytes, extension=extension,
+                )
+                logger.info(
+                    "extraction shadow: %s",
+                    {**telemetry, "agreement": _shadow_agreement(live, shadow)},
+                )
+            except Exception:
+                logger.exception("extraction shadow run failed (live result unaffected)")
+        return live
+
+    from apps.common.services.extraction.route import analyse
+
+    try:
+        data, telemetry = analyse(
+            prompt, image_b64=image_b64, mime=mime,
+            file_path=file_path, file_bytes=file_bytes, extension=extension,
+        )
+        logger.info("extraction route: %s", telemetry)
+        return data
+    except Exception:
+        logger.exception("OCR-first route failed; using vision on the image")
+        return call_ocr_analysis(image_b64, mime, prompt)
+
+
 def analyze_bill_bytes(file_content, file_extension, prompt):
     """Full pipeline from raw bytes: bytes -> image -> OpenAI OCR -> validated JSON dict.
 
@@ -193,7 +259,8 @@ def analyze_bill_bytes(file_content, file_extension, prompt):
     instead of ``(file_path, file_name)``.
     """
     image_b64, mime = prepare_bill_image_from_bytes(file_content, file_extension)
-    json_data = call_ocr_analysis(image_b64, mime, prompt)
+    json_data = _extract(prompt, image_b64, mime, file_bytes=file_content,
+                         extension=file_extension)
     return reconcile_item_line_amounts(ensure_gst_fields(json_data))
 
 
@@ -227,6 +294,38 @@ def call_ocr_analysis(image_base64, mime_type, prompt, model=None,
         max_tokens=max_tokens,
         temperature=temperature,
     )
+
+
+def call_text_analysis(document_text, prompt, model=None,
+                       max_tokens=2000, temperature=0.1):
+    """Extract from OCR text instead of a page image.
+
+    Same prompt, same JSON contract, same parser as the vision call — the
+    only difference is that the document arrives as text somebody else
+    already read. That makes it a much easier job, which is why a small
+    model is enough for it.
+    """
+    client = _get_openai_client()
+    model = model or getattr(settings, "EXTRACTION_TEXT_MODEL", "gpt-4o-mini")
+
+    response = client.chat.completions.create(
+        model=model,
+        response_format={"type": "json_object"},
+        messages=[{
+            "role": "user",
+            "content": (
+                f"{prompt}\n\n"
+                "The document below was read by OCR. Work only from it; do not "
+                "invent values it does not contain, and leave a field null when "
+                "the document does not state it.\n\n"
+                "--- DOCUMENT ---\n"
+                f"{document_text}"
+            ),
+        }],
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    return parse_openai_json_response(response.choices[0].message.content)
 
 
 def call_openai_analysis(image_base64, mime_type, prompt, model="gpt-4o",
@@ -901,5 +1000,5 @@ def analyze_bill_file(file_path, file_name, prompt):
     Raises on failure.
     """
     image_b64, mime = prepare_bill_image(file_path, file_name)
-    json_data = call_ocr_analysis(image_b64, mime, prompt)
+    json_data = _extract(prompt, image_b64, mime, file_path=file_path)
     return reconcile_item_line_amounts(ensure_gst_fields(json_data))
