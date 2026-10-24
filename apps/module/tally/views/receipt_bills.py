@@ -63,6 +63,7 @@ from apps.common.utils import (
     normalize_product_gst
 )
 from apps.common.converters import safe_decimal, to_decimal, to_int, safe_float_convert
+from apps.common.services.forex import convert_sync_payload_to_inr
 from apps.common.services.duplicate_detection import check_duplicate_bill, update_bill_duplicate_metadata
 from apps.common.services.pdf_processing import split_pdf_to_bills
 from apps.common.services.bill_analysis import analyze_bill_file, get_receipt_bill_prompt
@@ -674,7 +675,7 @@ def receipt_bill_processing_status(request, org_id, bill_id):
 # ✅
 @extend_schema(
     summary="Analyze Receipt Bill",
-    description="Analyze receipt bill using OpenAI to extract receipt data",
+    description="Analyse a receipt voucher with the AI service to extract its data",
     request=ReceiptBillAnalysisRequestSerializer,
     responses={
         200: TallyReceiptAnalyzedBillSerializer,
@@ -1003,8 +1004,9 @@ def receipt_bill_detail(request, org_id, bill_id):
     responses={200: TallyReceiptAnalyzedBillSerializer},
     tags=['Tally Receipt Bills']
 )
+@requires(roles.VERIFY_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def receipt_bill_verify(request, org_id):
     """Verify analyzed receipt bill with user modifications"""
     bill_id = request.data.get('bill_id')
@@ -1994,6 +1996,13 @@ def receipt_bills_sync_list(request, org_id):
                 analyzed_bill.bill_no, ve,
             )
             continue
+        # Amounts are stored in the currency written on the document;
+        # Tally's connector only speaks INR. Convert here, at the edge,
+        # using the rate frozen on the bill rather than a fresh one —
+        # re-fetching would silently restate a voucher that has already
+        # been posted. Pure value substitution: no tag is added, removed
+        # or reordered, and an INR bill (rate 1) passes through untouched.
+        convert_sync_payload_to_inr(sync_data["data"], analyzed_bill.exchange_rate)
         bills_data.append(sync_data["data"])
     if skipped:
         logger.info("Receipt sync-list skipped %d bill(s): %s", len(skipped), skipped)

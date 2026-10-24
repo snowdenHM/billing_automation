@@ -150,10 +150,16 @@ class TallyPaymentAnalyzedBillSerializer(serializers.ModelSerializer):
             # round_off was missing → save persisted but reload dropped it.
             "round_off", "round_off_taxes", "round_off_debit_or_credit",
             "note", "consolidate", "is_reverse_charge", "products", "created_at",
+            # Read-only: the currency and the rate a bill posts at are
+            # written only by the forex endpoint, which freezes the rate
+            # when the operator accepts it. Letting verify rewrite them
+            # would let an ordinary re-save silently restate the bill.
+            "currency", "exchange_rate", "exchange_rate_source", "exchange_rate_at",
         ]
         read_only_fields = [
             "id", "created_at", "vendor_name", "payment_mode_name",
             "selected_bill_name", "products",
+            "currency", "exchange_rate", "exchange_rate_source", "exchange_rate_at",
         ]
 
 

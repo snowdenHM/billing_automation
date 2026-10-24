@@ -15,6 +15,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.common import roles
+from apps.common.permissions import HasOrgPermission, requires
+
 from ..models import ZohoCredentials
 from ..serializers.settings import ZohoCredentialsSerializer
 from .helpers import get_organization_from_request, get_zoho_credentials
@@ -29,8 +32,9 @@ logger = logging.getLogger(__name__)
 
 @extend_schema(responses=ZohoCredentialsSerializer, tags=["Zoho Ops"], methods=["GET"])
 @extend_schema(request=ZohoCredentialsSerializer, responses=ZohoCredentialsSerializer, tags=["Zoho Ops"], methods=["PUT", "PATCH"])
+@requires(roles.MANAGE_SETTINGS)
 @api_view(["GET", "PUT", "PATCH"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def zoho_credentials_view(request, org_id):
     """Get or update Zoho credentials for the organization."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -70,8 +74,9 @@ def zoho_credentials_view(request, org_id):
     tags=["Zoho Ops"],
     methods=["POST"],
 )
+@requires(roles.MANAGE_SETTINGS)
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def initiate_oauth_view(request, org_id):
     """Initiate Zoho OAuth2 flow using server-side credentials."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -114,8 +119,9 @@ def initiate_oauth_view(request, org_id):
     tags=["Zoho Ops"],
     methods=["GET"],
 )
+@requires(roles.MANAGE_SETTINGS)
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def oauth_callback_view(request, org_id):
     """Handle OAuth2 callback from Zoho and exchange code for tokens."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -276,8 +282,9 @@ def oauth_callback_view(request, org_id):
     tags=["Zoho Ops"],
     methods=["POST"],
 )
+@requires(roles.MANAGE_SETTINGS)
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def generate_token_view(request, org_id):
     """Generate access and refresh tokens using the access code from Zoho OAuth."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -342,8 +349,9 @@ def generate_token_view(request, org_id):
     tags=["Zoho Ops"],
     methods=["GET"],
 )
+@requires(roles.VIEW_BILLS)
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def zoho_status_view(request, org_id):
     """Get Zoho integration status for the organization."""
     organization = get_organization_from_request(request, org_id=org_id)

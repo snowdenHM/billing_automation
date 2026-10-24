@@ -3,6 +3,7 @@ from apps.module.zoho.serializers.base import OrgField
 from apps.module.zoho.models import (
     ZohoCredentials,
     ZohoVendor,
+    ZohoCustomer,
     ZohoChartOfAccount,
     ZohoTaxes,
     ZohoTdsTcs,
@@ -37,6 +38,18 @@ class ZohoVendorSerializer(serializers.ModelSerializer):
     class Meta:
         model = ZohoVendor
         fields = ["id", "organization", "contactId", "companyName", "gstNo", "gst_treatment", "created_at"]
+        read_only_fields = ["id", "created_at"]
+
+
+class ZohoCustomerSerializer(serializers.ModelSerializer):
+    organization = OrgField(required=True)
+
+    class Meta:
+        model = ZohoCustomer
+        fields = [
+            "id", "organization", "contactId", "companyName", "gstNo",
+            "gst_treatment", "place_of_supply", "created_at",
+        ]
         read_only_fields = ["id", "created_at"]
 
 

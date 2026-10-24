@@ -319,6 +319,14 @@ def _record_extraction(bill, telemetry):
     The saving is a claim about token counts; recorded per bill it stops
     being a claim. Values from the document never go in — only how it was
     read.
+
+    The ``summary`` is the line a client reads on the Activity page, so
+    it names no vendor and no model. Which model read a bill is our
+    engineering concern, not something to put in front of the people
+    whose books it posts to — it invites questions we do not want to
+    field and ties us publicly to a supplier we may change. The real
+    model and route stay in ``metadata`` for the admin-only accuracy
+    page, which is where that detail belongs.
     """
     if bill is None:
         return
@@ -328,7 +336,7 @@ def _record_extraction(bill, telemetry):
 
         record_activity(
             bill, BillActivity.Action.EXTRACTED,
-            summary=f"Read by {telemetry.get('model')} via {telemetry.get('route')}",
+            summary="Read by the AI service",
             metadata=telemetry,
         )
     except Exception:

@@ -12,6 +12,8 @@ import logging
 
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status
+from apps.common import roles
+from apps.common.permissions import HasOrgPermission, requires
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -135,8 +137,9 @@ def _kinds_for(request):
     ],
     tags=['Tally Trash'],
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def trash_list(request, org_id):
     """Unified trash listing across every trashable Tally bill type."""
     organization = get_organization_from_request(request, org_id)
@@ -204,8 +207,9 @@ def trash_list(request, org_id):
     description="Bring a bill back out of the trash. Any org member may restore.",
     tags=['Tally Trash'],
 )
+@requires(roles.TRASH_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def trash_restore(request, org_id, kind_slug, bill_id):
     """Restore one bill from the trash back onto its normal list."""
     organization = get_organization_from_request(request, org_id)
@@ -253,8 +257,9 @@ def trash_restore(request, org_id, kind_slug, bill_id):
     description="Destroys the bill row and its uploaded file. Admin only. Cannot be undone.",
     tags=['Tally Trash'],
 )
+@requires(roles.DELETE_BILLS)
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def trash_delete_forever(request, org_id, kind_slug, bill_id):
     """Destroy one trashed bill for good."""
     organization = get_organization_from_request(request, org_id)
@@ -309,8 +314,9 @@ def trash_delete_forever(request, org_id, kind_slug, bill_id):
     parameters=[OpenApiParameter('type', str, description='Restrict to one document type')],
     tags=['Tally Trash'],
 )
+@requires(roles.DELETE_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def trash_empty(request, org_id):
     """Destroy everything currently in this organization's trash."""
     organization = get_organization_from_request(request, org_id)

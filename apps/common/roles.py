@@ -103,3 +103,115 @@ def can(user, organization_id, action):
     if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
         return True
     return action in permissions_for(membership_role(user, organization_id))
+
+
+# ---------------------------------------------------------------------------
+# Saying all this to a person
+# ---------------------------------------------------------------------------
+# Picking a role for a new member used to be four buttons labelled Admin,
+# Manager, Accountant and Consultant, with nothing to say what any of
+# them could do. The matrix above was the only answer and it lived in a
+# Python file, so the person choosing had to guess — and the frontend
+# kept its own hardcoded copy of the role list, which is how a screen
+# and its enforcement drift apart without anyone noticing.
+#
+# The labels below exist so the matrix can be shown rather than
+# guessed, and so the screen reads them from the server instead of
+# repeating them.
+
+ROLE_LABELS = {
+    OrgMembership.ADMIN: "Admin",
+    OrgMembership.MANAGER: "Manager",
+    OrgMembership.ACCOUNTANT: "Accountant",
+    OrgMembership.CONSULTANT: "Consultant",
+}
+
+#: One line, in the words of somebody deciding who to invite.
+ROLE_SUMMARIES = {
+    OrgMembership.ADMIN:
+        "Runs the workspace. Everything a Manager can do, plus inviting "
+        "people and changing the Tally and Zoho settings.",
+    OrgMembership.MANAGER:
+        "Reviews and posts. Can do all the bill work, approve what the "
+        "Accountant submits, and post to Tally or Zoho. Cannot invite "
+        "people or change integration settings.",
+    OrgMembership.ACCOUNTANT:
+        "Does the data entry. Uploads, reads and verifies bills, but "
+        "cannot post them — a Manager approves and posts.",
+    OrgMembership.CONSULTANT:
+        "Looks, does not touch. Reads every bill and exports reports. "
+        "Changes nothing. Meant for an outside accountant.",
+}
+
+#: What each action means on screen, and which heading it sits under.
+ACTION_LABELS = {
+    VIEW_BILLS: "See bills",
+    UPLOAD_BILLS: "Upload bills",
+    ANALYSE_BILLS: "Run analysis",
+    EDIT_BILLS: "Edit bill details",
+    VERIFY_BILLS: "Verify bills",
+    APPROVE_BILLS: "Approve submitted bills",
+    SYNC_BILLS: "Post to Tally / Zoho",
+    MOVE_BILLS: "Move between voucher types",
+    TRASH_BILLS: "Move to Trash",
+    DELETE_BILLS: "Delete permanently",
+    EXPORT_REPORTS: "Download reports",
+    MANAGE_MASTERS: "Manage ledgers and stock items",
+    MANAGE_SETTINGS: "Change Tally / Zoho settings and API keys",
+    MANAGE_MEMBERS: "Invite and remove members",
+}
+
+ACTION_GROUPS = {
+    VIEW_BILLS: "Bills",
+    UPLOAD_BILLS: "Bills",
+    ANALYSE_BILLS: "Bills",
+    EDIT_BILLS: "Bills",
+    VERIFY_BILLS: "Bills",
+    APPROVE_BILLS: "Posting",
+    SYNC_BILLS: "Posting",
+    MOVE_BILLS: "Bills",
+    TRASH_BILLS: "Bills",
+    DELETE_BILLS: "Bills",
+    EXPORT_REPORTS: "Reports",
+    MANAGE_MASTERS: "Administration",
+    MANAGE_SETTINGS: "Administration",
+    MANAGE_MEMBERS: "Administration",
+}
+
+#: The order a reader should meet the actions in, roughly the order a
+#: bill passes through them.
+GROUP_ORDER = ("Bills", "Posting", "Reports", "Administration")
+
+
+def describe_roles():
+    """The whole matrix, shaped for a screen rather than for a check.
+
+    One source of truth: the screen that asks somebody to choose a role
+    renders this, so what it promises and what the server enforces
+    cannot disagree.
+    """
+    return {
+        "roles": [
+            {
+                "value": role,
+                "label": ROLE_LABELS.get(role, role.title()),
+                "summary": ROLE_SUMMARIES.get(role, ""),
+                "permissions": sorted(permissions_for(role)),
+            }
+            for role in (OrgMembership.ADMIN, OrgMembership.MANAGER,
+                         OrgMembership.ACCOUNTANT, OrgMembership.CONSULTANT)
+        ],
+        "actions": [
+            {
+                "value": action,
+                "label": ACTION_LABELS.get(action, action.replace("_", " ").capitalize()),
+                "group": ACTION_GROUPS.get(action, "Other"),
+                "allowed_for": sorted(
+                    role for role, allowed in ROLE_PERMISSIONS.items()
+                    if action in allowed
+                ),
+            }
+            for action in ALL_ACTIONS
+        ],
+        "group_order": list(GROUP_ORDER),
+    }

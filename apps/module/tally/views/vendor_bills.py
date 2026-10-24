@@ -39,6 +39,7 @@ from apps.common.utils import (
     normalize_product_gst,
 )
 from apps.common.converters import safe_float_convert, safe_int_convert
+from apps.common.services.forex import convert_sync_payload_to_inr
 from apps.common.services.duplicate_detection import check_duplicate_bill, update_bill_duplicate_metadata
 from apps.common.services.pdf_processing import split_pdf_to_bills
 from apps.common.services.bill_analysis import analyze_bill_file, get_vendor_bill_prompt
@@ -674,7 +675,7 @@ def vendor_bill_processing_status(request, org_id, bill_id):
 # ✅
 @extend_schema(
     summary="Analyze Vendor Bill",
-    description="Analyze vendor bill using OpenAI to extract invoice data",
+    description="Analyse a purchase bill with the AI service to extract its invoice data",
     request=BillAnalysisRequestSerializer,
     responses={
         200: TallyVendorAnalyzedBillSerializer,
@@ -2454,6 +2455,13 @@ def vendor_bills_sync_list(request, org_id):
                 bill.tally_sync_message = reason
                 bill.save(update_fields=["tally_sync_message"])
             continue
+        # Amounts are stored in the currency written on the document;
+        # Tally's connector only speaks INR. Convert here, at the edge,
+        # using the rate frozen on the bill rather than a fresh one —
+        # re-fetching would silently restate a voucher that has already
+        # been posted. Pure value substitution: no tag is added, removed
+        # or reordered, and an INR bill (rate 1) passes through untouched.
+        convert_sync_payload_to_inr(sync_data["data"], analyzed_bill.exchange_rate)
         bills_data.append(sync_data["data"])
 
     # Tally's TDL/TCP connector consumes XML natively and its text parser

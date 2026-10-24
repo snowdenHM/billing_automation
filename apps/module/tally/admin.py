@@ -1,5 +1,5 @@
 from django.contrib import admin
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 from django.http import JsonResponse
 from django.urls import path, reverse
 from django.utils.safestring import mark_safe
@@ -191,75 +191,68 @@ class TallyConfigAdmin(BaseOrgAdmin):
         context['get_parent_ledgers_url'] = reverse('admin:tally_tallyconfig_get_parent_ledgers')
         return super().render_change_form(request, context, *args, **kwargs)
 
+    # The eight parent-ledger groups both summary columns report on, as
+    # (attribute, short label). Kept in one place because the two columns
+    # below and the prefetch in get_queryset have to agree: a group missing
+    # from the prefetch silently costs two queries per row instead of
+    # raising.
+    _PARENT_GROUPS = (
+        ("igst_parents", "IGST"),
+        ("cgst_parents", "CGST"),
+        ("sgst_parents", "SGST"),
+        ("vendor_parents", "Vendors"),
+        ("chart_of_accounts_parents", "COA"),
+        ("chart_of_accounts_expense_parents", "Expense COA"),
+        ("tds_parents", "TDS"),
+        ("payment_parents", "Payment"),
+    )
+
+    def get_queryset(self, request):
+        # Both list columns walk all eight M2Ms. Unprefetched that was eight
+        # COUNT(*) queries plus six more SELECTs for every row on the page —
+        # 20 queries per config, so a page of 50 orgs issued ~1000. Prefetched
+        # it is eight queries for the whole page, and the counts come off the
+        # already-loaded lists rather than from .count().
+        return super().get_queryset(request).prefetch_related(
+            *(name for name, _ in self._PARENT_GROUPS)
+        )
+
     @admin.display(description="Configuration Summary")
     def display_mappings(self, obj):
-        """Display a summary of the number of ledger mappings"""
-        return format_html(
-            "<strong>IGST:</strong> {} | <strong>CGST:</strong> {} | <strong>SGST:</strong> {} | <strong>Vendors:</strong> {} | <strong>COA:</strong> {} | <strong>Expense COA:</strong> {} | <strong>TDS:</strong> {} | <strong>Payment:</strong> {}",
-            obj.igst_parents.count(),
-            obj.cgst_parents.count(),
-            obj.sgst_parents.count(),
-            obj.vendor_parents.count(),
-            obj.chart_of_accounts_parents.count(),
-            obj.chart_of_accounts_expense_parents.count(),
-            obj.tds_parents.count(),
-            obj.payment_parents.count(),
+        """How many parent ledgers are mapped in each group."""
+        return format_html_join(
+            mark_safe(" | "),
+            "<strong>{}:</strong> {}",
+            (
+                (label, len(getattr(obj, name).all()))
+                for name, label in self._PARENT_GROUPS
+            ),
         )
 
     @admin.display(description="Parent Ledger Details")
     def display_parent_ledgers(self, obj):
-        """Display detailed parent ledger information for organization context"""
-        details = []
+        """The first few mapped ledger names per group.
 
-        # IGST Parents
-        igst_names = [parent.parent for parent in obj.igst_parents.all()[:3]]
-        if igst_names:
-            igst_display = ", ".join(igst_names)
-            if obj.igst_parents.count() > 3:
-                igst_display += f" (+{obj.igst_parents.count() - 3} more)"
-            details.append(f"<strong>IGST:</strong> {igst_display}")
+        Was six copies of the same block, each ending in an f-string that
+        dropped operator-entered ledger names straight into HTML unescaped,
+        wrapped in a single-argument ``format_html`` — which Django 5.0
+        removed outright.
+        """
+        rows = []
+        for name, label in self._PARENT_GROUPS:
+            parents = list(getattr(obj, name).all())
+            if not parents:
+                continue
+            shown = ", ".join(p.parent or "—" for p in parents[:3])
+            if len(parents) > 3:
+                shown += f" (+{len(parents) - 3} more)"
+            rows.append((label, shown))
 
-        # CGST Parents
-        cgst_names = [parent.parent for parent in obj.cgst_parents.all()[:3]]
-        if cgst_names:
-            cgst_display = ", ".join(cgst_names)
-            if obj.cgst_parents.count() > 3:
-                cgst_display += f" (+{obj.cgst_parents.count() - 3} more)"
-            details.append(f"<strong>CGST:</strong> {cgst_display}")
-
-        # SGST Parents
-        sgst_names = [parent.parent for parent in obj.sgst_parents.all()[:3]]
-        if sgst_names:
-            sgst_display = ", ".join(sgst_names)
-            if obj.sgst_parents.count() > 3:
-                sgst_display += f" (+{obj.sgst_parents.count() - 3} more)"
-            details.append(f"<strong>SGST:</strong> {sgst_display}")
-
-        # Vendor Parents
-        vendor_names = [parent.parent for parent in obj.vendor_parents.all()[:3]]
-        if vendor_names:
-            vendor_display = ", ".join(vendor_names)
-            if obj.vendor_parents.count() > 3:
-                vendor_display += f" (+{obj.vendor_parents.count() - 3} more)"
-            details.append(f"<strong>Vendors:</strong> {vendor_display}")
-
-        # TDS Parents
-        tds_names = [parent.parent for parent in obj.tds_parents.all()[:3]]
-        if tds_names:
-            tds_display = ", ".join(tds_names)
-            if obj.tds_parents.count() > 3:
-                tds_display += f" (+{obj.tds_parents.count() - 3} more)"
-            details.append(f"<strong>TDS:</strong> {tds_display}")
-
-        # Payment Parents
-        payment_names = [parent.parent for parent in obj.payment_parents.all()[:3]]
-        if payment_names:
-            payment_display = ", ".join(payment_names)
-            if obj.payment_parents.count() > 3:
-                payment_display += f" (+{obj.payment_parents.count() - 3} more)"
-            details.append(f"<strong>Payment:</strong> {payment_display}")
-
-        return format_html("<br>".join(details)) if details else "No mappings configured"
+        if not rows:
+            return "No mappings configured"
+        return format_html_join(
+            mark_safe("<br>"), "<strong>{}:</strong> {}", rows,
+        )
 
     class Media:
         js = ('admin/js/tally_dependent_dropdown.js',)

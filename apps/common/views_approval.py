@@ -25,15 +25,25 @@ logger = logging.getLogger(__name__)
 
 
 def _bill_models():
-    """The six bill models, imported late to stay clear of app loading."""
+    """Every bill model, imported late to stay clear of app loading.
+
+    A model missing from this tuple cannot be submitted for approval, so
+    its sync gate can never find a decision and — once the gate is wired
+    — would block posting outright. Adding a bill type means adding it
+    here.
+    """
     from apps.module.tally.models import (
         TallyExpenseBill, TallyPaymentBill, TallyReceiptBill, TallySalesBill,
         TallyVendorBill,
     )
-    from apps.module.zoho.models import ExpenseBill, JournalBill, VendorBill
+    from apps.module.zoho.models import (
+        ExpenseBill, JournalBill, PaymentBill, ReceiptBill, SalesBill,
+        VendorBill,
+    )
 
     return (TallyVendorBill, TallyExpenseBill, TallyPaymentBill, TallySalesBill,
-            TallyReceiptBill, VendorBill, ExpenseBill, JournalBill)
+            TallyReceiptBill, VendorBill, ExpenseBill, JournalBill,
+            SalesBill, ReceiptBill, PaymentBill)
 
 
 def find_bill(bill_id, organization):

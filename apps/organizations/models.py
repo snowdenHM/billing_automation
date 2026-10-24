@@ -92,7 +92,15 @@ class OrgMembership(TimeStampedModel):
         ordering = ("organization_id", "-id")
 
     def __str__(self):  # pragma: no cover
-        return f"{self.user_id} in {self.organization_id} ({self.role})"
+        # Was f"{self.user_id} in {self.organization_id} ({self.role})", i.e.
+        # an integer and a UUID — unreadable in the admin's membership list
+        # and in every autocomplete that offers memberships. Fall back to the
+        # ids only when the related rows are not loaded.
+        user = getattr(self, "user", None)
+        org = getattr(self, "organization", None)
+        who = getattr(user, "email", None) or f"user {self.user_id}"
+        where = getattr(org, "name", None) or f"org {self.organization_id}"
+        return f"{who} — {where} ({self.get_role_display()})"
 
 
 class OrganizationAPIKey(TimeStampedModel):

@@ -12,6 +12,14 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.common import roles
+from apps.common.models import BillActivity
+from apps.common.services.activity import (
+    BILL_FIELD_LABELS, diff_fields, record_activity, snapshot_bill_fields,
+)
+from apps.common.services import approval as approval_service
+from apps.common.permissions import HasOrgPermission, requires
+
 from apps.common.utils import get_organization_from_request
 from apps.common.services.duplicate_detection import check_duplicate_bill as _check_duplicate_bill_generic
 from apps.common.services.pdf_processing import split_pdf_to_bills
@@ -139,8 +147,9 @@ def create_journal_zoho_objects_from_analysis(bill, analyzed_data, organization)
     tags=["Zoho Journal Bills"],
     methods=["GET"],
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def journal_bills_list_view(request, org_id):
     """List all journal bills for the organization with pagination."""
     return zoho_bills_list_base(
@@ -158,8 +167,9 @@ def journal_bills_list_view(request, org_id):
     tags=["Zoho Journal Bills"],
     methods=["POST"],
 )
+@requires(roles.UPLOAD_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 @parser_classes([MultiPartParser, FormParser])
 def journal_bill_upload_view(request, org_id):
     """Handle single or multiple journal bill file uploads with PDF splitting support."""
@@ -185,8 +195,9 @@ def journal_bill_upload_view(request, org_id):
     tags=["Zoho Journal Bills"],
     methods=["GET"],
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def journal_bill_detail_view(request, org_id, bill_id):
     """Get journal bill details including analysis data."""
     return zoho_bill_detail_base(
@@ -205,8 +216,9 @@ def journal_bill_detail_view(request, org_id, bill_id):
     tags=["Zoho Journal Bills"],
     methods=["POST"],
 )
+@requires(roles.ANALYSE_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def journal_bill_analyze_view(request, org_id, bill_id):
     """Analyze journal bill using AI. Changes status from 'Draft' to 'Analysed'."""
     return zoho_bill_analyze_base(
@@ -224,8 +236,9 @@ def journal_bill_analyze_view(request, org_id, bill_id):
     tags=["Zoho Journal Bills"],
     methods=["DELETE"],
 )
+@requires(roles.DELETE_BILLS)
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def journal_bill_delete_view(request, org_id, bill_id):
     """Delete a journal bill and its associated file."""
     return zoho_bill_delete_base(
@@ -246,8 +259,9 @@ def journal_bill_delete_view(request, org_id, bill_id):
     tags=["Zoho Journal Bills"],
     methods=["POST"],
 )
+@requires(roles.VERIFY_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def journal_bill_verify_view(request, org_id, bill_id):
     """Verify and update journal bill data. Changes status from 'Analysed' to 'Verified'."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -287,6 +301,8 @@ def journal_bill_verify_view(request, org_id, bill_id):
             )
 
         with transaction.atomic():
+            _before_verify = snapshot_bill_fields(zoho_bill)
+
             serializer = JournalZohoBillSerializer(
                 zoho_bill, data=zoho_bill_data, partial=True,
                 context={'organization': organization},
@@ -322,6 +338,22 @@ def journal_bill_verify_view(request, org_id, bill_id):
             bill.status = 'Verified'
             bill.save()
 
+            # The change set is the point of the event: a timeline that
+            # only says "verified" cannot answer what the operator altered.
+            _changes = diff_fields(
+                _before_verify,
+                snapshot_bill_fields(updated_bill),
+                labels=BILL_FIELD_LABELS,
+            )
+            record_activity(
+                bill, BillActivity.Action.VERIFIED,
+                actor=request.user,
+                organization=organization,
+                summary=(f"Verified with {len(_changes)} change(s)"
+                         if _changes else "Verified with no changes"),
+                changes=_changes,
+            )
+
             return Response(
                 JournalZohoBillSerializer(updated_bill, context={'organization': organization}).data
             )
@@ -343,8 +375,9 @@ def journal_bill_verify_view(request, org_id, bill_id):
     tags=["Zoho Journal Bills"],
     methods=["POST"],
 )
+@requires(roles.SYNC_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def journal_bill_sync_view(request, org_id, bill_id):
     """Sync verified journal bill to Zoho Books. Changes status to 'Synced'."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -359,6 +392,18 @@ def journal_bill_sync_view(request, org_id, bill_id):
                 {"detail": "Bill must be in 'Verified' status to sync"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # Nobody may post a bill the organisation has not approved. Checked
+        # after the status gate so an operator meets the errors in the order
+        # the workflow produces them: verify, then approve, then post.
+        blocked = approval_service.gate_sync(bill, organization)
+        if blocked:
+            message, code = blocked
+            return Response({
+                'error': 'Approval Required',
+                'message': message,
+                'error_code': code,
+            }, status=status.HTTP_409_CONFLICT)
 
         try:
             zoho_bill = JournalZohoBill.objects.get(selectBill=bill, organization=organization)
@@ -422,6 +467,16 @@ def journal_bill_sync_view(request, org_id, bill_id):
             'Content-Type': 'application/json',
         }
 
+        # Zoho answers synchronously, so the terminal event is recorded
+        # inline below rather than waiting for a callback as Tally does.
+        # This one marks the attempt, so an attempt that dies mid-flight
+        # still leaves a trace.
+        record_activity(
+            bill, BillActivity.Action.SYNC_REQUESTED,
+            actor=request.user, organization=organization,
+            summary="Sent to Zoho Books as a journal",
+        )
+
         try:
             payload = json.dumps(bill_data)
             response = requests.post(url, headers=headers, data=payload, timeout=ZOHO_HTTP_TIMEOUT)
@@ -436,18 +491,38 @@ def journal_bill_sync_view(request, org_id, bill_id):
                 bill.status = 'Synced'
                 bill.save()
                 response_data = response.json()
+                _remote_id = response_data.get('journal', {}).get('journal_id')
+                record_activity(
+                    bill, BillActivity.Action.SYNC_CONFIRMED,
+                    actor=request.user, organization=organization,
+                    summary="Posted to Zoho Books",
+                    metadata={"zoho_id": str(_remote_id or "")},
+                )
                 return Response({
                     "detail": "Journal synced to Zoho successfully",
-                    "zoho_journal_id": response_data.get('journal', {}).get('journal_id'),
+                    "zoho_journal_id": _remote_id,
                 })
             else:
                 response_json = response.json() if response.content else {}
                 error_message = response_json.get("message", "Failed to send data to Zoho")
                 logger.error(f"[JOURNAL SYNC] Zoho API error {response.status_code}: {error_message}")
+                record_activity(
+                    bill, BillActivity.Action.SYNC_FAILED,
+                    actor=request.user, organization=organization,
+                    summary=f"Zoho Books refused the journal: {error_message}"[:255],
+                    metadata={"status_code": response.status_code,
+                              "zoho_message": str(error_message)[:500]},
+                )
                 return Response({"detail": error_message}, status=status.HTTP_400_BAD_REQUEST)
 
         except requests.RequestException as e:
             logger.error(f"[JOURNAL SYNC] Network error: {e}")
+            record_activity(
+                bill, BillActivity.Action.SYNC_FAILED,
+                actor=request.user, organization=organization,
+                summary=f"Network error while posting: {e}"[:255],
+                metadata={"error": str(e)[:500], "outcome_unknown": True},
+            )
             return Response({"detail": f"Network error: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     except JournalBill.DoesNotExist:

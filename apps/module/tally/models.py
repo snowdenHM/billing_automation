@@ -16,6 +16,7 @@ from apps.common.bill_naming import (
     NAME_UNIQUENESS_ENFORCED_FROM,
     save_with_unique_name,
 )
+from apps.common.forex_fields import ForeignCurrencyMixin
 from apps.common.models import TrashableMixin
 from apps.common.validators import (
     bill_upload_path,
@@ -617,7 +618,7 @@ class TallyVendorBill(BaseOrgModel, TrashableMixin):
         )
 
 
-class TallyVendorAnalyzedBill(BaseOrgModel):
+class TallyVendorAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
     class TaxType(models.TextChoices):
         TCS = "TCS", "is_tcs_tax"
         TDS = "TDS", "is_tds_tax"
@@ -980,7 +981,7 @@ class TallyExpenseBill(BaseOrgModel, TrashableMixin):
         )
 
 
-class TallyExpenseAnalyzedBill(BaseOrgModel):
+class TallyExpenseAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
     class GSTType(models.TextChoices):
         IGST = "IGST", "IGST"
         CGST_SGST = "CGST_SGST", "CGST+SGST"
@@ -1572,7 +1573,7 @@ class TallyPaymentBill(BaseOrgModel, TrashableMixin):
         )
 
 
-class TallyPaymentAnalyzedBill(BaseOrgModel):
+class TallyPaymentAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
     class GSTType(models.TextChoices):
         IGST = "IGST", "IGST"
         CGST_SGST = "CGST_SGST", "CGST+SGST"
@@ -2105,7 +2106,7 @@ class TallySalesBill(BaseOrgModel, TrashableMixin):
         )
 
 
-class TallySalesAnalyzedBill(BaseOrgModel):
+class TallySalesAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
     class GSTType(models.TextChoices):
         IGST = "IGST", "IGST"
         CGST_SGST = "CGST_SGST", "CGST+SGST"
@@ -2471,7 +2472,7 @@ class TallyReceiptBill(BaseOrgModel, TrashableMixin):
         )
 
 
-class TallyReceiptAnalyzedBill(BaseOrgModel):
+class TallyReceiptAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
     class GSTType(models.TextChoices):
         IGST = "IGST", "IGST"
         CGST_SGST = "CGST_SGST", "CGST+SGST"

@@ -37,6 +37,7 @@ from apps.common.utils import (
     normalize_product_gst
 )
 from apps.common.converters import safe_decimal, to_decimal, to_int, safe_float_convert
+from apps.common.services.forex import convert_sync_payload_to_inr
 from apps.common.services.duplicate_detection import check_duplicate_bill, update_bill_duplicate_metadata
 from apps.common.services.pdf_processing import split_pdf_to_bills
 from apps.common.services.bill_analysis import analyze_bill_file, get_expense_bill_prompt
@@ -533,7 +534,7 @@ def expense_bill_processing_status(request, org_id, bill_id):
 # ✅
 @extend_schema(
     summary="Analyze Expense Bill",
-    description="Analyze expense bill using OpenAI to extract expense data",
+    description="Analyse an expense bill with the AI service to extract its expense data",
     request=ExpenseBillAnalysisRequestSerializer,
     responses={
         200: TallyExpenseAnalyzedBillSerializer,
@@ -860,8 +861,9 @@ def expense_bill_detail(request, org_id, bill_id):
     responses={200: TallyExpenseAnalyzedBillSerializer},
     tags=['Tally Expense Bills']
 )
+@requires(roles.VERIFY_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def expense_bill_verify(request, org_id):
     """Verify analyzed expense bill with user modifications"""
     bill_id = request.data.get('bill_id')
@@ -1913,6 +1915,13 @@ def expense_bills_sync_list(request, org_id):
     bills_data = []
     for analyzed_bill in analyzed_bills:
         sync_data = prepare_expense_sync_data(analyzed_bill, organization)
+        # Amounts are stored in the currency written on the document;
+        # Tally's connector only speaks INR. Convert here, at the edge,
+        # using the rate frozen on the bill rather than a fresh one —
+        # re-fetching would silently restate a voucher that has already
+        # been posted. Pure value substitution: no tag is added, removed
+        # or reordered, and an INR bill (rate 1) passes through untouched.
+        convert_sync_payload_to_inr(sync_data["data"], analyzed_bill.exchange_rate)
         bills_data.append(sync_data["data"])
 
     # Tally TCP/TDL consumes XML natively (see vendor_bills.py for the

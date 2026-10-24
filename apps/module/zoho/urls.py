@@ -37,6 +37,8 @@ from .views import (
     taxes_sync_view,
     tds_tcs_list_view,
     tds_tcs_sync_view,
+    customers_list_view,
+    customers_sync_view,
     # Expense bills
     expense_bills_list_view,
     expense_bill_upload_view,
@@ -45,11 +47,38 @@ from .views import (
     expense_bill_verify_view,
     expense_bill_sync_view,
     expense_bill_delete_view,
+    # Sales invoices
+    sales_bills_list_view,
+    sales_bill_upload_view,
+    sales_bill_detail_view,
+    sales_bill_analyze_view,
+    sales_bill_verify_view,
+    sales_bill_sync_view,
+    sales_bill_delete_view,
+    # Receipt vouchers
+    receipt_bills_list_view,
+    receipt_bill_upload_view,
+    receipt_bill_detail_view,
+    receipt_bill_analyze_view,
+    receipt_bill_verify_view,
+    receipt_bill_sync_view,
+    receipt_bill_delete_view,
+    # Payment vouchers
+    payment_bills_list_view,
+    payment_bill_upload_view,
+    payment_bill_detail_view,
+    payment_bill_analyze_view,
+    payment_bill_verify_view,
+    payment_bill_sync_view,
+    payment_bill_delete_view,
 )
 from .views.bill_reports import (
     zoho_vendor_bills_report,
     zoho_journal_bills_report,
     zoho_expense_bills_report,
+    zoho_sales_bills_report,
+    zoho_receipt_bills_report,
+    zoho_payment_bills_report,
 )
 
 app_name = "zoho"
@@ -77,6 +106,8 @@ urlpatterns = [
         # ============================================================================
         path('vendors/', vendors_list_view, name='vendors_list'),
         path('vendors/sync/', vendors_sync_view, name='vendors_sync'),
+        path('customers/', customers_list_view, name='customers_list'),
+        path('customers/sync/', customers_sync_view, name='customers_sync'),
         path('chart-of-accounts/', chart_of_accounts_list_view, name='chart_of_accounts_list'),
         path('chart-of-accounts/sync/', chart_of_accounts_sync_view, name='chart_of_accounts_sync'),
         path('taxes/', taxes_list_view, name='taxes_list'),
@@ -123,10 +154,46 @@ urlpatterns = [
         path('expense-bills/<str:bill_id>/delete/', expense_bill_delete_view, name='expense_bill_delete'),
 
         # ============================================================================
+        # Sales Invoices API Endpoints
+        # ============================================================================
+        path('sales-bills/', sales_bills_list_view, name='sales_bills_list'),
+        path('sales-bills/upload/', sales_bill_upload_view, name='sales_bills_upload'),
+        path('sales-bills/<str:bill_id>/details/', sales_bill_detail_view, name='sales_bill_detail'),
+        path('sales-bills/<str:bill_id>/analyze/', sales_bill_analyze_view, name='sales_bill_analyze'),
+        path('sales-bills/<str:bill_id>/verify/', sales_bill_verify_view, name='sales_bill_verify'),
+        path('sales-bills/<str:bill_id>/sync/', sales_bill_sync_view, name='sales_bill_sync'),
+        path('sales-bills/<str:bill_id>/delete/', sales_bill_delete_view, name='sales_bill_delete'),
+
+        # ============================================================================
+        # Receipt Vouchers API Endpoints
+        # ============================================================================
+        path('receipt-bills/', receipt_bills_list_view, name='receipt_bills_list'),
+        path('receipt-bills/upload/', receipt_bill_upload_view, name='receipt_bills_upload'),
+        path('receipt-bills/<str:bill_id>/details/', receipt_bill_detail_view, name='receipt_bill_detail'),
+        path('receipt-bills/<str:bill_id>/analyze/', receipt_bill_analyze_view, name='receipt_bill_analyze'),
+        path('receipt-bills/<str:bill_id>/verify/', receipt_bill_verify_view, name='receipt_bill_verify'),
+        path('receipt-bills/<str:bill_id>/sync/', receipt_bill_sync_view, name='receipt_bill_sync'),
+        path('receipt-bills/<str:bill_id>/delete/', receipt_bill_delete_view, name='receipt_bill_delete'),
+
+        # ============================================================================
+        # Payment Vouchers API Endpoints
+        # ============================================================================
+        path('payment-bills/', payment_bills_list_view, name='payment_bills_list'),
+        path('payment-bills/upload/', payment_bill_upload_view, name='payment_bills_upload'),
+        path('payment-bills/<str:bill_id>/details/', payment_bill_detail_view, name='payment_bill_detail'),
+        path('payment-bills/<str:bill_id>/analyze/', payment_bill_analyze_view, name='payment_bill_analyze'),
+        path('payment-bills/<str:bill_id>/verify/', payment_bill_verify_view, name='payment_bill_verify'),
+        path('payment-bills/<str:bill_id>/sync/', payment_bill_sync_view, name='payment_bill_sync'),
+        path('payment-bills/<str:bill_id>/delete/', payment_bill_delete_view, name='payment_bill_delete'),
+
+        # ============================================================================
         # XLSX Report Downloads (?status=Analysed,Verified,Synced filter)
         # ============================================================================
         path('vendor-bills/report/', zoho_vendor_bills_report, name='vendor_bills_report'),
         path('journal-bills/report/', zoho_journal_bills_report, name='journal_bills_report'),
         path('expense-bills/report/', zoho_expense_bills_report, name='expense_bills_report'),
+        path('sales-bills/report/', zoho_sales_bills_report, name='sales_bills_report'),
+        path('receipt-bills/report/', zoho_receipt_bills_report, name='receipt_bills_report'),
+        path('payment-bills/report/', zoho_payment_bills_report, name='payment_bills_report'),
     ])),
 ]

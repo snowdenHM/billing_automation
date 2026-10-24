@@ -1,6 +1,8 @@
 from django.contrib import admin
 from unfold.admin import ModelAdmin as UnfoldModelAdmin, TabularInline as UnfoldTabularInline
 
+from apps.common.admin import BaseOrgAdmin, SuperuserOnlyAdmin
+
 from .models import SupportTicket, SupportTicketMessage, SupportTicketRecipient
 
 
@@ -12,7 +14,7 @@ class SupportTicketMessageInline(UnfoldTabularInline):
 
 
 @admin.register(SupportTicket)
-class SupportTicketAdmin(UnfoldModelAdmin):
+class SupportTicketAdmin(BaseOrgAdmin):
     list_display = (
         "subject",
         "category",
@@ -37,7 +39,12 @@ class SupportTicketAdmin(UnfoldModelAdmin):
 
 
 @admin.register(SupportTicketMessage)
-class SupportTicketMessageAdmin(UnfoldModelAdmin):
+class SupportTicketMessageAdmin(BaseOrgAdmin):
+    # A message has no organisation of its own; it inherits the ticket's.
+    # Without this the messages list was the way around the scoped ticket
+    # list — the bodies are right there in list_display.
+    org_lookup = "ticket__organization"
+
     list_display = ("ticket", "author_user", "author_email", "is_internal", "created_at")
     list_select_related = ("ticket", "author_user")
     list_filter = ("is_internal",)
@@ -46,7 +53,9 @@ class SupportTicketMessageAdmin(UnfoldModelAdmin):
 
 
 @admin.register(SupportTicketRecipient)
-class SupportTicketRecipientAdmin(UnfoldModelAdmin):
+class SupportTicketRecipientAdmin(SuperuserOnlyAdmin):
+    # Who gets notified about *any* ticket on this deployment — an internal
+    # ops list, not a tenant's data, so there is no org to scope it by.
     list_display = ("email", "name", "receive_new", "receive_reply", "created_at")
     list_filter = ("receive_new", "receive_reply")
     search_fields = ("email", "name")

@@ -18,6 +18,14 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.common import roles
+from apps.common.models import BillActivity
+from apps.common.services.activity import (
+    BILL_FIELD_LABELS, diff_fields, record_activity, snapshot_bill_fields,
+)
+from apps.common.services import approval as approval_service
+from apps.common.permissions import HasOrgPermission, requires
+
 from apps.common.bill_filters import apply_bill_search
 from apps.common.pagination import DefaultPagination
 from apps.common.utils import (
@@ -510,8 +518,9 @@ def process_pdf_splitting_vendor(pdf_file, organization, file_type, uploaded_by)
     tags=["Zoho Vendor Bills"],
     methods=["GET"]
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bills_list_view(request, org_id):
     """List all vendor bills for the organization with pagination."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -558,8 +567,9 @@ def vendor_bills_list_view(request, org_id):
     responses={201: ZohoVendorBillSerializer(many=True)},
     tags=['Zoho Vendor Bills']
 )
+@requires(roles.UPLOAD_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 @parser_classes([MultiPartParser, FormParser])
 def vendor_bill_upload_view(request, org_id):
     """Handle single or multiple vendor bill file uploads.
@@ -823,8 +833,9 @@ def _vendor_bill_upload_legacy(request, org_id):
     tags=["Zoho Vendor Bills"],
     methods=["GET"]
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_detail_view(request, org_id, bill_id):
     """Get vendor bill details including analysis data."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -882,8 +893,9 @@ def vendor_bill_detail_view(request, org_id, bill_id):
     responses={200: "Bill processing status information"},
     tags=['Zoho Vendor Bills']
 )
+@requires(roles.VIEW_BILLS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_processing_status(request, org_id, bill_id):
     """Check processing status of a vendor bill including background job status"""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -981,8 +993,9 @@ def vendor_bill_processing_status(request, org_id, bill_id):
     tags=["Zoho Vendor Bills"],
     methods=["POST"]
 )
+@requires(roles.ANALYSE_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_analyze_view(request, org_id, bill_id):
     """Analyze vendor bill using OpenAI. Changes status from 'Draft' to 'Analyzed'."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -1093,8 +1106,9 @@ def vendor_bill_analyze_view(request, org_id, bill_id):
     tags=["Zoho Vendor Bills"],
     methods=["POST"]
 )
+@requires(roles.VERIFY_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_verify_view(request, org_id, bill_id):
     """Verify and update Zoho vendor data. Changes status from 'Analyzed' to 'Verified'."""
     logger.error("="*80)
@@ -1185,6 +1199,8 @@ def vendor_bill_verify_view(request, org_id, bill_id):
             )
 
         with transaction.atomic():
+            _before_verify = snapshot_bill_fields(zoho_bill)
+
             # Use partial=True for POST as we're updating existing data
             logger.error(f"[DEBUG] vendor_bill_verify_view - Creating serializer with partial=True")
             logger.error(f"[DEBUG] vendor_bill_verify_view - Serializer data being passed: {zoho_bill_data}")
@@ -1444,6 +1460,23 @@ def vendor_bill_verify_view(request, org_id, bill_id):
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Updating bill status from '{bill.status}' to 'Verified'")
                 bill.status = 'Verified'
                 bill.save()
+
+                # The change set is the point of the event: a timeline
+                # that only says "verified" cannot answer what the
+                # operator altered.
+                _changes = diff_fields(
+                    _before_verify,
+                    snapshot_bill_fields(updated_bill),
+                    labels=BILL_FIELD_LABELS,
+                )
+                record_activity(
+                    bill, BillActivity.Action.VERIFIED,
+                    actor=request.user,
+                    organization=organization,
+                    summary=(f"Verified with {len(_changes)} change(s)"
+                             if _changes else "Verified with no changes"),
+                    changes=_changes,
+                )
                 logger.error(f"[DEBUG] vendor_bill_verify_view - Bill status updated successfully to '{bill.status}'")
 
                 # Refresh the bill to get latest data with relationships
@@ -1506,8 +1539,9 @@ def vendor_bill_verify_view(request, org_id, bill_id):
     tags=["Zoho Vendor Bills"],
     methods=["POST"]
 )
+@requires(roles.SYNC_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_sync_view(request, org_id, bill_id):
     """Sync verified vendor bill to Zoho Books. Changes status to 'Synced'."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -1524,6 +1558,18 @@ def vendor_bill_sync_view(request, org_id, bill_id):
                 'current_status': bill.status,
                 'required_status': 'Verified'
             }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Nobody may post a bill the organisation has not approved. Checked
+        # after the status gate so an operator meets the errors in the order
+        # the workflow produces them: verify, then approve, then post.
+        blocked = approval_service.gate_sync(bill, organization)
+        if blocked:
+            message, code = blocked
+            return Response({
+                'error': 'Approval Required',
+                'message': message,
+                'error_code': code,
+            }, status=status.HTTP_409_CONFLICT)
 
         # Get Zoho vendor data
         try:
@@ -1613,7 +1659,7 @@ def vendor_bill_sync_view(request, org_id, bill_id):
                 # Fallback: create consolidated data on-the-fly
                 logger.warning(f"No consolidated product found, creating consolidated data on-the-fly")
 
-                total_amount = sum(float(p.total or 0) for p in zoho_products)
+                total_amount = sum(float(p.amount or 0) for p in zoho_products)
                 items_count = zoho_products.count()
 
                 # Use most common or highest-value tax
@@ -1625,7 +1671,7 @@ def vendor_bill_sync_view(request, org_id, bill_id):
                     tax_amounts = {}
                     for product in zoho_products.filter(taxes__isnull=False):
                         tax_id_key = product.taxes.taxId
-                        amount = float(product.total or 0)
+                        amount = float(product.amount or 0)
                         if tax_id_key in tax_amounts:
                             tax_amounts[tax_id_key] += amount
                         else:
@@ -1640,7 +1686,7 @@ def vendor_bill_sync_view(request, org_id, bill_id):
                     chart_amounts = {}
                     for product in zoho_products.filter(chart_of_accounts__isnull=False):
                         chart_id_key = product.chart_of_accounts.accountId
-                        amount = float(product.total or 0)
+                        amount = float(product.amount or 0)
                         if chart_id_key in chart_amounts:
                             chart_amounts[chart_id_key] += amount
                         else:
@@ -1672,14 +1718,15 @@ def vendor_bill_sync_view(request, org_id, bill_id):
 
             # Use individual products as before
             for item in zoho_products:
+                _label = item.item_name or item.item_details or "Item"
                 line_item = {
                     "account_id": item.chart_of_accounts.accountId if item.chart_of_accounts else None,
-                    "name": item.name,
-                    "description": item.name,
+                    "name": _label[:100],
+                    "description": (item.item_details or _label)[:2000],
                     "rate": float(item.rate or 0),
                     "quantity": float(item.quantity or 0),
                     "unit": "unit",
-                    "item_total": float(item.total or 0)
+                    "item_total": float(item.amount or 0)
                 }
 
                 # Add tax information
@@ -1757,6 +1804,16 @@ def vendor_bill_sync_view(request, org_id, bill_id):
                 'zoho_bill_id': bill.zoho_bill_id,
             }, status=status.HTTP_409_CONFLICT)
 
+        # Zoho answers synchronously, so the terminal event is recorded
+        # inline below rather than waiting for a callback as Tally does.
+        # This one marks the attempt, so an attempt that dies mid-flight
+        # still leaves a trace.
+        record_activity(
+            bill, BillActivity.Action.SYNC_REQUESTED,
+            actor=request.user, organization=organization,
+            summary="Sent to Zoho Books as a bill",
+        )
+
         try:
             response = requests.post(url, headers=headers, data=payload, timeout=ZOHO_SYNC_TIMEOUT)
 
@@ -1776,6 +1833,12 @@ def vendor_bill_sync_view(request, org_id, bill_id):
                 bill.zoho_bill_id = str(zoho_bill_id) if zoho_bill_id else None
                 bill.status = 'Synced'
                 bill.save(update_fields=['zoho_bill_id', 'status'])
+                record_activity(
+                    bill, BillActivity.Action.SYNC_CONFIRMED,
+                    actor=request.user, organization=organization,
+                    summary="Posted to Zoho Books",
+                    metadata={"zoho_bill_id": str(zoho_bill_id or "")},
+                )
 
                 return Response({
                     "detail": "Bill synced to Zoho successfully",
@@ -1785,6 +1848,13 @@ def vendor_bill_sync_view(request, org_id, bill_id):
                 response_json = response.json() if response.content else {}
                 error_message = response_json.get("message", "Failed to send data to Zoho Books")
                 logger.error(f"Zoho sync failed: {response.status_code} - {error_message}")
+                record_activity(
+                    bill, BillActivity.Action.SYNC_FAILED,
+                    actor=request.user, organization=organization,
+                    summary=f"Zoho Books refused the bill: {error_message}"[:255],
+                    metadata={"status_code": response.status_code,
+                              "zoho_message": str(error_message)[:500]},
+                )
                 return Response({
                     'error': 'Zoho Sync Failed',
                     'detail': f'Failed to sync bill to Zoho Books. {error_message}',
@@ -1797,6 +1867,12 @@ def vendor_bill_sync_view(request, org_id, bill_id):
             # we just never saw the response. Say so instead of inviting a
             # blind retry that silently duplicates the invoice.
             logger.error(f"Network error during Zoho sync: {str(e)}")
+            record_activity(
+                bill, BillActivity.Action.SYNC_FAILED,
+                actor=request.user, organization=organization,
+                summary=f"Network error while posting: {e}"[:255],
+                metadata={"error": str(e)[:500], "outcome_unknown": True},
+            )
             return Response({
                 "detail": (
                     f"Network error while syncing: {e}. The bill may or may not "
@@ -1820,8 +1896,9 @@ def vendor_bill_sync_view(request, org_id, bill_id):
     tags=["Zoho Vendor Bills"],
     methods=["DELETE"]
 )
+@requires(roles.DELETE_BILLS)
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_delete_view(request, org_id, bill_id):
     """Delete a vendor bill and its associated file."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -1909,8 +1986,9 @@ def vendor_bill_delete_view(request, org_id, bill_id):
     },
     tags=['Zoho Bill Management']
 )
+@requires(roles.MOVE_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def move_bill_between_modules_view(request, org_id):
     """
     Move multiple bills between vendor/expense/journal modules while preserving analysis data
@@ -2208,6 +2286,21 @@ def move_bill_between_modules_view(request, org_id):
                     source_zoho_bill.delete()
 
                 source_bill.delete()
+
+                # The source row is gone, so the move is recorded against
+                # the bill that survives it; the old id is kept in the
+                # metadata so the two halves can still be tied together.
+                record_activity(
+                    new_bill, BillActivity.Action.MOVED,
+                    actor=request.user,
+                    organization=organization,
+                    summary=f"Moved from {from_module} to {to_module}"[:255],
+                    metadata={
+                        "from": from_module,
+                        "to": to_module,
+                        "previous_bill_id": str(bill_id),
+                    },
+                )
 
                 # Track successful move
                 moved_bills.append({

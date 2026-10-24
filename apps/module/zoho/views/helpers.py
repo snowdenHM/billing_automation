@@ -9,7 +9,7 @@ import requests
 from django.db.models.functions import Lower
 from django.utils import timezone
 
-from ..models import ZohoCredentials, ZohoVendor, ZohoChartOfAccount, ZohoTaxes
+from ..models import ZohoCredentials, ZohoVendor, ZohoCustomer, ZohoChartOfAccount, ZohoTaxes
 from apps.common.utils import (
     get_organization_from_request,  # noqa: F401 – re-exported
     calculate_string_similarity,
@@ -151,17 +151,26 @@ def make_zoho_api_request(credentials, endpoint, method="GET", data=None):
 # ---------------------------------------------------------------------------
 
 def find_zoho_vendor_ledger_enhanced(company_name, organization, vendor_gst=None):
-    """Find matching vendor using GST first, then enhanced name matching with ZohoVendor."""
+    """Find matching vendor using GST first, then enhanced name matching."""
+    return _find_contact_enhanced(
+        ZohoVendor, company_name, organization, vendor_gst, label="vendor",
+    )
+
+
+def _find_contact_enhanced(model, company_name, organization, gst=None, *, label="contact"):
+    """GST-first, then name-based lookup of a Zoho contact.
+
+    One body for both :class:`ZohoVendor` and :class:`ZohoCustomer`: the
+    matching rules are a property of how Indian invoices identify a party,
+    not of which side of the ledger the party sits on.
+    """
     try:
         # 1. Exact GST match (most reliable)
-        if vendor_gst and len(vendor_gst.strip()) >= 10:
-            vendor = ZohoVendor.objects.filter(
-                organization=organization,
-                gstNo=vendor_gst.strip(),
-            ).first()
-            if vendor:
-                logger.info(f"Found vendor by exact GST match: {vendor.companyName}")
-                return vendor
+        if gst and len(gst.strip()) >= 10:
+            hit = model.objects.filter(organization=organization, gstNo=gst.strip()).first()
+            if hit:
+                logger.info("Found %s by exact GST match: %s", label, hit.companyName)
+                return hit
 
         if not company_name:
             return None
@@ -169,46 +178,49 @@ def find_zoho_vendor_ledger_enhanced(company_name, organization, vendor_gst=None
         normalized_name = normalize_company_name_enhanced(company_name)
 
         # 2. Exact normalised name (case-insensitive)
-        vendor = ZohoVendor.objects.filter(
-            organization=organization,
-        ).annotate(lower_name=Lower("companyName")).filter(
-            lower_name=normalized_name.lower(),
-        ).first()
-        if vendor:
-            logger.info(f"Found vendor by exact name match: {vendor.companyName}")
-            return vendor
+        hit = model.objects.filter(organization=organization).annotate(
+            lower_name=Lower("companyName"),
+        ).filter(lower_name=normalized_name.lower()).first()
+        if hit:
+            logger.info("Found %s by exact name match: %s", label, hit.companyName)
+            return hit
 
         # 3. Contains match
-        vendor = ZohoVendor.objects.filter(
-            organization=organization,
-            companyName__icontains=normalized_name,
+        hit = model.objects.filter(
+            organization=organization, companyName__icontains=normalized_name,
         ).first()
-        if vendor:
-            logger.info(f"Found vendor by partial name match: {vendor.companyName}")
-            return vendor
+        if hit:
+            logger.info("Found %s by partial name match: %s", label, hit.companyName)
+            return hit
 
         # 4. Fuzzy matching
-        best_match = None
-        best_score = 0
-        for v in ZohoVendor.objects.filter(organization=organization):
+        best_match, best_score = None, 0
+        for candidate in model.objects.filter(organization=organization):
             score = calculate_string_similarity(
                 normalized_name.lower(),
-                normalize_company_name_enhanced(v.companyName).lower(),
+                normalize_company_name_enhanced(candidate.companyName).lower(),
             )
             if score > best_score and score > 0.8:
-                best_match = v
-                best_score = score
+                best_match, best_score = candidate, score
 
         if best_match:
-            logger.info(f"Found vendor by fuzzy match ({best_score:.2f}): {best_match.companyName}")
+            logger.info("Found %s by fuzzy match (%.2f): %s", label, best_score, best_match.companyName)
             return best_match
 
-        logger.warning(f"No vendor found for: {company_name} (GST: {vendor_gst})")
+        logger.warning("No %s found for: %s (GST: %s)", label, company_name, gst)
         return None
 
     except Exception as e:
-        logger.error(f"Error finding vendor ledger: {str(e)}")
+        logger.error("Error finding %s: %s", label, e)
         return None
+
+
+def find_zoho_customer_ledger_enhanced(company_name, organization, customer_gst=None):
+    """Find a matching :class:`ZohoCustomer` — the sales-side mirror of
+    :func:`find_zoho_vendor_ledger_enhanced`."""
+    return _find_contact_enhanced(
+        ZohoCustomer, company_name, organization, customer_gst, label="customer",
+    )
 
 
 def find_appropriate_zoho_coa_ledger(organization, item_description, ledger_type="vendor"):

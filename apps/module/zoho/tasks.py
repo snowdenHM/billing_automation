@@ -45,6 +45,27 @@ def enqueue_journal_bill_analysis(bill_id, organization_id):
     )
 
 
+def enqueue_sales_bill_analysis(bill_id, organization_id):
+    """Enqueue sales invoice analysis task."""
+    return enqueue_bill_processing(
+        process_zoho_sales_bill_analysis, bill_id, organization_id,
+    )
+
+
+def enqueue_receipt_bill_analysis(bill_id, organization_id):
+    """Enqueue receipt voucher analysis task."""
+    return enqueue_bill_processing(
+        process_zoho_receipt_bill_analysis, bill_id, organization_id,
+    )
+
+
+def enqueue_payment_bill_analysis(bill_id, organization_id):
+    """Enqueue payment voucher analysis task."""
+    return enqueue_bill_processing(
+        process_zoho_payment_bill_analysis, bill_id, organization_id,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Async PDF-split task (see #14 in the upload audit)
 # ---------------------------------------------------------------------------
@@ -127,6 +148,33 @@ def split_pdf_bill_journal(bill_id, **kwargs):
         bill_id,
         model_class=JournalBill,
         enqueue_analysis_fn=enqueue_journal_bill_analysis,
+    )
+
+
+def split_pdf_bill_sales(bill_id, **kwargs):
+    from .models import SalesBill
+    return _split_zoho_pdf_placeholder(
+        bill_id,
+        model_class=SalesBill,
+        enqueue_analysis_fn=enqueue_sales_bill_analysis,
+    )
+
+
+def split_pdf_bill_receipt(bill_id, **kwargs):
+    from .models import ReceiptBill
+    return _split_zoho_pdf_placeholder(
+        bill_id,
+        model_class=ReceiptBill,
+        enqueue_analysis_fn=enqueue_receipt_bill_analysis,
+    )
+
+
+def split_pdf_bill_payment(bill_id, **kwargs):
+    from .models import PaymentBill
+    return _split_zoho_pdf_placeholder(
+        bill_id,
+        model_class=PaymentBill,
+        enqueue_analysis_fn=enqueue_payment_bill_analysis,
     )
 
 
@@ -347,5 +395,85 @@ def process_zoho_journal_bill_analysis(bill_id, organization_id, **kwargs):
         analysed_status="Analysed",
         get_functions=_fns,
         bill_type="journal",
+        has_duplicate_check=True,
+    )
+
+@django_rq.job("default", timeout=600)
+def process_zoho_sales_bill_analysis(bill_id, organization_id, **kwargs):
+    """Background task: analyse Zoho sales invoice + create objects + duplicate check."""
+    from .models import SalesBill
+
+    def _fns():
+        from .views.sales_bills import (
+            analyze_sales_bill_with_openai,
+            check_duplicate_sales_bill,
+            create_sales_zoho_objects_from_analysis,
+        )
+        return (
+            analyze_sales_bill_with_openai,
+            create_sales_zoho_objects_from_analysis,
+            check_duplicate_sales_bill,
+        )
+
+    return _process_zoho_bill(
+        bill_id, organization_id,
+        model_class=SalesBill,
+        analysed_status="Analysed",
+        get_functions=_fns,
+        bill_type="sales",
+        has_duplicate_check=True,
+    )
+
+
+@django_rq.job("default", timeout=600)
+def process_zoho_receipt_bill_analysis(bill_id, organization_id, **kwargs):
+    """Background task: analyse Zoho receipt voucher + create objects + duplicate check."""
+    from .models import ReceiptBill
+
+    def _fns():
+        from .views.receipt_bills import (
+            analyze_receipt_bill_with_openai,
+            check_duplicate_receipt_bill,
+            create_receipt_zoho_objects_from_analysis,
+        )
+        return (
+            analyze_receipt_bill_with_openai,
+            create_receipt_zoho_objects_from_analysis,
+            check_duplicate_receipt_bill,
+        )
+
+    return _process_zoho_bill(
+        bill_id, organization_id,
+        model_class=ReceiptBill,
+        analysed_status="Analysed",
+        get_functions=_fns,
+        bill_type="receipt",
+        has_duplicate_check=True,
+    )
+
+
+@django_rq.job("default", timeout=600)
+def process_zoho_payment_bill_analysis(bill_id, organization_id, **kwargs):
+    """Background task: analyse Zoho payment voucher + create objects + duplicate check."""
+    from .models import PaymentBill
+
+    def _fns():
+        from .views.payment_bills import (
+            analyze_payment_bill_with_openai,
+            check_duplicate_payment_bill,
+            create_payment_zoho_objects_from_analysis,
+        )
+        return (
+            analyze_payment_bill_with_openai,
+            create_payment_zoho_objects_from_analysis,
+            check_duplicate_payment_bill,
+        )
+
+    return _process_zoho_bill(
+        bill_id, organization_id,
+        model_class=PaymentBill,
+        analysed_status="Analysed",
+        get_functions=_fns,
+        bill_type="payment",
         has_duplicate_check=True,
     )

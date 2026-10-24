@@ -1,6 +1,6 @@
 from django.urls import path
 from apps.common.views_activity import activity_stats, bill_activity_list
-from apps.common.views_roles import my_permissions
+from apps.common.views_roles import my_permissions, org_roles
 from apps.common.views_approval import (
     approval_detail,
     approval_queue,
@@ -8,6 +8,7 @@ from apps.common.views_approval import (
     reject_bill,
     submit_for_approval,
 )
+from apps.common.views_forex import bill_currency, forex_rates
 from apps.common.views_notifications import poll_notifications
 from .views import (
     organization_list_view,
@@ -76,7 +77,13 @@ urlpatterns = [
     path("org/<uuid:org_id>/activity/", bill_activity_list, name="org-bill-activity"),
     path("org/<uuid:org_id>/activity/stats/", activity_stats, name="org-activity-stats"),
 
+    # Exchange rates. Module-agnostic: the rate table is the same for a
+    # Tally voucher and a Zoho invoice, so it does not live inside either.
+    path("org/<uuid:org_id>/forex/rates/", forex_rates, name="org-forex-rates"),
+    path("org/<uuid:org_id>/forex/bills/<uuid:bill_id>/currency/", bill_currency, name="org-forex-bill-currency"),
+
     path("org/<uuid:org_id>/me/permissions/", my_permissions, name="org-my-permissions"),
+    path("org/<uuid:org_id>/roles/", org_roles, name="org-roles"),
 
     # Approvals. Off unless the organisation turns require_bill_approval on.
     path("org/<uuid:org_id>/approvals/", approval_queue, name="org-approval-queue"),

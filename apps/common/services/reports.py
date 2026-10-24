@@ -165,7 +165,7 @@ def rows_from_vendor_analyzed(bill, analyzed_bill):
         or ""
     )
     gstin = ""
-    for attr in ("gst_in", "gstin", "gst_number", "vendor_gstin"):
+    for attr in ("gst_in", "gstin", "gst_number", "vendor_gstin", "gstNo"):
         val = getattr(vendor, attr, None) if vendor else None
         if val:
             gstin = val
@@ -276,7 +276,7 @@ def rows_from_expense_analyzed(bill, analyzed_bill):
     vendor = getattr(analyzed_bill, "vendor", None)
     vendor_name = _ledger_name(vendor) if vendor else ""
     gstin = ""
-    for attr in ("gst_in", "gstin", "gst_number"):
+    for attr in ("gst_in", "gstin", "gst_number", "gstNo"):
         val = getattr(vendor, attr, None) if vendor else None
         if val:
             gstin = val

@@ -416,9 +416,12 @@ class BillActivity(models.Model):
         ANALYSIS_FAILED = "analysis_failed", "Analysis failed"
         DUPLICATE_FLAGGED = "duplicate_flagged", "Flagged as duplicate"
         EXTRACTED = "extracted", "Extracted"
-        # No standalone "edited" action: every field change today goes
-        # through verify, and is carried on the VERIFIED event's change
-        # set. Add one when a save-without-verify endpoint exists.
+        # Field changes made outside verify. Most edits still ride on the
+        # VERIFIED event's change set, because verify is where nearly
+        # everything is saved; this covers the endpoints that write a
+        # single field on their own — setting a bill's currency and
+        # exchange rate being the first.
+        EDITED = "edited", "Edited"
         VERIFIED = "verified", "Verified"
         APPROVAL_SUBMITTED = "approval_submitted", "Submitted for approval"
         APPROVED = "approved", "Approved"

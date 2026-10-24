@@ -162,9 +162,14 @@ class TallySalesAnalyzedBillSerializer(serializers.ModelSerializer):
             # ``round_off_debit_or_credit`` (only expense/payment models do).
             # Including it would crash serializer init → analyzed_bill=null.
             'round_off', 'round_off_taxes',
-            'gst_type', 'note', 'consolidate', 'products', 'created_at'
+            'gst_type', 'note', 'consolidate', 'products', 'created_at',
+            # Read-only: the currency and the rate a bill posts at are
+            # written only by the forex endpoint, which freezes the rate
+            # when the operator accepts it. Letting verify rewrite them
+            # would let an ordinary re-save silently restate the bill.
+            'currency', 'exchange_rate', 'exchange_rate_source', 'exchange_rate_at',
         ]
-        read_only_fields = ['id', 'created_at', 'customer_name', 'selected_bill_name', 'products']
+        read_only_fields = ['id', 'created_at', 'customer_name', 'selected_bill_name', 'products', 'currency', 'exchange_rate', 'exchange_rate_source', 'exchange_rate_at']
 
 
 class SalesBillUploadSerializer(BaseBillUploadSerializer):

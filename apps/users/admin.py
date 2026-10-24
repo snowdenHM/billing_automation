@@ -54,6 +54,21 @@ class UserAdmin(BaseUserAdmin, UnfoldModelAdmin):
         }),
     )
 
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        # This action sets every selected account to one password read from
+        # the environment (default "ChangeMeNow!1"). That is an account
+        # takeover primitive, not a maintenance convenience: anyone with
+        # staff access and the change-user permission could point it at a
+        # superuser. Only superusers get to see it.
+        if not request.user.is_superuser:
+            actions.pop("reset_user_passwords", None)
+        return actions
+
+    @admin.action(
+        description="Reset selected users' passwords to default",
+        permissions=["superuser"],
+    )
     def reset_user_passwords(self, request, queryset):
         """Reset selected users' passwords to a default value."""
         default_password = os.environ.get('DEFAULT_RESET_PASSWORD', 'ChangeMeNow!1')
@@ -68,4 +83,6 @@ class UserAdmin(BaseUserAdmin, UnfoldModelAdmin):
             f"Successfully reset passwords for {count} users.",
             messages.SUCCESS
         )
-    reset_user_passwords.short_description = "Reset selected users' passwords to default"
+    def has_superuser_permission(self, request):
+        """Backs ``permissions=["superuser"]`` on the action above."""
+        return request.user.is_superuser

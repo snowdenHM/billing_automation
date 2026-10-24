@@ -18,7 +18,7 @@ the write errors are allowed to surface.
 
 import logging
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.common.models import BillActivity, BillApproval
@@ -132,7 +132,17 @@ def submit(bill, *, actor, note="", organization=None):
         approval.decided_by = None
         approval.decided_at = None
         approval.decided_note = ""
-        approval.save()
+        try:
+            approval.save()
+        except IntegrityError:
+            # Two submits for the same bill at once -- a double-clicked
+            # button. ``select_for_update`` cannot lock a row that does
+            # not exist yet, so both requests reach here and the unique
+            # constraint stops the second. That is the constraint doing
+            # its job; the caller should see the ordinary "already
+            # waiting" answer, not a 500.
+            raise ApprovalError("This bill is already waiting for approval.",
+                                "APPROVAL_ALREADY_PENDING")
 
     record_activity(
         bill, BillActivity.Action.APPROVAL_SUBMITTED,

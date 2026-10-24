@@ -10,10 +10,14 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.common import roles
+from apps.common.permissions import HasOrgPermission, requires
+
 from apps.common.pagination import DefaultPagination
-from ..models import ZohoVendor, ZohoChartOfAccount, ZohoTaxes, ZohoTdsTcs
+from ..models import ZohoVendor, ZohoCustomer, ZohoChartOfAccount, ZohoTaxes, ZohoTdsTcs
 from ..serializers.settings import (
     ZohoVendorSerializer,
+    ZohoCustomerSerializer,
     ZohoChartOfAccountSerializer,
     ZohoTaxesSerializer,
     ZohoTdsTcsSerializer,
@@ -29,8 +33,9 @@ logger = logging.getLogger(__name__)
 
 
 @extend_schema(responses=ZohoVendorSerializer(many=True), tags=["Zoho Ops"], methods=["GET"])
+@requires(roles.VIEW_BILLS)
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendors_list_view(request, org_id):
     """List all vendors for the organization with pagination."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -47,8 +52,9 @@ def vendors_list_view(request, org_id):
 
 
 @extend_schema(responses={"200": {"detail": "Vendors synced successfully"}}, tags=["Zoho Ops"], methods=["POST"])
+@requires(roles.MANAGE_MASTERS)
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def vendors_sync_view(request, org_id):
     """Sync vendors from Zoho Books."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -80,13 +86,81 @@ def vendors_sync_view(request, org_id):
 
 
 # ---------------------------------------------------------------------------
+# Customers
+# ---------------------------------------------------------------------------
+
+
+@extend_schema(responses=ZohoCustomerSerializer(many=True), tags=["Zoho Ops"], methods=["GET"])
+@requires(roles.VIEW_BILLS)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, HasOrgPermission])
+def customers_list_view(request, org_id):
+    """List all customers for the organization with pagination."""
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    customers = ZohoCustomer.objects.filter(organization=organization).order_by("companyName")
+    paginator = DefaultPagination()
+    paginated = paginator.paginate_queryset(customers, request)
+    if paginated is not None:
+        return paginator.get_paginated_response(ZohoCustomerSerializer(paginated, many=True).data)
+
+    return Response({"count": customers.count(), "next": None, "previous": None, "results": ZohoCustomerSerializer(customers, many=True).data})
+
+
+@extend_schema(responses={"200": {"detail": "Customers synced successfully"}}, tags=["Zoho Ops"], methods=["POST"])
+@requires(roles.MANAGE_MASTERS)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, HasOrgPermission])
+def customers_sync_view(request, org_id):
+    """Sync customers from Zoho Books.
+
+    Same ``contacts`` endpoint the vendor sync reads — Zoho keeps both
+    sides in one collection and separates them by ``contact_type``.
+    """
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        credentials = get_zoho_credentials(organization)
+        zoho_data = make_zoho_api_request(credentials, "contacts?contact_type=customer")
+
+        synced_count = 0
+        for contact in zoho_data.get("contacts", []):
+            if contact.get("contact_type") != "customer":
+                continue
+            _, created = ZohoCustomer.objects.update_or_create(
+                organization=organization,
+                contactId=contact["contact_id"],
+                defaults={
+                    # Individual customers have no company_name; falling back
+                    # to contact_name keeps the picker from showing blanks.
+                    "companyName": contact.get("company_name") or contact.get("contact_name", ""),
+                    "gstNo": contact.get("gst_no", ""),
+                    "gst_treatment": contact.get("gst_treatment", ""),
+                    "place_of_supply": contact.get("place_of_contact", ""),
+                },
+            )
+            if created:
+                synced_count += 1
+
+        return Response({"detail": f"Successfully synced {synced_count} customers", "synced_count": synced_count})
+    except Exception as e:
+        logger.error(f"Customers sync failed: {str(e)}")
+        return Response({"detail": f"Sync failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ---------------------------------------------------------------------------
 # Chart of Accounts
 # ---------------------------------------------------------------------------
 
 
 @extend_schema(responses=ZohoChartOfAccountSerializer(many=True), tags=["Zoho Ops"], methods=["GET"])
+@requires(roles.VIEW_BILLS)
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def chart_of_accounts_list_view(request, org_id):
     """List all chart of accounts for the organization with pagination."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -103,8 +177,9 @@ def chart_of_accounts_list_view(request, org_id):
 
 
 @extend_schema(responses={"200": {"detail": "Chart of accounts synced successfully"}}, tags=["Zoho Ops"], methods=["POST"])
+@requires(roles.MANAGE_MASTERS)
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def chart_of_accounts_sync_view(request, org_id):
     """Sync chart of accounts from Zoho Books."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -157,8 +232,9 @@ def chart_of_accounts_sync_view(request, org_id):
 
 
 @extend_schema(responses=ZohoTaxesSerializer(many=True), tags=["Zoho Ops"], methods=["GET"])
+@requires(roles.VIEW_BILLS)
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def taxes_list_view(request, org_id):
     """List all taxes for the organization with pagination."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -175,8 +251,9 @@ def taxes_list_view(request, org_id):
 
 
 @extend_schema(responses={"200": {"detail": "Taxes synced successfully"}}, tags=["Zoho Ops"], methods=["POST"])
+@requires(roles.MANAGE_MASTERS)
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def taxes_sync_view(request, org_id):
     """Sync taxes from Zoho Books."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -228,8 +305,9 @@ def taxes_sync_view(request, org_id):
         }
     ],
 )
+@requires(roles.VIEW_BILLS)
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def tds_tcs_list_view(request, org_id):
     """List all TDS/TCS for the organization with pagination and optional filtering."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -253,8 +331,9 @@ def tds_tcs_list_view(request, org_id):
 
 
 @extend_schema(responses={"200": {"detail": "TDS/TCS synced successfully"}}, tags=["Zoho Ops"], methods=["POST"])
+@requires(roles.MANAGE_MASTERS)
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def tds_tcs_sync_view(request, org_id):
     """Sync TDS/TCS taxes from Zoho Books."""
     organization = get_organization_from_request(request, org_id=org_id)

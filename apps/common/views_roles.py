@@ -49,3 +49,34 @@ def my_permissions(request, org_id):
         "permissions": allowed,
         "require_bill_approval": approval_service.approval_required(organization),
     })
+
+
+class RoleCatalogSerializer(serializers.Serializer):
+    roles = serializers.ListField(child=serializers.DictField())
+    actions = serializers.ListField(child=serializers.DictField())
+    group_order = serializers.ListField(child=serializers.CharField())
+
+
+@extend_schema(responses={200: RoleCatalogSerializer}, tags=["Organizations"])
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def org_roles(request, org_id):
+    """Every role and what it can do, for the screen that assigns one.
+
+    Somebody inviting a member picks between four words with no way to
+    know what any of them grants. This is that answer, read from the
+    same matrix the server enforces — so the screen cannot promise
+    something the permission check will refuse.
+
+    Readable by any member: knowing what a Consultant may do is not
+    privileged information, and hiding it is what forced the frontend
+    to keep its own copy.
+    """
+    organization = get_organization_from_request(request, org_id)
+    if not organization:
+        return Response(
+            {"error": "Not Found", "message": "Organisation not found.",
+             "error_code": "ORG_NOT_FOUND"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    return Response(roles.describe_roles())

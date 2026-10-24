@@ -1,7 +1,9 @@
+from apps.common import roles
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample, OpenApiParameter
 from rest_framework import serializers
+from apps.common.permissions import HasOrgPermission, requires
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -122,8 +124,9 @@ class OrganizationTallyDataResponseSerializer(serializers.Serializer):
         )
     }
 )
+@requires(roles.MANAGE_SETTINGS)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def organization_tally_data(request, org_id):
     """
     Comprehensive endpoint that returns URLs for all Tally data endpoints for an organization:

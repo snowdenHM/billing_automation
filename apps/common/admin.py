@@ -5,9 +5,11 @@ All org-scoped ``ModelAdmin`` classes should inherit from
 :class:`BaseOrgAdmin` instead of ``admin.ModelAdmin`` directly.
 """
 
+import logging
+
 from django.contrib import admin, messages
 from django.urls import reverse
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 from django.utils.safestring import mark_safe
 
 from unfold.admin import (
@@ -19,6 +21,8 @@ from unfold.admin import (
 from apps.common.models import (
     BillActivity, DemoRequest, EmailSettings, ExtractionSettings,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _user_org_ids(user):
@@ -170,8 +174,7 @@ def admin_change_url(obj):
 
 class BaseOrgAdmin(UnfoldModelAdmin):
     """
-    Shared base for any ``ModelAdmin`` whose model has an
-    ``organization`` FK.
+    Shared base for any ``ModelAdmin`` whose rows belong to an organisation.
 
     * Scopes the queryset to the current user's organisations.
     * Auto-fills ``organization`` on save when missing.
@@ -179,6 +182,30 @@ class BaseOrgAdmin(UnfoldModelAdmin):
       ``readonly_fields``.
     * Restricts the ``organization`` FK dropdown to the user's orgs.
     """
+
+    #: Queryset path from this model to ``Organization``. Most models own the
+    #: FK directly, but some reach it through a parent (a support message
+    #: belongs to a ticket) and ``Organization`` itself *is* the row. Set it
+    #: to ``None`` only for a model that genuinely has no tenant, and say in
+    #: a comment why.
+    org_lookup = "organization"
+
+    def _org_filter_path(self):
+        """``org_lookup`` if it actually resolves on this model, else None.
+
+        Guards the case where a subclass inherits the default ``organization``
+        lookup but its model has no such field: filtering would raise
+        FieldError on every page load, which is a worse failure than the
+        missing scope it was meant to add.
+        """
+        if not self.org_lookup:
+            return None
+        root = self.org_lookup.split("__")[0]
+        try:
+            self.model._meta.get_field(root)
+        except Exception:
+            return None
+        return self.org_lookup
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -190,8 +217,9 @@ class BaseOrgAdmin(UnfoldModelAdmin):
         # version probed ``request.user.organizations``, which is not a
         # relation on User, so it fell through and returned every tenant's
         # rows to any staff user.
-        if hasattr(self.model, "organization"):
-            return qs.filter(organization__in=_user_org_ids(request.user))
+        path = self._org_filter_path()
+        if path:
+            return qs.filter(**{f"{path}__in": _user_org_ids(request.user)})
         return qs
 
     def save_model(self, request, obj, form, change):
@@ -219,6 +247,30 @@ class BaseOrgAdmin(UnfoldModelAdmin):
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 
+class SuperuserOnlyAdmin(UnfoldModelAdmin):
+    """For deployment-wide tables that have no tenant of their own.
+
+    An org-scoped base cannot help here — there is nothing to scope by — so
+    the honest answer is to keep the page off every non-superuser's menu
+    rather than show one tenant another tenant's rows.
+    """
+
+    def has_module_permission(self, request):
+        return request.user.is_superuser
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def has_add_permission(self, request):
+        return request.user.is_superuser
+
+    def has_change_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+
 # ---------------------------------------------------------------------------
 # Reusable display mixins
 # ---------------------------------------------------------------------------
@@ -243,9 +295,12 @@ class OwnershipDisplayMixin:
         ordering="bill_belong_your_org",
     )
     def display_ownership(self, obj):
+        # mark_safe, not format_html: these are constant markup with nothing
+        # interpolated, and single-argument format_html() was deprecated in
+        # Django 4.1 and removed in 5.0.
         if obj.bill_belong_your_org:
-            return format_html('<span style="color: green;">✓ Own Bill</span>')
-        return format_html('<span style="color: orange;">⚬ Vendor Bill</span>')
+            return mark_safe('<span style="color: green;">✓ Own Bill</span>')
+        return mark_safe('<span style="color: orange;">⚬ Vendor Bill</span>')
 
 
 class FKLinkMixin:
@@ -342,7 +397,21 @@ class ExtractionSettingsAdmin(UnfoldModelAdmin):
                 "text's misread digits.<br><br>"
                 "They are expected to do well on clean, born-digital "
                 "invoices. Prove that with <b>Shadow mode</b> on one "
-                "organisation before switching anything on."
+                "organisation before switching anything on.<br><br>"
+                "<b>The decision, October 2026: leave all of this off and "
+                "wait.</b> The comparison above scores the routes against "
+                "each other, and the control run shows that is worth only "
+                "80% even when nothing changed — so a 10% or 24% result "
+                "says less than it looks like it does. Score them against "
+                "<b>what operators actually corrected</b> instead. Every "
+                "correction made on the verify screen is already stored as "
+                "<code>{field, from, to}</code> in <code>BillActivity."
+                "changes</code>: free ground truth, accumulating now, no "
+                "labelling needed. Revisit when there is a few months of it "
+                "— not before, and not on another route-against-route run.<br>"
+                "One caveat when you do: entries recorded before October "
+                "2026 counted a reformat (<code>0.00</code> → <code>0</code>) "
+                "as a correction. Later ones do not."
             ),
         }),
         ("Models and image detail", {
@@ -374,7 +443,6 @@ class ExtractionSettingsAdmin(UnfoldModelAdmin):
 
     @admin.display(description="Effective configuration")
     def effective_now(self, obj):
-        from django.utils.html import format_html
         from apps.common.extraction_config import get_extraction_config
 
         config = get_extraction_config()
@@ -393,12 +461,19 @@ class ExtractionSettingsAdmin(UnfoldModelAdmin):
             ("OCR confidence gate", f"{config.ocr_min_confidence:.2f}"),
             ("Rollout organisations", str(len(config.rollout_org_ids)) or "0"),
         ]
+        # format_html_join, not str.format inside format_html: the latter
+        # interpolated the values without escaping, and single-argument
+        # format_html() was removed in Django 5.0 — this page would raise on
+        # upgrade. ``rows`` is already (label, value) pairs, which is exactly
+        # what format_html_join takes.
         return format_html(
             "<table style='border-spacing:0 2px'>{}</table>",
-            format_html("".join(
+            format_html_join(
+                "",
                 "<tr><td style='padding-right:16px;opacity:.7'>{}</td>"
-                "<td><b>{}</b></td></tr>".format(k, v) for k, v in rows
-            )),
+                "<td><b>{}</b></td></tr>",
+                rows,
+            ),
         )
 
     def has_add_permission(self, request):
@@ -426,3 +501,49 @@ class ExtractionSettingsAdmin(UnfoldModelAdmin):
             "Extraction settings saved. The next bill analysed uses them — "
             "no restart needed. Check 'What is in force right now' above.",
         )
+
+
+# ---------------------------------------------------------------------------
+# Third-party admins
+# ---------------------------------------------------------------------------
+
+def _adopt_third_party_admins():
+    """Re-register plain ``ModelAdmin`` classes on top of Unfold's.
+
+    django-unfold replaces the admin templates for the whole site, and its
+    ``change_form.html`` reads ``model_admin.compressed_fields`` — an
+    attribute only ``unfold.admin.ModelAdmin`` defines. Any model registered
+    by a third-party package with Django's stock ``ModelAdmin`` therefore
+    rendered its *list* fine and raised ``AttributeError`` (HTTP 500) the
+    moment anyone opened a row. Five pages were broken this way: API keys,
+    sites, outstanding JWTs, and both waffle flags and switches.
+
+    Doing it as a sweep rather than naming the five means a new dependency
+    that registers an admin is covered the day it is added, instead of
+    failing the first time an operator clicks into it.
+
+    Called at the bottom of this module, which is imported during admin
+    autodiscovery after every third-party ``admin.py`` — ``LOCAL_APPS``
+    comes last in ``INSTALLED_APPS``.
+    """
+    for model, model_admin in list(admin.site._registry.items()):
+        if isinstance(model_admin, UnfoldModelAdmin):
+            continue
+        existing = type(model_admin)
+        try:
+            adopted = type(
+                f"Unfold{existing.__name__}", (existing, UnfoldModelAdmin), {}
+            )
+            admin.site.unregister(model)
+            admin.site.register(model, adopted)
+        except Exception:  # pragma: no cover - never break the whole admin
+            # A package with an exotic admin class is better left on the
+            # stock templates (its change page stays broken) than taking
+            # the entire admin down at import time.
+            logger.warning(
+                "Could not adopt %s for Unfold; its change page may 500.",
+                existing.__name__, exc_info=True,
+            )
+
+
+_adopt_third_party_admins()

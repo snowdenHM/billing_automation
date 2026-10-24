@@ -1,9 +1,11 @@
 # apps/module/tally/bill_move_view.py
 
 import logging
+from apps.common import roles
 from django.db import transaction
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
+from apps.common.permissions import HasOrgPermission, requires
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -83,8 +85,9 @@ MODULE_LABELS = {"vendor": "Purchase Voucher", "expense": "Journal Entry"}
     },
     tags=['Tally Bill Management']
 )
+@requires(roles.MOVE_BILLS)
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def move_tally_bills_between_modules_view(request, org_id):
     """
     Move multiple Tally bills between vendor/expense modules while preserving analysis data

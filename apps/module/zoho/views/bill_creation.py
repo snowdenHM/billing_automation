@@ -17,6 +17,7 @@ from django.db.models.functions import Lower
 
 from ..models import ZohoVendor
 from .helpers import (
+    find_zoho_customer_ledger_enhanced,
     find_zoho_vendor_ledger_enhanced,
     find_appropriate_zoho_coa_ledger,
     find_appropriate_zoho_tax_ledger,
@@ -103,7 +104,7 @@ def parse_analysis_dates(relevant_data, *, multi_format=False):
     return bill_date, due_date
 
 
-def lookup_vendor_from_analysis(relevant_data, organization, *, use_fallback=False):
+def lookup_vendor_from_analysis(relevant_data, organization, *, use_fallback=False, source='from'):
     """
     Look up a vendor from analysis data using enhanced GST-aware matching.
 
@@ -112,13 +113,17 @@ def lookup_vendor_from_analysis(relevant_data, organization, *, use_fallback=Fal
         organization: ``Organization`` instance.
         use_fallback: If *True*, fall back to basic case-insensitive name
                       search when enhanced lookup raises (vendor bills).
+        source: Which half of the document the party is read from —
+                ``'from'`` (the issuer) on a purchase bill, ``'to'`` (the
+                recipient) when the organisation itself issued the document.
 
     Returns:
         ``(vendor, company_name, vendor_gst)`` tuple.
     """
     vendor = None
-    company_name = relevant_data.get('from', {}).get('name', '').strip()
-    vendor_gst = relevant_data.get('from', {}).get('gst_number', '').strip()
+    party = relevant_data.get(source) or {}
+    company_name = (party.get('name') or '').strip()
+    vendor_gst = (party.get('gst_number') or '').strip()
 
     if company_name:
         if use_fallback:
@@ -141,6 +146,25 @@ def lookup_vendor_from_analysis(relevant_data, organization, *, use_fallback=Fal
     return vendor, company_name, vendor_gst
 
 
+def lookup_party_from_analysis(relevant_data, organization, *, source='from', lookup_fn=None):
+    """Side-agnostic party lookup.
+
+    ``lookup_vendor_from_analysis`` stays as the purchase-side entry point
+    (and its ``use_fallback`` path) because vendor bills call it directly;
+    this is the same thing with the contact model and the document half
+    both parameterised.
+    """
+    lookup_fn = lookup_fn or find_zoho_vendor_ledger_enhanced
+    party_data = relevant_data.get(source) or {}
+    company_name = (party_data.get('name') or '').strip()
+    gst = (party_data.get('gst_number') or '').strip()
+
+    party = lookup_fn(company_name, organization, gst) if company_name else None
+    if company_name and not party:
+        logger.warning("No contact match found for: %s (source=%s)", company_name, source)
+    return party, company_name, gst
+
+
 # ---------------------------------------------------------------------------
 # Shared bill + product + consolidated-product creation (expense & journal)
 # ---------------------------------------------------------------------------
@@ -156,6 +180,10 @@ def create_zoho_objects_from_analysis(
     ledger_type,
     bill_type_label,
     assign_taxes=False,
+    party_field='vendor',
+    party_source='from',
+    party_lookup_fn=None,
+    include_rate_quantity=False,
 ):
     """
     Create ZohoBill, ZohoProduct, and ZohoConsolidatedProduct from analysis.
@@ -175,6 +203,17 @@ def create_zoho_objects_from_analysis(
         ledger_type: ``'expense'`` or ``'journal'`` (passed to COA lookup).
         bill_type_label: Human label for log messages.
         assign_taxes: Auto-assign taxes on each product (expense only).
+        party_field: Name of the FK on ``bill_model`` holding the party —
+            ``'vendor'`` on the purchase side, ``'customer'`` on the sales side.
+        party_source: ``'from'`` or ``'to'`` — which half of the document the
+            party is read from. A sales invoice is a purchase bill read from
+            the other end, so the organisation is the issuer and the party is
+            the recipient.
+        party_lookup_fn: Contact lookup; defaults to the vendor one.
+        include_rate_quantity: Also populate ``item_name``/``rate``/``quantity``
+            on each product. Zoho's ``invoices`` line items price per unit, so
+            the sales side needs them; the expense/journal feeds post a flat
+            amount and have no such columns.
 
     Returns:
         The created / updated ``ZohoBill`` instance.
@@ -182,7 +221,11 @@ def create_zoho_objects_from_analysis(
     logger.info(f"Creating {bill_type_label} Zoho objects for bill {bill.id}")
 
     relevant_data = flatten_analyzed_schema(analyzed_data)
-    vendor, company_name, vendor_gst = lookup_vendor_from_analysis(relevant_data, organization)
+    party, company_name, _party_gst = lookup_party_from_analysis(
+        relevant_data, organization,
+        source=party_source,
+        lookup_fn=party_lookup_fn or find_zoho_vendor_ledger_enhanced,
+    )
     bill_date, due_date = parse_analysis_dates(relevant_data)
 
     try:
@@ -190,7 +233,7 @@ def create_zoho_objects_from_analysis(
             selectBill=bill,
             organization=organization,
             defaults={
-                'vendor': vendor,
+                party_field: party,
                 'bill_no': relevant_data.get('invoiceNumber', ''),
                 'bill_date': bill_date,
                 'due_date': due_date,
@@ -209,7 +252,7 @@ def create_zoho_objects_from_analysis(
             logger.info(f"Created new {bill_type_label} bill: {zoho_bill.id}")
         else:
             logger.info(f"Found existing {bill_type_label} bill: {zoho_bill.id}")
-            zoho_bill.vendor = vendor
+            setattr(zoho_bill, party_field, party)
             zoho_bill.bill_no = relevant_data.get('invoiceNumber', zoho_bill.bill_no)
             zoho_bill.bill_date = bill_date or zoho_bill.bill_date
             zoho_bill.due_date = due_date or zoho_bill.due_date
@@ -254,6 +297,11 @@ def create_zoho_objects_from_analysis(
                         amount=safe_numeric_string(amount),
                         chart_of_accounts=chart_of_accounts,
                     )
+
+                    if include_rate_quantity:
+                        product_kwargs['item_name'] = item_description[:1000]
+                        product_kwargs['rate'] = safe_numeric_string(_dec(item.get('price', 0)))
+                        product_kwargs['quantity'] = safe_numeric_string(_dec(item.get('quantity', 1), '1'))
 
                     # Auto-assign taxes for expense bills
                     taxes = None
@@ -340,3 +388,78 @@ def create_zoho_objects_from_analysis(
     except Exception as e:
         logger.error(f"Error creating Zoho objects for bill {bill.id}: {str(e)}")
         raise
+
+
+# ---------------------------------------------------------------------------
+# Payment-object creation (receipt & payment vouchers)
+# ---------------------------------------------------------------------------
+
+def create_zoho_payment_objects_from_analysis(
+    bill,
+    analyzed_data,
+    organization,
+    *,
+    analysed_model,
+    party_field,
+    party_source,
+    party_lookup_fn,
+    label,
+):
+    """Create the analysed header for a receipt or payment voucher.
+
+    Zoho's ``customerpayments`` / ``vendorpayments`` are payment objects:
+    a party, an amount, a date, a mode and a bank/cash account. There is
+    no line-item grid, so unlike
+    :func:`create_zoho_objects_from_analysis` this writes one row and
+    stops — the ``expenses`` array the analysis prompt returns describes
+    *what the money was for*, which Zoho carries as free text, not as
+    postable lines.
+
+    The bank/cash account is deliberately left unset: which account the
+    money moved through is not on the document, and guessing it would put
+    a plausible-looking wrong account in front of an operator who is about
+    to click Verify. Sync refuses without it.
+    """
+    logger.info("Creating %s Zoho objects for bill %s", label, bill.id)
+
+    relevant_data = flatten_analyzed_schema(analyzed_data)
+    party, company_name, _gst = lookup_party_from_analysis(
+        relevant_data, organization, source=party_source, lookup_fn=party_lookup_fn,
+    )
+    bill_date, _due_date = parse_analysis_dates(relevant_data)
+
+    amount = _dec(relevant_data.get('total', 0))
+    tds = _dec(relevant_data.get('tds', 0))
+    note = f"Auto-filled from analysis | Party: {company_name or 'Unknown'}"[:255]
+
+    defaults = {
+        party_field: party,
+        'bill_no': (relevant_data.get('invoiceNumber') or '')[:50],
+        'bill_date': bill_date,
+        'amount': amount,
+        'tds': tds,
+        'note': note,
+    }
+
+    analysed, created = analysed_model.objects.get_or_create(
+        selectBill=bill, organization=organization, defaults=defaults,
+    )
+
+    if not created:
+        # Re-analysis refreshes what the document says, but must not erase
+        # work. Two things are kept: fields this function never writes (the
+        # bank/cash account, the mode, the documents to settle), and any
+        # field the new pass came back empty on. A re-run over a page the
+        # model read poorly would otherwise replace the vendor the operator
+        # picked with None, and ``note`` is the only field worth stamping
+        # unconditionally because it describes the run that just happened.
+        for field, value in defaults.items():
+            if field == 'note' or value not in (None, '', 0, Decimal('0')):
+                setattr(analysed, field, value)
+        analysed.save()
+
+    logger.info(
+        "%s analysed header %s for bill %s (party=%s, amount=%s)",
+        "Created" if created else "Updated", analysed.id, bill.id, company_name, amount,
+    )
+    return analysed

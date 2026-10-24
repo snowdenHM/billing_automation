@@ -16,6 +16,8 @@ from rest_framework.response import Response
 from apps.common.bill_filters import apply_bill_search
 from apps.common.pagination import DefaultPagination
 from apps.common.utils import get_organization_from_request
+from apps.common.models import BillActivity
+from apps.common.services.activity import record_activity
 
 logger = logging.getLogger(__name__)
 
@@ -337,6 +339,20 @@ def zoho_bills_upload_base(
                     if bill.file:
                         uploaded_file_paths.append(bill.file.name)
                     created_bills.append(bill)
+
+            # First event on every bill's timeline. Recorded here rather
+            # than in each voucher type's view so a type added later cannot
+            # start its history half way through. ``record_activity`` is
+            # best-effort by design, so a logging failure cannot fail an
+            # upload that already succeeded.
+            for created in created_bills:
+                record_activity(
+                    created, BillActivity.Action.UPLOADED,
+                    actor=getattr(request, 'user', None),
+                    organization=organization,
+                    summary=f"Uploaded {getattr(created.file, 'name', '').rsplit('/', 1)[-1]}"[:255],
+                    metadata={"file_type": getattr(created, "fileType", "")},
+                )
 
             # Defer enqueue to ``transaction.on_commit`` so jobs only fire
             # after the DB row is truly durable. Prevents ghost jobs on
@@ -665,6 +681,15 @@ def zoho_bill_delete_base(request, org_id, bill_id, *, bill_model, label):
             except Exception as e:
                 logger.warning(f"Could not delete file {bill.file}: {e}")
 
+        # Recorded before the row goes: afterwards there is nothing left
+        # to read the organisation or the name off. Zoho bills are deleted
+        # outright rather than trashed, so this is DELETED, not TRASHED.
+        record_activity(
+            bill, BillActivity.Action.DELETED,
+            actor=getattr(request, 'user', None),
+            organization=organization,
+            summary="Deleted permanently",
+        )
         bill.delete()
         return Response({"detail": f"{label} bill and associated file deleted successfully"})
 

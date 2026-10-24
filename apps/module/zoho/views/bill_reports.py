@@ -14,7 +14,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.common.permissions import IsOrgAdmin
+from apps.common import roles
+from apps.common.permissions import HasOrgPermission, requires
+
 from apps.common.services.reports import (
     build_report_workbook,
     rows_from_expense_analyzed,
@@ -29,9 +31,42 @@ from ..models import (
     ExpenseZohoBill,
     JournalBill,
     JournalZohoBill,
+    PaymentBill,
+    PaymentZohoBill,
+    ReceiptBill,
+    ReceiptZohoBill,
+    SalesBill,
+    SalesZohoBill,
     VendorBill,
     VendorZohoBill,
 )
+
+
+class _PartyAsVendor:
+    """Expose an analysed header's customer under the name the shared row
+    builders read.
+
+    ``rows_from_*_analyzed`` take the party off ``.vendor`` because they
+    were written for the purchase side. On the sales/receipt side the
+    party is a customer; wrapping is cheaper and less fragile than
+    forking the builders or giving the models a misleading alias.
+    """
+
+    __slots__ = ("_analysed",)
+
+    def __init__(self, analysed):
+        self._analysed = analysed
+
+    def __getattr__(self, name):
+        if name == "vendor":
+            return self._analysed.customer
+        return getattr(self._analysed, name)
+
+
+def _rows_with_customer_party(row_builder):
+    def _build(bill, analysed):
+        return row_builder(bill, _PartyAsVendor(analysed))
+    return _build
 
 logger = logging.getLogger(__name__)
 
@@ -133,8 +168,9 @@ def _build_and_stream(
 
 
 @extend_schema(summary="Download Zoho Vendor Bill report (xlsx)", tags=["Zoho · Reports"])
+@requires(roles.EXPORT_REPORTS)
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def zoho_vendor_bills_report(request, org_id):
     return _build_and_stream(
         request,
@@ -148,8 +184,9 @@ def zoho_vendor_bills_report(request, org_id):
 
 
 @extend_schema(summary="Download Zoho Journal Entry report (xlsx)", tags=["Zoho · Reports"])
+@requires(roles.EXPORT_REPORTS)
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def zoho_journal_bills_report(request, org_id):
     return _build_and_stream(
         request,
@@ -163,8 +200,9 @@ def zoho_journal_bills_report(request, org_id):
 
 
 @extend_schema(summary="Download Zoho Expense Bill report (xlsx)", tags=["Zoho · Reports"])
+@requires(roles.EXPORT_REPORTS)
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated, HasOrgPermission])
 def zoho_expense_bills_report(request, org_id):
     return _build_and_stream(
         request,
@@ -174,4 +212,54 @@ def zoho_expense_bills_report(request, org_id):
         row_builder=rows_from_expense_analyzed,
         filename_stub="zoho-expense-bills",
         sheet_title="Expense Bills",
+    )
+
+
+@extend_schema(summary="Download Zoho Sales Invoice report (xlsx)", tags=["Zoho · Reports"])
+@requires(roles.EXPORT_REPORTS)
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated, HasOrgPermission])
+def zoho_sales_bills_report(request, org_id):
+    return _build_and_stream(
+        request,
+        org_id,
+        bill_model=SalesBill,
+        analyzed_model=SalesZohoBill,
+        row_builder=_rows_with_customer_party(rows_from_vendor_analyzed),
+        filename_stub="zoho-sales-invoices",
+        sheet_title="Sales Invoices",
+    )
+
+
+@extend_schema(summary="Download Zoho Receipt Voucher report (xlsx)", tags=["Zoho · Reports"])
+@requires(roles.EXPORT_REPORTS)
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated, HasOrgPermission])
+def zoho_receipt_bills_report(request, org_id):
+    return _build_and_stream(
+        request,
+        org_id,
+        bill_model=ReceiptBill,
+        analyzed_model=ReceiptZohoBill,
+        # No line items on a payment object, so the expense-shaped builder
+        # emits the single bill-level row, which is all there is to say.
+        row_builder=_rows_with_customer_party(rows_from_expense_analyzed),
+        filename_stub="zoho-receipt-vouchers",
+        sheet_title="Receipt Vouchers",
+    )
+
+
+@extend_schema(summary="Download Zoho Payment Voucher report (xlsx)", tags=["Zoho · Reports"])
+@requires(roles.EXPORT_REPORTS)
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated, HasOrgPermission])
+def zoho_payment_bills_report(request, org_id):
+    return _build_and_stream(
+        request,
+        org_id,
+        bill_model=PaymentBill,
+        analyzed_model=PaymentZohoBill,
+        row_builder=rows_from_expense_analyzed,
+        filename_stub="zoho-payment-vouchers",
+        sheet_title="Payment Vouchers",
     )

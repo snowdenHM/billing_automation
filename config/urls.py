@@ -15,23 +15,49 @@ from apps.common.views import serve_bill_file
 
 # Main URL patterns
 urlpatterns = [
-    # Landing page
-    path("", TemplateView.as_view(template_name="index.html"), name="landing"),
+    # Landing page for the API host. The links out of it have to point at
+    # the React app, which is on a different origin, so the one setting it
+    # needs is passed in as context rather than hardcoded in the template.
+    path(
+        "",
+        TemplateView.as_view(
+            template_name="index.html",
+            extra_context={
+                "app_url": settings.FRONTEND_URL.rstrip("/"),
+                "login_url": settings.FRONTEND_URL.rstrip("/") + "/auth/login",
+            },
+        ),
+        name="landing",
+    ),
 
-    # Django Admin
+    # Admin
     path("admin/", admin.site.urls),
 
     # API v1 endpoints
     path("api/v1/", include("apps.api.urls")),
 
-    # API Documentation
-    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
-    path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
-    path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
-    
-    # Django-RQ admin interface
+    # Background job queue dashboard
     path("admin/rq/", include("django_rq.urls")),
 ]
+
+# API documentation — development only.
+#
+# These three served the complete schema to anyone who asked: every
+# endpoint, every field name, every request and response shape, the
+# voucher types, the role names. For a competitor that is the product's
+# blueprint; for an attacker it is the attack surface, written out.
+#
+# The Tally connector's contract lives in docs/ as Markdown, which is
+# what the integrator actually needs, so nothing outside the team loses
+# anything by this being closed.
+if settings.DEBUG:
+    urlpatterns += [
+        path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+        path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"),
+             name="swagger-ui"),
+        path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"),
+             name="redoc"),
+    ]
 
 # Media is always served through serve_bill_file, which verifies the signed
 # token the serializers mint. Registering this only under DEBUG left the

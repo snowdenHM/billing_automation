@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from unfold.admin import ModelAdmin as UnfoldModelAdmin
+
+from apps.common.admin import BaseOrgAdmin
 from .models import Organization, OrgMembership, OrganizationAPIKey, Module, OrganizationModule
 
 
@@ -13,12 +15,22 @@ from .models import Organization, OrgMembership, OrganizationAPIKey, Module, Org
 # list_select_related is set wherever list_display shows a FK: without it
 # Django issues one extra query per row per FK, so a 50-row page was
 # firing ~100 queries to render names it could have joined in one.
+#
+# Every model in this app belongs to an organisation, so each admin extends
+# BaseOrgAdmin rather than ModelAdmin: on a plain ModelAdmin a staff user who
+# is not a superuser sees — and can edit — every tenant's memberships, API
+# keys and module assignments. Today only superusers are staff, so nothing
+# leaks right now; the point is that granting staff to one client's admin
+# stops being an incident. ``Module`` is the exception: it is the
+# deployment's catalogue of products, not a tenant's data.
 
 
 @admin.register(Organization)
-class OrganizationAdmin(UnfoldModelAdmin):
+class OrganizationAdmin(BaseOrgAdmin):
     """Admin interface for Organization model."""
     
+    # The tenant *is* the row here, so scope by primary key.
+    org_lookup = "id"
     list_display = ("name", "slug", "gst_number", "status", "owner", "created_by", "created_at")
     list_display_links = ("name",)
     list_select_related = ("owner", "created_by")
@@ -44,7 +56,7 @@ class OrganizationAdmin(UnfoldModelAdmin):
 
 
 @admin.register(OrgMembership)
-class OrgMembershipAdmin(UnfoldModelAdmin):
+class OrgMembershipAdmin(BaseOrgAdmin):
     """Admin interface for Organization Membership."""
     
     list_display = ("organization", "user", "role", "is_active", "created_at")
@@ -69,7 +81,7 @@ class OrgMembershipAdmin(UnfoldModelAdmin):
 
 
 @admin.register(OrganizationAPIKey)
-class OrganizationAPIKeyAdmin(UnfoldModelAdmin):
+class OrganizationAPIKeyAdmin(BaseOrgAdmin):
     """Admin interface for Organization API Keys."""
     
     list_display = ("name", "organization", "api_key_prefix", "created_by", "created_at")
@@ -128,7 +140,7 @@ class ModuleAdmin(UnfoldModelAdmin):
     
 
 @admin.register(OrganizationModule)
-class OrganizationModuleAdmin(UnfoldModelAdmin):
+class OrganizationModuleAdmin(BaseOrgAdmin):
     """Admin interface for Organization Module assignments."""
     
     list_display = ("organization", "module", "is_active", "created_at")

@@ -7,6 +7,7 @@ is logged and swallowed.
 """
 
 import logging
+from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 
@@ -27,6 +28,11 @@ _BILL_KINDS = {
     "VendorBill": (BillActivity.Module.ZOHO, BillActivity.BillType.VENDOR),
     "ExpenseBill": (BillActivity.Module.ZOHO, BillActivity.BillType.EXPENSE),
     "JournalBill": (BillActivity.Module.ZOHO, BillActivity.BillType.JOURNAL),
+    # The Zoho models carry no "Zoho" prefix, so these names are the Zoho
+    # sales/receipt/payment types, not the Tally ones above.
+    "SalesBill": (BillActivity.Module.ZOHO, BillActivity.BillType.SALES),
+    "ReceiptBill": (BillActivity.Module.ZOHO, BillActivity.BillType.RECEIPT),
+    "PaymentBill": (BillActivity.Module.ZOHO, BillActivity.BillType.PAYMENT),
 }
 
 
@@ -121,19 +127,60 @@ def _as_text(value):
     return str(value)
 
 
+def _as_number(text):
+    """*text* as a finite Decimal, or None when it is not a number.
+
+    Thousands separators are dropped first: a total the UI renders as
+    ``1,20,000.00`` and the model stores as ``120000`` is the same
+    figure written two ways, not an edit.
+    """
+    candidate = text.strip().replace(",", "").replace(" ", "")
+    if not candidate:
+        return None
+    try:
+        number = Decimal(candidate)
+    except (InvalidOperation, ValueError):
+        return None
+    # NaN compares unequal to itself and Infinity is never a real
+    # amount; treat both as "not a number" so they fall back to text.
+    return number if number.is_finite() else None
+
+
+def same_value(old, new):
+    """True when the two rendered values mean the same thing.
+
+    The corrections recorded here are the only ground truth we have for
+    how well the extraction routes read a bill, so an entry that is not
+    a correction poisons that signal. Two amounts are the same amount
+    whichever way they are written -- ``0`` and ``0.00``, ``1200`` and
+    ``1,200.00`` -- and the verify screen reformats fields it never
+    changed. Everything else is compared as text, deliberately: a vendor
+    renamed from ``ACME`` to ``Acme`` is a real correction.
+    """
+    if old == new:
+        return True
+    old_number, new_number = _as_number(old), _as_number(new)
+    if old_number is not None and new_number is not None:
+        return old_number == new_number
+    return old.strip() == new.strip()
+
+
 def diff_fields(before: dict, after: dict, *, suggested: dict = None, labels: dict = None):
     """Change entries for the keys whose value differs between the two dicts.
 
     *labels* renames a field for display. *suggested* carries what the
     system had proposed for a field, which is what makes an entry useful
     for learning rather than only for audit.
+
+    Values that differ only in how they are written are not changes --
+    see :func:`same_value`.
     """
     suggested = suggested or {}
     labels = labels or {}
     changes = []
     for field in before.keys() | after.keys():
         old, new = _as_text(before.get(field)), _as_text(after.get(field))
-        if old == new:
+        if same_value(old, new):
             continue
         entry = {
             "field": labels.get(field, field),
@@ -142,7 +189,10 @@ def diff_fields(before: dict, after: dict, *, suggested: dict = None, labels: di
         }
         if field in suggested:
             proposed = _as_text(suggested[field])
-            if proposed and proposed != new:
+            # Same test again: a suggestion the user accepted and merely
+            # reformatted was taken, and recording it as refused would
+            # count against the route that got it right.
+            if proposed and not same_value(proposed, new):
                 entry["suggested"] = proposed
         changes.append(entry)
     return sorted(changes, key=lambda c: c["field"])
@@ -154,6 +204,10 @@ def diff_fields(before: dict, after: dict, *, suggested: dict = None, labels: di
 SNAPSHOT_FIELDS = (
     "bill_no", "bill_date", "due_date", "total",
     "igst", "cgst", "sgst", "tds", "round_off", "gst_type",
+    # Payment-shaped vouchers (Zoho receipt/payment) carry the money in
+    # ``amount`` and have no line items, so without these two a verify on
+    # one of them records "no changes" however much the operator edited.
+    "amount", "payment_mode",
 )
 
 BILL_FIELD_LABELS = {
@@ -168,6 +222,9 @@ BILL_FIELD_LABELS = {
     "round_off": "Round off",
     "gst_type": "GST type",
     "vendor": "Vendor",
+    "customer": "Customer",
+    "amount": "Amount",
+    "payment_mode": "Payment mode",
     "line_items": "Line items",
 }
 
@@ -184,9 +241,19 @@ def snapshot_bill_fields(analyzed_bill):
     for field in SNAPSHOT_FIELDS:
         if hasattr(analyzed_bill, field):
             snap[field] = _as_text(getattr(analyzed_bill, field))
-    vendor = getattr(analyzed_bill, "vendor", None)
-    if vendor is not None:
-        snap["vendor"] = _as_text(getattr(vendor, "name", vendor))
+    # The party sits under a different name on each side of the ledger:
+    # ``vendor`` on a purchase, ``customer`` on a sale or receipt. Both are
+    # snapshotted, so changing the party is recorded whichever it is.
+    for party_field in ("vendor", "customer"):
+        party = getattr(analyzed_bill, party_field, None)
+        if party is not None:
+            snap[party_field] = _as_text(getattr(party, "name", party))
+    # A payment-shaped voucher keeps its money in ``amount`` and exposes
+    # ``total`` as a read-only mirror for the report builders. Snapshotting
+    # both would report every edit to the figure twice, under two names.
+    if "amount" in snap and "total" in snap and same_value(snap["amount"], snap["total"]):
+        del snap["total"]
+
     try:
         snap["line_items"] = str(analyzed_bill.products.count())
     except Exception:
