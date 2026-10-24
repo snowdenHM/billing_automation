@@ -13,6 +13,7 @@ from django.utils import timezone
 from django.db.models import Q
 
 from apps.organizations.models import Organization
+from apps.common.models import TrashableMixin
 from apps.common.bill_naming import (
     NAME_UNIQUENESS_ENFORCED_FROM,
     save_with_unique_name,
@@ -295,7 +296,7 @@ class ZohoVendorCredit(BaseTeamModel):
 #         Vendor Bills
 # ===============================
 
-class VendorBill(BaseTeamModel):
+class VendorBill(BaseTeamModel, TrashableMixin):
     """
     Represents a vendor bill/invoice that has been uploaded to the system.
     Tracks the bill file, analysis status, and processing state.
@@ -575,7 +576,7 @@ class VendorZohoConsolidatedProduct(BaseTeamModel):
 #         Journal Bills
 # ===============================
 
-class JournalBill(BaseTeamModel):
+class JournalBill(BaseTeamModel, TrashableMixin):
     """
     Represents an expense bill/invoice that has been uploaded to the system.
     Similar to VendorBill but specifically for expense transactions.
@@ -833,7 +834,7 @@ class JournalZohoConsolidatedProduct(BaseTeamModel):
 #         Expense Bills
 # ===============================
 
-class ExpenseBill(BaseTeamModel):
+class ExpenseBill(BaseTeamModel, TrashableMixin):
     """
     Represents an expense bill/invoice that has been uploaded to the system.
     Similar to VendorBill but specifically for expense transactions.
@@ -1081,7 +1082,7 @@ class ZohoCustomer(BaseTeamModel):
 #         Sales Invoices
 # ===============================
 
-class SalesBill(BaseTeamModel):
+class SalesBill(BaseTeamModel, TrashableMixin):
     """
     An uploaded sales invoice awaiting analysis, verification and sync.
 
@@ -1351,7 +1352,7 @@ class _BaseZohoPaymentUpload(BaseTeamModel):
         return self.billmunshiName or f"{type(self).__name__}:{self.id}"
 
 
-class ReceiptBill(_BaseZohoPaymentUpload):
+class ReceiptBill(_BaseZohoPaymentUpload, TrashableMixin):
     """An uploaded receipt (money in, from a customer) awaiting processing."""
 
     uploaded_by = models.ForeignKey(
@@ -1384,7 +1385,7 @@ class ReceiptBill(_BaseZohoPaymentUpload):
         )
 
 
-class PaymentBill(_BaseZohoPaymentUpload):
+class PaymentBill(_BaseZohoPaymentUpload, TrashableMixin):
     """An uploaded payment advice (money out, to a vendor) awaiting processing."""
 
     uploaded_by = models.ForeignKey(

@@ -150,7 +150,7 @@ def zoho_payment_verify_base(
         payload_bill_id = request.data.get('bill_id', bill_id)
         data = request.data.get('zoho_bill', request.data)
 
-        bill = bill_model.objects.get(id=payload_bill_id, organization=organization)
+        bill = bill_model.objects.alive().get(id=payload_bill_id, organization=organization)
 
         if bill.status not in ['Analysed', 'Verified']:
             return Response(
@@ -231,7 +231,7 @@ def zoho_payment_sync_base(
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        bill = bill_model.objects.get(id=bill_id, organization=organization)
+        bill = bill_model.objects.alive().get(id=bill_id, organization=organization)
     except bill_model.DoesNotExist:
         return Response({"detail": f"{label} not found"}, status=status.HTTP_404_NOT_FOUND)
 

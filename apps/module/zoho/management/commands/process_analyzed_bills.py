@@ -128,7 +128,7 @@ class Command(BaseCommand):
         self.stdout.write(f'\n  🏢 Processing Vendor Bills...')
 
         # Get analyzed vendor bills
-        queryset = VendorBill.objects.filter(
+        queryset = VendorBill.objects.alive().filter(
             organization=organization,
             status='Analysed',
             updated_at__gte=cutoff_date
@@ -188,7 +188,7 @@ class Command(BaseCommand):
         self.stdout.write(f'\n  💰 Processing Expense Bills...')
 
         # Get analyzed expense bills
-        queryset = JournalBill.objects.filter(
+        queryset = JournalBill.objects.alive().filter(
             organization=organization,
             status='Analysed',
             updated_at__gte=cutoff_date

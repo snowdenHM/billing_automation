@@ -37,6 +37,9 @@ def zoho_overview_view(request, org_id):
         analyzed_vendor_model=VendorZohoBill,
         analyzed_expense_model=JournalZohoBill,
         counter_model=ZohoVendor,
+        # Zoho bills are trashable now, so the amounts must drop trashed
+        # bills the way the counts beside them already do.
+        analyzed_bill_field="selectBill",
     )
 
 

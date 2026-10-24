@@ -253,11 +253,11 @@ def sales_bill_analyze_view(request, org_id, bill_id):
 
 
 @extend_schema(
-    responses={"200": {"detail": "Sales invoice deleted successfully"}},
+    responses={"204": None},
     tags=["Zoho Sales Invoices"],
     methods=["DELETE"],
 )
-@requires(roles.DELETE_BILLS)
+@requires(roles.TRASH_BILLS)
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, HasOrgPermission])
 def sales_bill_delete_view(request, org_id, bill_id):
@@ -297,7 +297,7 @@ def sales_bill_verify_view(request, org_id, bill_id):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        bill = SalesBill.objects.get(id=payload_bill_id, organization=organization)
+        bill = SalesBill.objects.alive().get(id=payload_bill_id, organization=organization)
 
         if bill.status not in ['Analysed', 'Verified']:
             return Response(
@@ -470,7 +470,7 @@ def sales_bill_sync_view(request, org_id, bill_id):
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        bill = SalesBill.objects.get(id=bill_id, organization=organization)
+        bill = SalesBill.objects.alive().get(id=bill_id, organization=organization)
     except SalesBill.DoesNotExist:
         return Response({"detail": "Sales invoice not found"}, status=status.HTTP_404_NOT_FOUND)
 

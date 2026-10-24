@@ -154,12 +154,12 @@ class TallyPaymentAnalyzedBillSerializer(serializers.ModelSerializer):
             # written only by the forex endpoint, which freezes the rate
             # when the operator accepts it. Letting verify rewrite them
             # would let an ordinary re-save silently restate the bill.
-            "currency", "exchange_rate", "exchange_rate_source", "exchange_rate_at",
+            "currency", "exchange_rate", "exchange_rate_source", "exchange_rate_reference", "exchange_rate_at",
         ]
         read_only_fields = [
             "id", "created_at", "vendor_name", "payment_mode_name",
             "selected_bill_name", "products",
-            "currency", "exchange_rate", "exchange_rate_source", "exchange_rate_at",
+            "currency", "exchange_rate", "exchange_rate_source", "exchange_rate_reference", "exchange_rate_at",
         ]
 
 

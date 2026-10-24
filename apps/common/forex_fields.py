@@ -29,9 +29,20 @@ from django.db import models
 class ForeignCurrencyMixin(models.Model):
     class RateSource(models.TextChoices):
         BASE = "base", "Rupee bill"
-        LIVE = "live", "Live rate"
-        CACHED = "cached", "Cached rate"
+        LIVE = "live", "Market rate (live)"
+        CACHED = "cached", "Market rate (cached)"
         MANUAL = "manual", "Entered by hand"
+        # CBIC's notified rate, split by the column it was read from.
+        # Imports and exports are notified at different figures — about
+        # 1.8% apart on USD — so "CBIC" alone would not tell an auditor
+        # which number was used. The side is part of the answer.
+        CBIC_IMPORT = "cbic_import", "CBIC notified (imports)"
+        CBIC_EXPORT = "cbic_export", "CBIC notified (exports)"
+
+    #: The source values that mean "a statutory notified rate". Grouped
+    #: here so a caller asking "is this good enough for a return?" does
+    #: not have to know the spelling of each one.
+    CBIC_SOURCES = ("cbic_import", "cbic_export")
 
     currency = models.CharField(
         max_length=3,
@@ -50,10 +61,22 @@ class ForeignCurrencyMixin(models.Model):
     )
 
     exchange_rate_source = models.CharField(
-        max_length=10,
+        max_length=20,
         choices=RateSource.choices,
         default=RateSource.BASE,
         help_text="Where this rate came from, so a hand-typed one is never mistaken for a fetched one.",
+    )
+
+    # The citation, when there is one: "CBIC 29/2026 w.e.f. 15-10-2026".
+    # A notified rate is only as good as the notification it came from —
+    # "we used the CBIC rate" is not an answer to an auditor, "we used
+    # the rate notified under 29/2026" is. Blank for market and
+    # hand-entered rates, which have no notification to cite.
+    exchange_rate_reference = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="The notification this rate was published under, if it was a notified rate.",
     )
 
     # Nullable, and deliberately not auto-populated: a row with
@@ -71,3 +94,13 @@ class ForeignCurrencyMixin(models.Model):
     @property
     def is_foreign_currency(self):
         return (self.currency or "INR").upper() != "INR"
+
+    @property
+    def uses_notified_rate(self):
+        """True when the frozen rate is a CBIC notified one.
+
+        The distinction a return cares about: a market mid-rate and a
+        notified rate are both "a rate", and only one of them is the
+        figure a customs or GST-on-imports computation is allowed to use.
+        """
+        return self.exchange_rate_source in self.CBIC_SOURCES

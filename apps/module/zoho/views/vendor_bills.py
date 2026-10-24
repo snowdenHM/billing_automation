@@ -8,7 +8,6 @@ from datetime import datetime
 from decimal import Decimal
 
 import requests
-from django.conf import settings
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
@@ -527,7 +526,8 @@ def vendor_bills_list_view(request, org_id):
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    bills = VendorBill.objects.filter(organization=organization)
+    # `.alive()` — a bill in the trash must not appear on any list.
+    bills = VendorBill.objects.alive().filter(organization=organization)
 
     # Filter by status based on query parameters
     status_param = request.query_params.get('status', '').lower()
@@ -678,7 +678,7 @@ def _vendor_bill_upload_legacy(request, org_id):
                 file_extension = uploaded_file.name.lower().split('.')[-1]
 
                 # Check for potential file-level duplicates (same name, similar size)
-                similar_files = VendorBill.objects.filter(
+                similar_files = VendorBill.objects.alive().filter(
                     organization=organization,
                     file__isnull=False
                 ).exclude(status='Draft')
@@ -844,7 +844,7 @@ def vendor_bill_detail_view(request, org_id, bill_id):
 
     try:
         # Fetch the VendorBill without prefetch_related to avoid relationship errors
-        bill = VendorBill.objects.get(id=bill_id, organization=organization)
+        bill = VendorBill.objects.alive().get(id=bill_id, organization=organization)
 
         # Neighbouring bills in the verification queue, ordered the same way
         # the list page shows them. Positional so that Back is the exact
@@ -903,7 +903,7 @@ def vendor_bill_processing_status(request, org_id, bill_id):
         return Response({'error': 'Organization not found'}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        bill = VendorBill.objects.get(id=bill_id, organization=organization)
+        bill = VendorBill.objects.alive().get(id=bill_id, organization=organization)
         
         # Check if bill is currently being processed
         is_processing = getattr(bill, 'is_processing', False)
@@ -1003,7 +1003,7 @@ def vendor_bill_analyze_view(request, org_id, bill_id):
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        bill = VendorBill.objects.get(id=bill_id, organization=organization)
+        bill = VendorBill.objects.alive().get(id=bill_id, organization=organization)
 
         if bill.status != 'Draft':
             return Response({
@@ -1159,7 +1159,7 @@ def vendor_bill_verify_view(request, org_id, bill_id):
             logger.error(f"[DEBUG] vendor_bill_verify_view - No vendor data found in payload")
 
         # Use the bill_id from payload if provided, otherwise use URL parameter
-        bill = VendorBill.objects.get(id=payload_bill_id, organization=organization)
+        bill = VendorBill.objects.alive().get(id=payload_bill_id, organization=organization)
         logger.error(f"[DEBUG] vendor_bill_verify_view - Found VendorBill: {bill.id}, status: {bill.status}")
 
         if bill.status not in ['Analysed', 'Verified']:
@@ -1549,7 +1549,7 @@ def vendor_bill_sync_view(request, org_id, bill_id):
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        bill = VendorBill.objects.get(id=bill_id, organization=organization)
+        bill = VendorBill.objects.alive().get(id=bill_id, organization=organization)
 
         if bill.status != 'Verified':
             return Response({
@@ -1892,40 +1892,25 @@ def vendor_bill_sync_view(request, org_id, bill_id):
 
 # ✅
 @extend_schema(
-    responses={"200": {"detail": "Vendor bill deleted successfully"}},
+    responses={"204": None},
     tags=["Zoho Vendor Bills"],
     methods=["DELETE"]
 )
-@requires(roles.DELETE_BILLS)
+@requires(roles.TRASH_BILLS)
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, HasOrgPermission])
 def vendor_bill_delete_view(request, org_id, bill_id):
-    """Delete a vendor bill and its associated file."""
-    organization = get_organization_from_request(request, org_id=org_id)
-    if not organization:
-        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+    """Move a vendor bill to the trash.
 
-    try:
-        bill = VendorBill.objects.get(id=bill_id, organization=organization)
+    Delegates to the shared helper rather than keeping its own copy: this
+    view used to destroy the row and unlink the file itself, which is the
+    one place the Zoho delete diverged from the other five.
+    """
+    from apps.module.zoho.views.bill_view_helpers import zoho_bill_delete_base
 
-        # Delete the file from storage if it exists
-        if bill.file:
-            try:
-                file_path = os.path.join(settings.MEDIA_ROOT, str(bill.file))
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-            except Exception as e:
-                logger.warning(f"Could not delete file {bill.file}: {str(e)}")
-
-        # Delete the bill record from the database
-        bill.delete()
-
-        return Response({
-            "detail": "Vendor bill and associated file deleted successfully"
-        })
-
-    except VendorBill.DoesNotExist:
-        return Response({"detail": "Vendor bill not found"}, status=status.HTTP_404_NOT_FOUND)
+    return zoho_bill_delete_base(
+        request, org_id, bill_id, bill_model=VendorBill, label='Vendor',
+    )
 
 
 # ============================================================================
@@ -2051,7 +2036,7 @@ def move_bill_between_modules_view(request, org_id):
 
                 if from_module == 'vendor':
                     try:
-                        source_bill = VendorBill.objects.get(id=bill_id, organization=organization)
+                        source_bill = VendorBill.objects.alive().get(id=bill_id, organization=organization)
                         try:
                             source_zoho_bill = VendorZohoBill.objects.prefetch_related(
                                 'products', 'consolidated_products'
@@ -2068,7 +2053,7 @@ def move_bill_between_modules_view(request, org_id):
 
                 elif from_module == 'expense':
                     try:
-                        source_bill = ExpenseBill.objects.get(id=bill_id, organization=organization)
+                        source_bill = ExpenseBill.objects.alive().get(id=bill_id, organization=organization)
                         try:
                             source_zoho_bill = ExpenseZohoBill.objects.prefetch_related(
                                 'products', 'consolidated_products'
@@ -2085,7 +2070,7 @@ def move_bill_between_modules_view(request, org_id):
 
                 elif from_module == 'journal':
                     try:
-                        source_bill = JournalBill.objects.get(id=bill_id, organization=organization)
+                        source_bill = JournalBill.objects.alive().get(id=bill_id, organization=organization)
                         try:
                             source_zoho_bill = JournalZohoBill.objects.prefetch_related(
                                 'products', 'consolidated_products'

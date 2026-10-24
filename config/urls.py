@@ -9,24 +9,24 @@ from django.contrib import admin
 from django.urls import path, include, re_path
 from django.conf import settings
 from django.conf.urls.static import static
-from django.views.generic import TemplateView
+from django.views.generic import RedirectView
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 from apps.common.views import serve_bill_file
 
 # Main URL patterns
 urlpatterns = [
-    # Landing page for the API host. The links out of it have to point at
-    # the React app, which is on a different origin, so the one setting it
-    # needs is passed in as context rather than hardcoded in the template.
+    # The API host has no front door of its own. It used to serve a second
+    # marketing page here, which meant two pages to keep true and two
+    # places a claim could go stale. The React app is the product's
+    # landing page; anyone who lands on the API host is sent there.
+    #
+    # 302 rather than 301: a permanent redirect is cached by browsers
+    # more or less forever, so moving this later would mean chasing it
+    # out of caches we do not control.
     path(
         "",
-        TemplateView.as_view(
-            template_name="index.html",
-            extra_context={
-                "app_url": settings.FRONTEND_URL.rstrip("/"),
-                "login_url": settings.FRONTEND_URL.rstrip("/") + "/auth/login",
-            },
-        ),
+        RedirectView.as_view(url=settings.FRONTEND_URL.rstrip("/") or "/admin/",
+                             permanent=False),
         name="landing",
     ),
 

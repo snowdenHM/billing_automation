@@ -22,6 +22,8 @@ from apps.common.pagination import DefaultPagination
 from apps.common.utils import get_organization_from_request
 from apps.common.views import generate_signed_bill_file_url
 from apps.module.tally.trash import (
+    MODULE,
+    MODULE_LABEL,
     TRASH_KINDS,
     get_kind,
     purge_bill,
@@ -83,6 +85,8 @@ def _serialize(bill, kind, request):
     """Flatten one trashed bill into the shape the Trash page renders."""
     return {
         'id': str(bill.id),
+        'module': MODULE,
+        'module_label': MODULE_LABEL,
         'type': kind.slug,
         'type_label': kind.label,
         'list_path': kind.list_path,
@@ -182,10 +186,17 @@ def trash_list(request, org_id):
 
     summary = retention_summary()
     extra = {
+        'module': MODULE,
         'retention_days': summary['retention_days'],
         'counts_by_type': counts,
         'types': [
-            {'slug': k.slug, 'label': k.label, 'list_path': k.list_path}
+            {
+                'slug': k.slug,
+                'label': k.label,
+                'list_path': k.list_path,
+                'module': MODULE,
+                'module_label': MODULE_LABEL,
+            }
             for k in TRASH_KINDS.values()
         ],
     }
@@ -243,6 +254,7 @@ def trash_restore(request, org_id, kind_slug, bill_id):
     return Response({
         'message': f'{kind.label} restored',
         'id': str(bill.id),
+        'module': MODULE,
         'type': kind.slug,
         'list_path': kind.list_path,
     })

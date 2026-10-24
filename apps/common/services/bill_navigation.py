@@ -27,9 +27,16 @@ QUEUE_STATUS = "Analysed"
 
 
 def _queue(bill, status):
-    """Bills of the same type and organisation that are still to be processed."""
+    """Bills of the same type and organisation that are still to be processed.
+
+    Trashed bills are excluded: a bill someone deleted must not turn up as
+    the next thing to verify. Applied on capability (``alive()``) so this
+    stays correct for any bill model, trashable or not.
+    """
+    manager = bill.__class__.objects
+    base = manager.alive() if hasattr(manager, "alive") else manager.all()
     return (
-        bill.__class__.objects.filter(organization=bill.organization, status=status)
+        base.filter(organization=bill.organization, status=status)
         .exclude(id=bill.id)
     )
 

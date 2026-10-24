@@ -7,7 +7,6 @@ Eliminates duplication by parameterizing model / serializer / label.
 import logging
 import os
 
-from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db import transaction
 from rest_framework import status
@@ -40,7 +39,8 @@ def zoho_bills_list_base(request, org_id, *, bill_model, list_serializer):
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    bills = bill_model.objects.filter(organization=organization)
+    # `.alive()` — a bill in the trash must not appear on any list.
+    bills = bill_model.objects.alive().filter(organization=organization)
 
     status_param = request.query_params.get('status', '').lower()
     if status_param == 'draft':
@@ -230,7 +230,7 @@ def zoho_bills_upload_base(
 
                 # Check for potential file-level duplicates (same name /
                 # similar size). Advisory only; AI-based dedup runs later.
-                similar_files = bill_model.objects.filter(
+                similar_files = bill_model.objects.alive().filter(
                     organization=organization, file__isnull=False
                 ).exclude(status='Draft')
 
@@ -564,7 +564,7 @@ def zoho_bill_detail_base(
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        bill = bill_model.objects.get(id=bill_id, organization=organization)
+        bill = bill_model.objects.alive().get(id=bill_id, organization=organization)
 
         # Neighbouring bills in the verification queue, ordered the same way
         # the list page shows them. Positional so that Back is the exact
@@ -614,7 +614,7 @@ def zoho_bill_analyze_base(
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        bill = bill_model.objects.get(id=bill_id, organization=organization)
+        bill = bill_model.objects.alive().get(id=bill_id, organization=organization)
 
         if bill.status != 'Draft':
             return Response(
@@ -665,38 +665,54 @@ def zoho_bill_analyze_base(
 # ============================================================================
 
 def zoho_bill_delete_base(request, org_id, bill_id, *, bill_model, label):
-    """Generic delete view for Zoho bills."""
+    """Move a Zoho bill to the trash.
+
+    This is what the delete button on every Zoho bill list now calls. The
+    row and its uploaded file are both left intact so the bill stays fully
+    restorable; nothing is destroyed until either an admin deletes it
+    permanently from Trash or the purge collects it after the retention
+    window. Previously this destroyed the row and unlinked the file
+    outright, which is the asymmetry with Tally this replaces.
+    """
+    from apps.module.zoho.trash import trash_blocked_reason
+
     organization = get_organization_from_request(request, org_id=org_id)
     if not organization:
         return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        bill = bill_model.objects.get(id=bill_id, organization=organization)
-
-        if bill.file:
-            try:
-                file_path = os.path.join(settings.MEDIA_ROOT, str(bill.file))
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-            except Exception as e:
-                logger.warning(f"Could not delete file {bill.file}: {e}")
-
-        # Recorded before the row goes: afterwards there is nothing left
-        # to read the organisation or the name off. Zoho bills are deleted
-        # outright rather than trashed, so this is DELETED, not TRASHED.
-        record_activity(
-            bill, BillActivity.Action.DELETED,
-            actor=getattr(request, 'user', None),
-            organization=organization,
-            summary="Deleted permanently",
-        )
-        bill.delete()
-        return Response({"detail": f"{label} bill and associated file deleted successfully"})
-
+        # `.alive()` so trashing something already in the trash reads as
+        # "not found" rather than silently resetting its retention clock.
+        bill = bill_model.objects.alive().get(id=bill_id, organization=organization)
     except bill_model.DoesNotExist:
         return Response({"detail": f"{label} bill not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    # A bill that has actually reached Zoho Books is a posted accounting
+    # record and stays put, whatever the client sends.
+    blocked = trash_blocked_reason(bill)
+    if blocked:
+        return Response(
+            {
+                "detail": blocked,
+                "error": "Bill cannot be deleted",
+                "message": blocked,
+                "error_code": "BILL_ALREADY_SYNCED",
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    try:
+        actor = getattr(request, 'user', None)
+        bill.move_to_trash(user=actor)
+        record_activity(
+            bill, BillActivity.Action.TRASHED,
+            actor=actor,
+            organization=organization,
+            summary="Moved to Trash",
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
     except Exception as e:
-        logger.error(f"Error deleting {label} bill: {e}")
+        logger.error(f"Error trashing {label} bill: {e}")
         return Response(
             {"detail": f"Failed to delete {label} bill: {e}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,

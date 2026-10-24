@@ -42,6 +42,15 @@ class TrashKind:
         return f"<TrashKind {self.slug}>"
 
 
+#: Which package these kinds belong to. The Trash screen merges Tally's
+#: feed with Zoho's, and both name some documents identically — a
+#: purchase voucher is a purchase voucher in either — so every row has
+#: to say which side it came from. The client used to stamp this on
+#: afterwards because only Zoho sent it; both payloads carry it now.
+MODULE = "tally"
+MODULE_LABEL = "Tally"
+
+
 #: Keyed by URL slug. Adding a trashable model is a matter of adding a row
 #: here — the list, restore, purge and command paths all iterate this.
 TRASH_KINDS = {

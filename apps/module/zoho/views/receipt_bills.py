@@ -220,11 +220,11 @@ def receipt_bill_sync_view(request, org_id, bill_id):
 
 
 @extend_schema(
-    responses={"200": {"detail": "Receipt deleted successfully"}},
+    responses={"204": None},
     tags=["Zoho Receipt Vouchers"],
     methods=["DELETE"],
 )
-@requires(roles.DELETE_BILLS)
+@requires(roles.TRASH_BILLS)
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, HasOrgPermission])
 def receipt_bill_delete_view(request, org_id, bill_id):

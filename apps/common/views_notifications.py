@@ -55,21 +55,32 @@ def _classify_bill(bill):
 
 def _collect_from(model_cls, org_id, since_dt, module_label):
     """Bills updated since ``since_dt`` that qualify as notifications."""
-    qs = model_cls.objects.filter(organization_id=org_id, updated_at__gte=since_dt)
+    # Tally's models call the column ``updated_at``; every Zoho model
+    # spells it ``update_at``. This function was hardcoded to Tally's
+    # spelling, and the endpoint defaults to ``modules=tally,zoho``, so
+    # every poll raised FieldError on the first Zoho model it reached —
+    # the whole notification feed, Tally rows included, 500'd on a 15s
+    # loop. Resolve the name per model rather than per caller.
+    field_names = {f.name for f in model_cls._meta.get_fields()}
+    stamp_field = "updated_at" if "updated_at" in field_names else "update_at"
+    name_field = (
+        "bill_munshi_name" if "bill_munshi_name" in field_names else "billmunshiName"
+    )
+
+    # A bill in the trash is not something to notify anyone about.
+    manager = model_cls.objects
+    qs = manager.alive() if hasattr(manager, "alive") else manager.all()
+    qs = qs.filter(**{"organization_id": org_id, f"{stamp_field}__gte": since_dt})
+
     # Only surface bills that are in a user-visible state — either
     # analysis has produced data (``analysed_data`` non-empty) or an
     # error was recorded, or the row was flagged as duplicate.
     # _classify_bill only reads the flags plus the display name, so load
     # that name here too. Re-fetching the full row inside the loop cost one
     # extra query per notification, across five models, on a 15s poll.
-    field_names = {f.name for f in model_cls._meta.get_fields()}
-    name_field = (
-        "bill_munshi_name" if "bill_munshi_name" in field_names else "billmunshiName"
-    )
-
     notifications = []
     for bill in qs.only(
-        "id", "updated_at", "is_duplicate", "is_processing",
+        "id", stamp_field, "is_duplicate", "is_processing",
         "processing_error", "status", name_field,
     ).iterator():
         # Skip drafts still being processed with no result yet.
@@ -87,7 +98,7 @@ def _collect_from(model_cls, org_id, since_dt, module_label):
             "bill_id": str(bill.id),
             "kind": kind,
             "message": message,
-            "updated_at": _to_iso(bill.updated_at),
+            "updated_at": _to_iso(getattr(bill, stamp_field)),
         })
     return notifications
 

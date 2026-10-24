@@ -54,6 +54,72 @@ class UserAdmin(BaseUserAdmin, UnfoldModelAdmin):
         }),
     )
 
+    def get_queryset(self, request):
+        """Only the users a non-superuser staff member shares a workspace with.
+
+        Unscoped, this listed every account on the deployment: a staff
+        user at one client could read another client's people, and with
+        the change-user permission could edit them. Scoped through
+        OrgMembership, a staff member sees the people they already work
+        with and nobody else.
+
+        Superusers keep the full list — they are the ones who have to
+        find an account across tenants when something goes wrong.
+        """
+        qs = super().get_queryset(request)
+        if request.user.is_superuser:
+            return qs
+        from apps.common.admin import _user_org_ids
+        from apps.organizations.models import OrgMembership
+
+        peers = OrgMembership.objects.filter(
+            organization_id__in=_user_org_ids(request.user), is_active=True,
+        ).values_list("user_id", flat=True)
+        # Their own row stays reachable even before any membership exists.
+        return qs.filter(pk__in=list(peers) + [request.user.pk])
+
+    def get_fieldsets(self, request, obj=None):
+        """Hide the Permissions block from anyone who is not a superuser.
+
+        It carries ``is_superuser``, ``is_staff``, ``groups`` and
+        ``user_permissions``. A staff user who can edit a user and see
+        that block can tick ``is_superuser`` on their own row, which
+        turns limited admin access into full control of every tenant.
+        Scoping the list above does not help, because their own row is
+        deliberately in it.
+        """
+        fieldsets = super().get_fieldsets(request, obj)
+        if request.user.is_superuser:
+            return fieldsets
+        return tuple(
+            (name, opts) for name, opts in fieldsets
+            if name != _("Permissions")
+        )
+
+    def get_readonly_fields(self, request, obj=None):
+        """Belt and braces for the fields the block above hides.
+
+        A hidden fieldset is not an access control on its own: a crafted
+        POST can still carry the field. Marking them read-only makes the
+        admin drop whatever arrives for them.
+        """
+        fields = tuple(super().get_readonly_fields(request, obj))
+        if request.user.is_superuser:
+            return fields
+        return fields + ("is_staff", "is_superuser", "groups", "user_permissions")
+
+    def has_delete_permission(self, request, obj=None):
+        """A staff user must not delete accounts outside their own tenant.
+
+        The queryset scope stops them seeing such a row, but a delete by
+        primary key does not go through the changelist.
+        """
+        if request.user.is_superuser:
+            return super().has_delete_permission(request, obj)
+        if obj is None:
+            return super().has_delete_permission(request, obj)
+        return self.get_queryset(request).filter(pk=obj.pk).exists()
+
     def get_actions(self, request):
         actions = super().get_actions(request)
         # This action sets every selected account to one password read from

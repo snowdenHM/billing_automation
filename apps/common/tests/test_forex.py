@@ -173,3 +173,205 @@ class RateFetchTests(SimpleTestCase):
         self.assertEqual(payload["rates"]["JPY"], "0.588235")
         # AED is why this provider was chosen over the ECB feed.
         self.assertIn("AED", payload["rates"])
+
+
+# ---------------------------------------------------------------------------
+# CBIC notified rates
+# ---------------------------------------------------------------------------
+# The notified rate is the one a customs or GST-on-imports computation is
+# allowed to use. These tests pin the three things that would silently
+# misstate a return if they broke: the per-unit division, the import /
+# export split, and the refusal to substitute a market rate when the
+# notified one is missing.
+
+from apps.common.services import cbic  # noqa: E402
+
+
+def _cbic_body():
+    """One real response, trimmed — captured from the live service."""
+    return {
+        "status": 1,
+        "notStartDate": "16-10-2026",
+        "notEndDate": "15-10-2026",
+        "error": None,
+        "currencyDetail": [
+            {"currencyCode": "USD", "currencyDesc": "US Dollar",
+             "cbicImport": 95.9, "cbicExport": 94.2, "units": "1.0"},
+            {"currencyCode": "JPY", "currencyDesc": "Japanese Yen",
+             "cbicImport": 61.2, "cbicExport": 59.35, "units": "100.0"},
+            {"currencyCode": "AED", "currencyDesc": "UAE Dirham",
+             "cbicImport": 26.65, "cbicExport": 25.15, "units": "1.0"},
+        ],
+    }
+
+
+def _cbic_notifications():
+    return [
+        {"notificationNumber": "29/2026", "notPublishDate": "15-10-2026"},
+        {"notificationNumber": "28/2026", "notPublishDate": "01-10-2026"},
+    ]
+
+
+def _mock_post(rates_body=None, notifications=None, rates_exc=None):
+    """Stand in for both POSTs the module makes, routed by URL."""
+    def _post(url, *args, **kwargs):
+        response = mock.Mock()
+        response.raise_for_status = mock.Mock()
+        if url == cbic._RATES_URL:
+            if rates_exc:
+                raise rates_exc
+            response.json.return_value = (
+                _cbic_body() if rates_body is None else rates_body
+            )
+        else:
+            response.json.return_value = (
+                _cbic_notifications() if notifications is None else notifications
+            )
+        return response
+    return _post
+
+
+class CbicNotifiedRateTests(SimpleTestCase):
+    def setUp(self):
+        cache.delete(cbic._FRESH_KEY)
+        cache.delete(cbic._STALE_KEY)
+
+    tearDown = setUp
+
+    def test_import_and_export_are_different_numbers(self):
+        """The whole point of the split: reading the wrong column is a
+        1.8% misstatement on USD, not a rounding difference."""
+        with mock.patch.object(cbic.requests, "post", side_effect=_mock_post()):
+            imp, _ = cbic.notified_rate_for("USD", cbic.SIDE_IMPORT)
+            exp, meta = cbic.notified_rate_for("USD", cbic.SIDE_EXPORT)
+
+        self.assertEqual(imp, Decimal("95.900000"))
+        self.assertEqual(exp, Decimal("94.200000"))
+        self.assertEqual(meta["side"], "export")
+
+    def test_yen_is_divided_by_its_notified_unit(self):
+        """CBIC notifies JPY per 100. Storing 61.20 as the rate for one
+        yen would post a Japanese invoice at a hundred times its value."""
+        with mock.patch.object(cbic.requests, "post", side_effect=_mock_post()):
+            rate, _ = cbic.notified_rate_for("JPY", cbic.SIDE_IMPORT)
+        self.assertEqual(rate, Decimal("0.612000"))
+
+    def test_the_notification_number_travels_with_the_rate(self):
+        """'We used the CBIC rate' is not an answer to an auditor."""
+        with mock.patch.object(cbic.requests, "post", side_effect=_mock_post()):
+            _, meta = cbic.notified_rate_for("AED", cbic.SIDE_IMPORT)
+
+        self.assertEqual(meta["notification"], "29/2026")
+        self.assertEqual(meta["effective_from"], "15-10-2026")
+        self.assertEqual(cbic.reference_for(meta), "CBIC 29/2026 w.e.f. 15-10-2026")
+
+    def test_a_side_must_be_named(self):
+        """No default. Defaulting is the silent guess the split exists
+        to prevent."""
+        with self.assertRaises(ValueError):
+            cbic.notified_rate_for("USD", "")
+        with self.assertRaises(ValueError):
+            cbic.notified_rate_for("USD", "buy")
+
+    def test_outage_falls_back_to_the_last_notified_set(self):
+        good = {
+            "rates": {"USD": {"import": "95.900000", "export": "94.200000",
+                              "units": "1.0", "label": "US Dollar"}},
+            "effective_from": "15-10-2026",
+            "notification": "29/2026",
+            "fetched_at": "2026-10-15T18:30:00+00:00",
+            "provider": cbic.PROVIDER_NAME,
+        }
+        cache.set(cbic._STALE_KEY, good, 60)
+
+        with mock.patch.object(cbic.requests, "post",
+                               side_effect=_mock_post(rates_exc=OSError("down"))):
+            payload = cbic.get_notified_rates()
+
+        self.assertEqual(payload["source"], "stale")
+        self.assertTrue(payload["stale"])
+        self.assertEqual(payload["rates"]["USD"]["import"], "95.900000")
+
+    def test_outage_with_no_cache_raises_rather_than_guessing(self):
+        with mock.patch.object(cbic.requests, "post",
+                               side_effect=_mock_post(rates_exc=OSError("down"))):
+            with self.assertRaises(cbic.CbicUnavailable):
+                cbic.get_notified_rates()
+
+    def test_a_missing_notification_list_does_not_lose_the_rates(self):
+        """The citation is nice to have; the rate is the job."""
+        def _post(url, *args, **kwargs):
+            if url == cbic._NOTIFICATIONS_URL:
+                raise OSError("down")
+            response = mock.Mock()
+            response.raise_for_status = mock.Mock()
+            response.json.return_value = _cbic_body()
+            return response
+
+        with mock.patch.object(cbic.requests, "post", side_effect=_post):
+            rate, meta = cbic.notified_rate_for("USD", cbic.SIDE_IMPORT)
+
+        self.assertEqual(rate, Decimal("95.900000"))
+        self.assertIsNone(meta["notification"])
+        self.assertEqual(cbic.reference_for(meta), "CBIC notified w.e.f. 15-10-2026")
+
+    def test_a_currency_cbic_does_not_notify_is_unavailable_not_zero(self):
+        with mock.patch.object(cbic.requests, "post", side_effect=_mock_post()):
+            with self.assertRaises(cbic.CbicUnavailable):
+                cbic.notified_rate_for("SGD", cbic.SIDE_IMPORT)
+
+    def test_garbage_from_the_service_is_an_outage_not_a_crash(self):
+        """It is an undocumented endpoint. A changed shape must degrade
+        to 'no notified rate', never to a 500 on a bill screen."""
+        for body in ({"currencyDetail": []}, {"error": "boom"}, [], "nope"):
+            with self.subTest(body=body):
+                cache.delete(cbic._FRESH_KEY)
+                cache.delete(cbic._STALE_KEY)
+                with mock.patch.object(cbic.requests, "post",
+                                       side_effect=_mock_post(rates_body=body)):
+                    with self.assertRaises(cbic.CbicUnavailable):
+                        cbic.get_notified_rates()
+
+
+class CbicIsNotTheMarketRateTests(SimpleTestCase):
+    """The two sources are separate and must stay separate."""
+
+    def setUp(self):
+        for key in (cbic._FRESH_KEY, cbic._STALE_KEY,
+                    "forex:rates:inr", "forex:rates:inr:last_good"):
+            cache.delete(key)
+
+    tearDown = setUp
+
+    def test_cbic_outage_does_not_touch_the_market_cache(self):
+        market = {
+            "base": "INR",
+            "rates": {"INR": "1.000000", "USD": "88.400000"},
+            "fetched_at": "2026-10-24T00:00:00+00:00",
+            "provider": "open.er-api.com",
+        }
+        cache.set("forex:rates:inr", market, 60)
+
+        with mock.patch.object(cbic.requests, "post",
+                               side_effect=_mock_post(rates_exc=OSError("down"))):
+            with self.assertRaises(cbic.CbicUnavailable):
+                cbic.get_notified_rates()
+
+        rate, meta = forex.rate_for("USD")
+        self.assertEqual(rate, Decimal("88.400000"))
+        self.assertEqual(meta["source"], "cache")
+
+    def test_the_two_rates_are_allowed_to_disagree(self):
+        """They will, always, and nothing may reconcile them silently."""
+        cache.set("forex:rates:inr", {
+            "base": "INR",
+            "rates": {"INR": "1.000000", "USD": "88.400000"},
+            "fetched_at": "2026-10-24T00:00:00+00:00",
+            "provider": "open.er-api.com",
+        }, 60)
+
+        with mock.patch.object(cbic.requests, "post", side_effect=_mock_post()):
+            notified, _ = cbic.notified_rate_for("USD", cbic.SIDE_IMPORT)
+        market, _ = forex.rate_for("USD")
+
+        self.assertNotEqual(notified, market)

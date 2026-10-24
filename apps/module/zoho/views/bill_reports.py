@@ -112,7 +112,8 @@ def _build_and_stream(
     if not organization:
         return _org_not_found_response(org_id)
 
-    bills = bill_model.objects.filter(organization=organization)
+    # `.alive()` — a trashed bill must not turn up in an export either.
+    bills = bill_model.objects.alive().filter(organization=organization)
 
     # An explicit selection wins over the status filter: the user ticked
     # those exact rows, so export those exact rows.

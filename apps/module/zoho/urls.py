@@ -72,6 +72,12 @@ from .views import (
     payment_bill_sync_view,
     payment_bill_delete_view,
 )
+from .views.trash import (
+    trash_list,
+    trash_restore,
+    trash_delete_forever,
+    trash_empty,
+)
 from .views.bill_reports import (
     zoho_vendor_bills_report,
     zoho_journal_bills_report,
@@ -185,6 +191,14 @@ urlpatterns = [
         path('payment-bills/<str:bill_id>/verify/', payment_bill_verify_view, name='payment_bill_verify'),
         path('payment-bills/<str:bill_id>/sync/', payment_bill_sync_view, name='payment_bill_sync'),
         path('payment-bills/<str:bill_id>/delete/', payment_bill_delete_view, name='payment_bill_delete'),
+
+        # ============================================================================
+        # Trash — recoverable delete, mirroring the Tally module
+        # ============================================================================
+        path('trash/', trash_list, name='trash-list'),
+        path('trash/empty/', trash_empty, name='trash-empty'),
+        path('trash/<slug:kind_slug>/<uuid:bill_id>/restore/', trash_restore, name='trash-restore'),
+        path('trash/<slug:kind_slug>/<uuid:bill_id>/', trash_delete_forever, name='trash-delete-forever'),
 
         # ============================================================================
         # XLSX Report Downloads (?status=Analysed,Verified,Synced filter)
