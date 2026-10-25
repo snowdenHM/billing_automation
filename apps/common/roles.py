@@ -52,9 +52,15 @@ ALL_ACTIONS = (
 # but not posting to Tally — that is what the approval step is for — and
 # not permanent deletion, which is not recoverable.
 #
-# MANAGER reviews that work: the same, plus approve, plus sync and
-# permanent deletion. Not members or integration settings, which are the
-# account owner's business.
+# MANAGER reviews that work: the same, plus approve and sync. Not
+# members or integration settings, which are the account owner's
+# business — and not permanent deletion.
+#
+# DELETE_BILLS used to sit here, but both modules' purge views also
+# require an org admin, so a Manager was shown a right the server never
+# honoured. Destroying a GST record and its file cannot be undone and
+# the retention window is the whole point of the trash, so the gate
+# stays where it is and the matrix now says so.
 #
 # CONSULTANT is the outside accountant: read and export, change nothing.
 
@@ -62,7 +68,7 @@ ROLE_PERMISSIONS = {
     OrgMembership.ADMIN: set(ALL_ACTIONS),
     OrgMembership.MANAGER: {
         VIEW_BILLS, UPLOAD_BILLS, ANALYSE_BILLS, EDIT_BILLS, VERIFY_BILLS,
-        APPROVE_BILLS, SYNC_BILLS, MOVE_BILLS, TRASH_BILLS, DELETE_BILLS,
+        APPROVE_BILLS, SYNC_BILLS, MOVE_BILLS, TRASH_BILLS,
         EXPORT_REPORTS, MANAGE_MASTERS,
     },
     OrgMembership.ACCOUNTANT: {

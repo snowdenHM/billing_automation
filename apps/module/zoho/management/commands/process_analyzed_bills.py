@@ -131,8 +131,12 @@ class Command(BaseCommand):
         queryset = VendorBill.objects.alive().filter(
             organization=organization,
             status='Analysed',
-            updated_at__gte=cutoff_date
-        ).order_by('-updated_at')
+            # Zoho's models spell the column `update_at`, not
+            # `updated_at`. Both queries here used Tally's spelling, so
+            # every run of this command died on FieldError before it
+            # processed a single bill.
+            update_at__gte=cutoff_date
+        ).order_by('-update_at')
 
         if limit:
             queryset = queryset[:limit]
@@ -191,8 +195,12 @@ class Command(BaseCommand):
         queryset = JournalBill.objects.alive().filter(
             organization=organization,
             status='Analysed',
-            updated_at__gte=cutoff_date
-        ).order_by('-updated_at')
+            # Zoho's models spell the column `update_at`, not
+            # `updated_at`. Both queries here used Tally's spelling, so
+            # every run of this command died on FieldError before it
+            # processed a single bill.
+            update_at__gte=cutoff_date
+        ).order_by('-update_at')
 
         if limit:
             queryset = queryset[:limit]

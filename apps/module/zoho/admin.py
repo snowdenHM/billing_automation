@@ -23,6 +23,13 @@ from .models import (
     ExpenseBill,
     ExpenseZohoBill,
     ExpenseZohoProduct,
+    SalesBill,
+    SalesZohoBill,
+    ReceiptBill,
+    ReceiptZohoBill,
+    PaymentBill,
+    PaymentZohoBill,
+    ZohoCustomer,
 )
 
 # Keep backward compat alias in case anything imports from here
@@ -38,6 +45,7 @@ class ZohoCredentialsAdmin(BaseOrgAdmin):
     """Admin interface for Zoho API Credentials."""
     
     list_display = ["organization", "clientId", "token_expiry", "created_at"]
+    list_select_related = ["organization"]
     list_filter = ["created_at", "token_expiry"]
     search_fields = ["organization__name", "clientId"]
     readonly_fields = ["created_at", "update_at"]
@@ -65,6 +73,7 @@ class ZohoVendorAdmin(BaseOrgAdmin):
     """Admin interface for Zoho Vendors."""
     
     list_display = ["companyName", "gstNo", "contactId", "organization", "created_at"]
+    list_select_related = ["organization"]
     list_filter = ["organization", "created_at"]
     search_fields = ["companyName", "gstNo", "contactId"]
     readonly_fields = ["created_at"]
@@ -78,6 +87,7 @@ class ZohoChartOfAccountAdmin(BaseOrgAdmin):
     """Admin interface for Zoho Chart of Accounts."""
     
     list_display = ["accountName", "accountId", "organization", "created_at"]
+    list_select_related = ["organization"]
     list_filter = ["organization", "created_at"]
     search_fields = ["accountName", "accountId"]
     readonly_fields = ["created_at"]
@@ -91,6 +101,7 @@ class ZohoTaxesAdmin(BaseOrgAdmin):
     """Admin interface for Zoho Taxes."""
     
     list_display = ["taxName", "taxId", "organization", "created_at"]
+    list_select_related = ["organization"]
     list_filter = ["organization", "created_at"]
     search_fields = ["taxName", "taxId"]
     readonly_fields = ["created_at"]
@@ -104,6 +115,7 @@ class ZohoTDSTCSAdmin(BaseOrgAdmin):
     """Admin interface for Zoho TDS/TCS."""
     
     list_display = ["taxName", "taxId", "organization", "created_at"]
+    list_select_related = ["organization"]
     list_filter = ["organization", "created_at"]
     search_fields = ["taxName", "taxId"]
     readonly_fields = ["created_at"]
@@ -146,6 +158,7 @@ class JournalBillAdmin(BaseOrgAdmin):
     """Admin interface for Journal Bills."""
     
     list_display = ["billmunshiName", "fileType", "status", "process", "uploaded_by", "organization", "created_at"]
+    list_select_related = ["organization", "uploaded_by"]
     list_filter = ["status", "fileType", "process", "uploaded_by", "organization", "created_at"]
     search_fields = ["billmunshiName", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
     readonly_fields = ["analysed_data", "created_at", "update_at"]
@@ -184,6 +197,7 @@ class JournalZohoBillAdmin(BaseOrgAdmin):
         "total",
         "organization",
     ]
+    list_select_related = ["organization", "vendor"]
     list_filter = ["bill_date", "organization", "vendor", "created_at"]
     search_fields = ["bill_no", "vendor__companyName"]
     readonly_fields = ("created_at",)
@@ -234,6 +248,7 @@ class VendorBillAdmin(BaseOrgAdmin):
         "billmunshiName", "status", "fileType", "process", "is_duplicate", "bill_belong_your_org", 
         "is_processing", "uploaded_by", "organization", "created_at"
     ]
+    list_select_related = ["organization", "uploaded_by"]
     list_filter = [
         "status", "fileType", "process", "is_duplicate", "bill_belong_your_org", "is_processing",
         "uploaded_by", "organization", "created_at"
@@ -300,6 +315,7 @@ class VendorZohoBillAdmin(BaseOrgAdmin):
         "discount_amount",
         "organization",
     ]
+    list_select_related = ["organization", "vendor"]
     list_filter = ["bill_date", "due_date", "organization", "vendor", "discount_type", "created_at"]
     search_fields = ["bill_no", "vendor__companyName"]
     readonly_fields = ("created_at",)
@@ -363,6 +379,7 @@ class ExpenseBillAdmin(BaseOrgAdmin):
     """Admin interface for Expense Bills."""
     
     list_display = ["billmunshiName", "status", "fileType", "uploaded_by", "organization", "created_at"]
+    list_select_related = ["organization", "uploaded_by"]
     list_filter = ["status", "fileType", "uploaded_by", "organization", "created_at"]
     search_fields = ["billmunshiName", "uploaded_by__username", "uploaded_by__first_name", "uploaded_by__last_name"]
     readonly_fields = ["billmunshiName", "analysed_data", "created_at", "update_at"]
@@ -408,6 +425,7 @@ class ExpenseZohoBillAdmin(BaseOrgAdmin):
         "total",
         "organization",
     ]
+    list_select_related = ["organization", "vendor"]
     list_filter = ["bill_date", "organization", "created_at"]
     search_fields = ["bill_no", "vendor__companyName", "selectBill__billmunshiName"]
     readonly_fields = ("created_at",)
@@ -441,6 +459,7 @@ class ExpenseZohoProductAdmin(BaseOrgAdmin):
         "amount",
         "created_at",
     )
+    list_select_related = ["organization"]
     search_fields = (
         "item_details",
         "zohoBill__bill_no",
@@ -483,6 +502,7 @@ class VendorZohoConsolidatedProductAdmin(BaseOrgAdmin):
         "consolidated_amount",
         "created_at",
     )
+    list_select_related = ["organization"]
     search_fields = (
         "consolidated_item_name",
         "zohoBill__bill_no",
@@ -525,3 +545,119 @@ class VendorZohoConsolidatedProductAdmin(BaseOrgAdmin):
         return "-"
 
 
+# ---------------------------------------------------------------------------
+# Sales, Receipt and Payment
+#
+# These six, plus ZohoCustomer, had no admin at all: the models shipped
+# with the Sales and Receipt work but were never registered, so support
+# could read a purchase bill and not the sales invoice beside it. Each
+# mirrors its purchase-side twin — same columns, same joins, same
+# search — so there is one shape to learn rather than seven.
+#
+# ZohoCustomer needs search_fields of its own because the three bill
+# admins below reference it through autocomplete_fields, and Django
+# refuses an autocomplete to a model whose admin cannot be searched.
+# ---------------------------------------------------------------------------
+
+
+@admin.register(ZohoCustomer)
+class ZohoCustomerAdmin(BaseOrgAdmin):
+    """Admin interface for Zoho Customers."""
+
+    list_display = ["companyName", "gstNo", "contactId", "organization", "created_at"]
+    list_select_related = ["organization"]
+    list_filter = ["organization", "gst_treatment", "created_at"]
+    search_fields = ["companyName", "gstNo", "contactId"]
+    readonly_fields = ["created_at"]
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ["organization"]
+
+
+@admin.register(SalesBill)
+class SalesBillAdmin(BaseOrgAdmin):
+    """Uploaded sales documents awaiting analysis."""
+
+    list_display = ["billmunshiName", "status", "is_duplicate", "uploaded_by",
+                    "organization", "created_at"]
+    list_select_related = ["organization", "uploaded_by"]
+    list_filter = ["status", "is_duplicate", "is_processing", "organization", "created_at"]
+    search_fields = ["billmunshiName", "zoho_invoice_id"]
+    readonly_fields = ["created_at", "update_at", "content_hash", "job_id"]
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ["organization", "uploaded_by"]
+
+
+@admin.register(SalesZohoBill)
+class SalesZohoBillAdmin(BaseOrgAdmin):
+    """The analysed sales invoice: what actually posts to Zoho Books."""
+
+    list_display = ["bill_no", "customer", "bill_date", "total", "organization"]
+    list_select_related = ["organization", "customer"]
+    list_filter = ["bill_date", "organization", "created_at"]
+    search_fields = ["bill_no", "customer__companyName"]
+    readonly_fields = ["created_at"]
+    date_hierarchy = "bill_date"
+    list_per_page = 50
+    autocomplete_fields = ["organization", "customer", "selectBill"]
+
+
+@admin.register(ReceiptBill)
+class ReceiptBillAdmin(BaseOrgAdmin):
+    """Uploaded receipt documents awaiting analysis."""
+
+    list_display = ["billmunshiName", "status", "is_duplicate", "uploaded_by",
+                    "organization", "created_at"]
+    list_select_related = ["organization", "uploaded_by"]
+    list_filter = ["status", "is_duplicate", "is_processing", "organization", "created_at"]
+    search_fields = ["billmunshiName", "zoho_payment_id"]
+    readonly_fields = ["created_at", "update_at", "content_hash", "job_id"]
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ["organization", "uploaded_by"]
+
+
+@admin.register(ReceiptZohoBill)
+class ReceiptZohoBillAdmin(BaseOrgAdmin):
+    """The analysed customer payment."""
+
+    list_display = ["bill_no", "customer", "bill_date", "amount", "payment_mode",
+                    "organization"]
+    list_select_related = ["organization", "customer"]
+    list_filter = ["bill_date", "payment_mode", "organization", "created_at"]
+    search_fields = ["bill_no", "customer__companyName"]
+    readonly_fields = ["created_at"]
+    date_hierarchy = "bill_date"
+    list_per_page = 50
+    autocomplete_fields = ["organization", "customer", "selectBill"]
+
+
+@admin.register(PaymentBill)
+class PaymentBillAdmin(BaseOrgAdmin):
+    """Uploaded payment documents awaiting analysis."""
+
+    list_display = ["billmunshiName", "status", "is_duplicate", "uploaded_by",
+                    "organization", "created_at"]
+    list_select_related = ["organization", "uploaded_by"]
+    list_filter = ["status", "is_duplicate", "is_processing", "organization", "created_at"]
+    search_fields = ["billmunshiName", "zoho_payment_id"]
+    readonly_fields = ["created_at", "update_at", "content_hash", "job_id"]
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    autocomplete_fields = ["organization", "uploaded_by"]
+
+
+@admin.register(PaymentZohoBill)
+class PaymentZohoBillAdmin(BaseOrgAdmin):
+    """The analysed vendor payment."""
+
+    list_display = ["bill_no", "vendor", "bill_date", "amount", "payment_mode",
+                    "organization"]
+    list_select_related = ["organization", "vendor"]
+    list_filter = ["bill_date", "payment_mode", "organization", "created_at"]
+    search_fields = ["bill_no", "vendor__companyName"]
+    readonly_fields = ["created_at"]
+    date_hierarchy = "bill_date"
+    list_per_page = 50
+    autocomplete_fields = ["organization", "vendor", "selectBill"]

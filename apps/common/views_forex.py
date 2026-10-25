@@ -319,8 +319,16 @@ def bill_currency(request, org_id, bill_id):
             "cbic_export": cbic.SIDE_EXPORT,
         }.get(requested) or _default_side(analysed)
 
+        # The notification in force on the bill's own date, not
+        # today's. CBIC re-notifies roughly fortnightly, so a bill
+        # entered three weeks late would otherwise be valued on a
+        # notification that did not exist when it was raised — which is
+        # not the figure an assessment uses. Bills with no date yet fall
+        # back to the current notification.
+        as_at = getattr(analysed, "bill_date", None)
+
         try:
-            rate, meta = cbic.notified_rate_for(code, side)
+            rate, meta = cbic.notified_rate_for(code, side, as_at=as_at)
         except (cbic.CbicUnavailable, ValueError) as exc:
             # Specifically does not fall back to the market rate. The
             # operator asked for a statutory figure; quietly handing
@@ -329,7 +337,8 @@ def bill_currency(request, org_id, bill_id):
             # notification and type it.
             return Response(
                 {"detail": (
-                    f"No CBIC notified {side} rate available for {code} ({exc}). "
+                    f"No CBIC notified {side} rate available for {code}"
+                    f"{f' as at {as_at}' if as_at else ''} ({exc}). "
                     "Enter it by hand from the notification."
                 ),
                  "code": "notified_rate_unavailable"},

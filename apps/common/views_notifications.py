@@ -129,16 +129,39 @@ def poll_notifications(request, org_id):
 
     notifications = []
 
+    # Every bill type, both modules. This used to cover three models of
+    # the eleven, so a sales, receipt or payment bill could finish
+    # analysing, fail, or be flagged as a duplicate and nobody was ever
+    # told. The models all carry the same four fields the classifier
+    # reads, so there is nothing special about the ones that were here.
     if "tally" in requested:
-        from apps.module.tally.models import TallyExpenseBill, TallyVendorBill
-        notifications.extend(_collect_from(TallyVendorBill, org_id, since_dt, "tally-vendor"))
-        notifications.extend(_collect_from(TallyExpenseBill, org_id, since_dt, "tally-expense"))
+        from apps.module.tally.models import (
+            TallyExpenseBill, TallyPaymentBill, TallyReceiptBill,
+            TallySalesBill, TallyVendorBill,
+        )
+        for model, label in (
+            (TallyVendorBill, "tally-vendor"),
+            (TallySalesBill, "tally-sales"),
+            (TallyExpenseBill, "tally-expense"),
+            (TallyPaymentBill, "tally-payment"),
+            (TallyReceiptBill, "tally-receipt"),
+        ):
+            notifications.extend(_collect_from(model, org_id, since_dt, label))
 
     if "zoho" in requested:
-        from apps.module.zoho.models import ExpenseBill, JournalBill, VendorBill
-        notifications.extend(_collect_from(VendorBill, org_id, since_dt, "zoho-vendor"))
-        notifications.extend(_collect_from(ExpenseBill, org_id, since_dt, "zoho-expense"))
-        notifications.extend(_collect_from(JournalBill, org_id, since_dt, "zoho-journal"))
+        from apps.module.zoho.models import (
+            ExpenseBill, JournalBill, PaymentBill, ReceiptBill, SalesBill,
+            VendorBill,
+        )
+        for model, label in (
+            (VendorBill, "zoho-vendor"),
+            (SalesBill, "zoho-sales"),
+            (ExpenseBill, "zoho-expense"),
+            (JournalBill, "zoho-journal"),
+            (PaymentBill, "zoho-payment"),
+            (ReceiptBill, "zoho-receipt"),
+        ):
+            notifications.extend(_collect_from(model, org_id, since_dt, label))
 
     notifications.sort(key=lambda n: n["updated_at"] or "", reverse=True)
     # Cap so a client that hasn't polled in a while doesn't blow the response.

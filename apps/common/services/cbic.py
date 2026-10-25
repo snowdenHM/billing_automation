@@ -176,16 +176,23 @@ def _fetch_notification_number(effective_from):
     return best[1] if best else None
 
 
-def _fetch():
+def _fetch(as_at=None):
     """One full notified rate set, or raise.
 
     A single ``ALL`` call covers all 22 notified currencies, so this is
     one request however many currencies the org uses — the per-currency
     route the screen uses would be 22.
+
+    *as_at* asks for the notification **in force on that date** rather
+    than today's. The endpoint accepts any date and answers with the
+    notification that governed it, which is what a customs assessment
+    actually applies: a bill dated the 12th is assessed on the
+    notification in force on the 12th, not on whichever one happens to
+    be current when somebody opens the bill a week later.
     """
     payload = {
         "currencyCode": "ALL",
-        "currencyDate": date.today().strftime("%d-%m-%Y"),
+        "currencyDate": (as_at or date.today()).strftime("%d-%m-%Y"),
     }
     response = requests.post(_RATES_URL, json=payload, timeout=_HTTP_TIMEOUT)
     response.raise_for_status()
@@ -234,7 +241,7 @@ def _fetch():
     }
 
 
-def get_notified_rates(*, force_refresh=False):
+def get_notified_rates(*, force_refresh=False, as_at=None):
     """The notified rate set, with provenance. Never raises for an outage.
 
     Returns ``{rates, effective_from, notification, fetched_at, provider,
@@ -250,8 +257,38 @@ def get_notified_rates(*, force_refresh=False):
     ``effective_from`` is what actually says whether the number is the
     one in force.
 
+    *as_at* resolves the notification in force on that date instead of
+    today's. A dated answer is keyed under its own cache entry and never
+    touches the "today" entry, because the two are different questions
+    and one must not be served for the other. There is no last-known-good
+    fallback for a dated lookup either: a historical rate is exact or it
+    is nothing, and handing back today's figure for a bill dated six
+    weeks ago would be a wrong number wearing a citation.
+
     Raises ``CbicUnavailable`` only when there is nothing at all.
     """
+    if as_at is not None:
+        key = f"{_FRESH_KEY}:on:{as_at.isoformat()}"
+        if not force_refresh:
+            dated = cache.get(key)
+            if dated:
+                return {**dated, "source": "cache", "stale": False,
+                        "as_at": as_at.isoformat()}
+        try:
+            payload = _fetch(as_at)
+        except Exception as exc:
+            logger.warning(
+                "CBIC rates unavailable for %s from %s: %s",
+                as_at, PROVIDER_NAME, exc,
+            )
+            raise CbicUnavailable(
+                f"{PROVIDER_NAME} could not supply the notification in force on {as_at}"
+            ) from exc
+        # A past notification cannot change, so it is cached for the
+        # full retention window rather than six hours.
+        cache.set(key, payload, _STALE_TTL)
+        return {**payload, "source": "live", "stale": False, "as_at": as_at.isoformat()}
+
     if not force_refresh:
         cached = cache.get(_FRESH_KEY)
         if cached:
@@ -277,18 +314,21 @@ def get_notified_rates(*, force_refresh=False):
     return {**payload, "source": "live", "stale": False}
 
 
-def notified_rate_for(currency, side, *, force_refresh=False):
+def notified_rate_for(currency, side, *, force_refresh=False, as_at=None):
     """INR per one unit of *currency* on the import or export column.
 
     Returns ``(Decimal, meta)``. *side* must be ``import`` or ``export``;
     there is no default, because defaulting would be exactly the silent
     guess this whole split exists to prevent.
+
+    *as_at* asks for the notification in force on that date — pass the
+    bill's own date to get the rate an assessment would use.
     """
     code = (currency or "").upper()
     if side not in SIDES:
         raise ValueError(f"side must be one of {SIDES!r}, got {side!r}")
 
-    payload = get_notified_rates(force_refresh=force_refresh)
+    payload = get_notified_rates(force_refresh=force_refresh, as_at=as_at)
     entry = (payload.get("rates") or {}).get(code) or {}
     rate = _quantize(entry.get(side))
     if rate is None or rate <= 0:
@@ -301,6 +341,7 @@ def notified_rate_for(currency, side, *, force_refresh=False):
         "provider": payload.get("provider"),
         "notification": payload.get("notification"),
         "effective_from": payload.get("effective_from"),
+        "as_at": payload.get("as_at"),
         "side": side,
     }
 
