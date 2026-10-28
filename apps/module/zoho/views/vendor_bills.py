@@ -67,6 +67,7 @@ from ..serializers.vendor_bills import (
     VendorZohoBillSerializer,
     ZohoVendorBillMultipleUploadSerializer,
 )
+from apps.common.services.line_gst import line_rate_from_payload
 from .helpers import (
     get_zoho_credentials,
     refresh_zoho_access_token,
@@ -359,6 +360,7 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
         cgst_val = float(relevant_data.get('cgst', 0) or 0) 
         sgst_val = float(relevant_data.get('sgst', 0) or 0)
 
+        _hsn_summary = relevant_data.get('hsn_summary') or []
         for idx, item in enumerate(items):
             try:
                 rate = Decimal(item.get('price', 0) or 0)
@@ -374,10 +376,23 @@ def create_vendor_zoho_objects_from_analysis(bill, analyzed_data, organization):
                     chart_of_accounts = None
                     logger.warning(f"⚠️ Could not auto-assign Chart of Accounts for '{item_description}': {str(e)}")
 
-                # ✅ AUTO-ASSIGN TAX based on GST values
+                # ✅ AUTO-ASSIGN TAX from THIS LINE's own rate.
+                # Previously this was handed the bill-level totals, so
+                # every line got the same tax and an exempt line on a
+                # mixed-rate bill was taxed. Zoho Books recomputes tax
+                # from the id we send, so that wrote wrong numbers into
+                # the client's books rather than just displaying them.
                 try:
-                    taxes = find_appropriate_zoho_tax_ledger(organization, 'igst' if igst_val > 0 else 'cgst', igst_val or cgst_val)
-                    logger.info(f"✅ Auto-assigned Tax for '{item_description}': {taxes}")
+                    _line_rate = line_rate_from_payload(item, _hsn_summary)
+                    taxes = find_appropriate_zoho_tax_ledger(
+                        organization,
+                        'igst' if igst_val > 0 else 'cgst',
+                        igst_val or cgst_val,
+                        rate=_line_rate,
+                    )
+                    logger.info(
+                        f"✅ Tax for '{item_description}' @ {_line_rate}%: {taxes}"
+                    )
                 except Exception as e:
                     taxes = None
                     logger.warning(f"⚠️ Could not auto-assign Tax for '{item_description}': {str(e)}")

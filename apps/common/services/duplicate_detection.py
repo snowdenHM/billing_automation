@@ -94,6 +94,37 @@ def check_duplicate_bill(bill, organization, bill_model, analysed_statuses=None)
 
     analyzed_data = bill.analysed_data
 
+    # An IRN settles it outright. It is the government's own unique
+    # identifier for an invoice, issued once per document, so two bills
+    # carrying the same one are the same bill — no scoring needed, and
+    # no chance of the fuzzy vendor/number/amount comparison below
+    # missing it because a name was read differently the second time.
+    irn = str(analyzed_data.get("irn") or "").strip()
+    if len(irn) >= 32:
+        manager = getattr(bill_model, "objects")
+        qs = manager.alive() if hasattr(manager, "alive") else manager.all()
+        matches = (
+            qs.filter(organization=organization, status__in=analysed_statuses)
+            .exclude(pk=bill.pk)
+            .filter(analysed_data__irn=irn)[:5]
+        )
+        irn_hits = [
+            {
+                "id": str(other.pk),
+                "bill_munshi_name": getattr(other, "bill_munshi_name", None)
+                or getattr(other, "billmunshiName", ""),
+                "similarity_score": 100.0,
+                "match_reason": "Identical e-invoice IRN",
+            }
+            for other in matches
+        ]
+        if irn_hits:
+            logger.info(
+                "Bill %s matches %d existing bill(s) on IRN %s",
+                bill.id, len(irn_hits), irn[:16] + "...",
+            )
+            return True, irn_hits, 100.0
+
     def _text(value):
         # The AI emits explicit nulls, and ``.get(k, "")`` returns None when
         # the key exists with a null value -- then ``.strip()`` raised

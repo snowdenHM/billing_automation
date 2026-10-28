@@ -38,7 +38,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _BILL_FILE_SIGNER_SALT = "billmunshi.bill-file"
-_BILL_FILE_TOKEN_TTL = 3600  # seconds — 1 hour, plenty for a modal open
+#: Separates the media path from the user id inside a signed token.
+#: A character that cannot occur in either, so the split is unambiguous.
+_TOKEN_SEP = "\x1f"
+# 15 minutes. The token is a bearer capability — whoever holds the URL
+# can fetch the document — so its lifetime is the window in which a
+# leaked URL (referrer, screenshot, support ticket, proxy log) is still
+# usable. An hour was far longer than any modal needs.
+_BILL_FILE_TOKEN_TTL = 900
 
 
 def generate_signed_bill_file_url(file_field, request=None):
@@ -57,34 +64,66 @@ def generate_signed_bill_file_url(file_field, request=None):
         return None
     if not media_path:
         return None
+    # Bind the token to the user it was minted for, not just to the
+    # path. A path-only token is a bearer capability: anyone who ends up
+    # holding the URL can fetch another organisation's bill until it
+    # expires, with no login at all. Signing the user id too means a
+    # leaked URL is useless to anyone else who is signed in, and
+    # `serve_bill_file` can refuse it.
+    #
+    # Unauthenticated minting (a background job building a payload with
+    # no request) still produces a path-only token, so nothing that
+    # already works stops working.
+    user = getattr(request, "user", None) if request is not None else None
+    user_id = (
+        str(user.id)
+        if user is not None and getattr(user, "is_authenticated", False)
+        else ""
+    )
     signer = TimestampSigner(salt=_BILL_FILE_SIGNER_SALT)
-    token = signer.sign(media_path)
+    token = signer.sign(f"{media_path}{_TOKEN_SEP}{user_id}")
     url = f"{settings.MEDIA_URL.rstrip('/')}/{media_path.lstrip('/')}?token={token}"
     if request is not None:
         return request.build_absolute_uri(url)
     return url
 
 
-def _token_matches_path(token, requested_path):
-    """Verify the signed token corresponds to the requested media path."""
+def _token_matches_path(token, requested_path, user=None):
+    """Verify the token covers this path, and this user if it names one."""
     if not token:
         return False
     signer = TimestampSigner(salt=_BILL_FILE_SIGNER_SALT)
     try:
-        signed_path = signer.unsign(token, max_age=_BILL_FILE_TOKEN_TTL)
+        signed_value = signer.unsign(token, max_age=_BILL_FILE_TOKEN_TTL)
     except SignatureExpired:
         logger.info("serve_bill_file token expired for path=%s", requested_path)
         return False
     except BadSignature:
         logger.info("serve_bill_file token invalid for path=%s", requested_path)
         return False
+    signed_path, _, signed_user_id = signed_value.partition(_TOKEN_SEP)
+
     # Normalise both sides so ``bills/foo.pdf`` and ``/bills/foo.pdf``
     # compare equal. Prevents path-swap attacks where a valid token for
     # ``bills/A.pdf`` is reused with ``?token=…`` but the URL points at
     # ``bills/B.pdf`` — signed_path must match requested_path exactly.
-    return os.path.normpath(signed_path).lstrip("/") == os.path.normpath(
+    if os.path.normpath(signed_path).lstrip("/") != os.path.normpath(
         requested_path
-    ).lstrip("/")
+    ).lstrip("/"):
+        return False
+
+    # A token minted for somebody is only good for that somebody. An
+    # anonymous caller is still accepted — the browser fetching an
+    # <img>/<iframe> may carry no session — but a *different* signed-in
+    # user presenting a leaked URL is refused.
+    if signed_user_id and user is not None and getattr(user, "is_authenticated", False):
+        if str(getattr(user, "id", "")) != signed_user_id:
+            logger.warning(
+                "serve_bill_file token belongs to user %s but was presented by %s",
+                signed_user_id, getattr(user, "id", None),
+            )
+            return False
+    return True
 
 
 @xframe_options_exempt
@@ -105,7 +144,7 @@ def serve_bill_file(request, path):
     is_staff = bool(user and user.is_authenticated and (user.is_staff or user.is_superuser))
 
     token = request.GET.get("token")
-    if not is_staff and not _token_matches_path(token, path):
+    if not is_staff and not _token_matches_path(token, path, user):
         return HttpResponseForbidden("You do not have access to this file.")
 
     logger.debug(
@@ -118,6 +157,9 @@ def serve_bill_file(request, path):
     # Was ``public, max-age=3600``. With per-request signatures, keep
     # ``private`` so shared proxies don't cache one user's token response.
     response["Cache-Control"] = "private, max-age=3600"
+    # Stop the ?token= in this URL reaching any third party through a
+    # Referer header when the document is embedded in a page.
+    response["Referrer-Policy"] = "no-referrer"
     return response
 
 
@@ -304,3 +346,20 @@ def book_demo_verify_view(request):
         logger.error("Demo-verified notification failed for %s: %s", demo_request.email, exc)
 
     return Response({"message": "Email verified! Our team will contact you shortly to schedule your demo."})
+
+
+@extend_schema(
+    summary="Maintenance status",
+    description=(
+        "Public. The frontend polls this so it can show a maintenance "
+        "screen instead of a wall of failed requests."
+    ),
+    responses={200: None},
+    tags=["Common"],
+)
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def maintenance_status_view(request):
+    """Whether the application is in maintenance, and what to tell people."""
+    from apps.common.maintenance import get_maintenance_state
+    return Response(get_maintenance_state())

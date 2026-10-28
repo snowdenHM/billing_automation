@@ -1,4 +1,5 @@
 # config/settings/production.py
+from django.core.exceptions import ImproperlyConfigured
 from .base import *  # noqa
 
 DEBUG = False
@@ -46,9 +47,13 @@ SECURE_HSTS_PRELOAD = True
 SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=True)
 
 # CSRF/CORS trusted origins (include scheme)
+# Loopback is deliberately absent. It used to be in this default, and
+# with CORS_ALLOW_CREDENTIALS = True that let anything a user happened to
+# be running on their own localhost:3000 — a scaffolded dev server, a
+# package's dev harness — make credentialed cross-origin calls against
+# production with that user's browser. Local origins belong in local.py,
+# which has its own list.
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
     "https://billmunshi.com",
     "https://www.billmunshi.com",
 ])
@@ -122,3 +127,21 @@ LOGGING = {
         "gunicorn.access": {"handlers": ["console"], "level": "WARNING", "propagate": False},
     },
 }
+
+# ---------------------------------------------------------------------------
+# Signing key strength
+#
+# SECRET_KEY is also SIMPLE_JWT["SIGNING_KEY"], so it is what every access
+# and refresh token is signed with. PyJWT warns below 32 bytes for
+# HMAC-SHA256 (RFC 7518 §3.2), and the development default
+# ("django-insecure-change-me") is shorter than that. A short key is a
+# brute-forceable key, and forging a token means forging any user.
+#
+# Fail at startup rather than warn in a log nobody reads.
+# ---------------------------------------------------------------------------
+if SECRET_KEY.startswith("django-insecure") or len(SECRET_KEY.encode()) < 50:
+    raise ImproperlyConfigured(
+        "SECRET_KEY is the JWT signing key and must be at least 50 bytes of "
+        "random data in production. Generate one with:\n"
+        "  python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+    )

@@ -72,9 +72,26 @@ def validate_business_email(value):
         )
 
 
+#: First bytes that identify each format we accept. Checked because an
+#: extension is just a label the uploader chose: `.pdf` on an HTML file,
+#: an SVG, a zip or a shell script passes a name check and then reaches
+#: the OCR pipeline, the worker, and whatever library opens it. The
+#: browser side is already covered (the serve view derives Content-Type
+#: from the same extension, and production sends X-Content-Type-Options
+#: nosniff) — this is about what the *parsers* are handed.
+_MAGIC_BYTES = {
+    ".pdf": [b"%PDF-"],
+    ".png": [b"\x89PNG\r\n\x1a\n"],
+    # JPEG starts FF D8 FF; the fourth byte varies by encoder (JFIF, Exif,
+    # raw), so only the three-byte marker is reliable.
+    ".jpg": [b"\xff\xd8\xff"],
+    ".jpeg": [b"\xff\xd8\xff"],
+}
+
+
 def validate_file_extension(value):
     """
-    Validates the file extension for uploads (PDF/Images only).
+    Validates the file extension AND the file's actual content.
     Used by both Tally and Zoho bill models.
     """
     allowed = {".pdf", ".png", ".jpg", ".jpeg"}
@@ -82,6 +99,33 @@ def validate_file_extension(value):
     if ext not in allowed:
         raise ValidationError(
             f"Unsupported file extension '{ext}'. Allowed: {', '.join(sorted(allowed))}"
+        )
+
+    signatures = _MAGIC_BYTES.get(ext)
+    if not signatures:
+        return
+
+    try:
+        pos = value.tell() if hasattr(value, "tell") else None
+        if hasattr(value, "seek"):
+            value.seek(0)
+        head = value.read(8)
+        if hasattr(value, "seek"):
+            # Put the handle back where it was — the caller still has to
+            # save this file, and a consumed stream writes zero bytes.
+            value.seek(pos if pos is not None else 0)
+    except Exception:
+        # A storage backend that cannot be re-read here is not a reason
+        # to reject an otherwise valid upload; the extension check stands.
+        return
+
+    if not head:
+        raise ValidationError("The file is empty.")
+
+    if not any(head.startswith(sig) for sig in signatures):
+        raise ValidationError(
+            f"This file is named '{ext}' but its contents are not a valid "
+            f"{ext.lstrip('.').upper()}. Re-export it and upload again."
         )
 
 

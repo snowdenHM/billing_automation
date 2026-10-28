@@ -3,6 +3,7 @@
 Shared zoho helpers used by credentials, sync, vendor, expense, and journal views.
 """
 import logging
+from decimal import Decimal
 import os
 
 import requests
@@ -310,9 +311,76 @@ def find_appropriate_zoho_coa_ledger(organization, item_description, ledger_type
         return None
 
 
-def find_appropriate_zoho_tax_ledger(organization, tax_type, tax_amount):
-    """Find appropriate tax ledger based on tax type using ZohoTaxes."""
+def find_appropriate_zoho_tax_ledger(organization, tax_type, tax_amount, rate=None):
+    """The Zoho tax to put on a line, matched on RATE first.
+
+    *rate* is the line's own GST rate as a percentage (5, 18, ...).
+
+    This used to match on the tax NAME alone and return ``.first()``,
+    which could not tell "CGST 2.5%" from "CGST 9%" — an organisation
+    with several slabs got whichever row the database happened to
+    return. It was also called once per bill with the bill-level totals,
+    so every line on a mixed-rate bill was given the same tax and an
+    exempt line was taxed.
+
+    That matters more here than it would in Tally: Zoho Books recomputes
+    the tax from the ``tax_id`` we send, so a wrong rate becomes a wrong
+    invoice in the client's own books.
+
+    ``tax_amount`` is kept for callers that still pass it positionally;
+    the rate is what actually selects.
+    """
     try:
+        # A line that is genuinely zero-rated must not be given a taxed
+        # ledger. Returning None leaves it untaxed, which is correct.
+        if rate is not None and float(rate) == 0:
+            return None
+
+        if rate is not None:
+            target = Decimal(str(rate))
+            # Zoho splits an intra-state rate across CGST and SGST rows,
+            # each at half, so a 5% line matches a 2.5% row. Try the
+            # exact rate first, then the half.
+            wanted = [target, target / 2] if tax_type in ("cgst", "sgst") else [target]
+
+            # Name first, across every candidate rate. Matching the rate
+            # without the name would let an 18% CGST line pick up an
+            # "IGST 18%" row, which posts the wrong tax head.
+            for value in wanted:
+                hit = (
+                    ZohoTaxes.objects
+                    .filter(organization=organization, percentage=value)
+                    .filter(taxName__icontains=tax_type)
+                    .first()
+                )
+                if hit:
+                    logger.info(
+                        "Matched %s tax by rate %s%%: %s", tax_type, value, hit.taxName
+                    )
+                    return hit
+
+            # A nameless match is only safe for IGST, which is a single
+            # row at the full rate. For CGST/SGST it would be a coin
+            # flip between the two heads and the wrong one posts wrongly.
+            if tax_type == "igst":
+                hit = (
+                    ZohoTaxes.objects
+                    .filter(organization=organization, percentage=target)
+                    .first()
+                )
+                if hit:
+                    logger.info("Matched igst tax by rate %s%%: %s", target, hit.taxName)
+                    return hit
+            logger.warning(
+                "No Zoho tax at %s%% for %s in org %s — leaving the line untaxed "
+                "rather than guessing a rate",
+                rate, tax_type, organization.id,
+            )
+            # Deliberately no name-based fallback here. Guessing a rate
+            # writes a wrong number into the client's books; an empty
+            # tax is visible and gets fixed on the verify screen.
+            return None
+
         tax_patterns = {
             "igst": ["igst", "integrated gst", "integrated goods", "inter state"],
             "cgst": ["cgst", "central gst", "central goods"],

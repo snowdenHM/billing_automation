@@ -492,39 +492,18 @@ def normalize_company_name_enhanced(name):
 # GST helpers
 # ---------------------------------------------------------------------------
 
+# Slabs a rate is snapped to. ``calculate_gst_rate`` used to live
+# beside this and derived a line's rate *from* its tax amount; it was
+# removed once apps/common/services/line_gst.py made that backwards —
+# the rate is now chosen first and the tax computed from it. It also
+# expected a tax-INCLUSIVE amount and read 28% as ~40% when handed a
+# taxable value, so nothing should resurrect it.
+#
 # Slabs a computed / OCR-read rate is snapped to. GST 2.0 (from 22 Sep 2025)
 # uses 0 / 5 / 18 / 40; 12 and 28 stay so a bill dated before then keeps its
 # real rate instead of being pulled to 5 / 18, which would re-price its tax.
 # 40 is last so every tie resolves exactly as it did before it was added.
 STANDARD_GST_RATES = (0, 5, 12, 18, 28, 40)
-
-
-def calculate_gst_rate(amount, igst_val, cgst_val, sgst_val):
-    """Calculate GST rate percentage based on tax amounts and item amount.
-
-    Returns a string representation of the closest standard GST rate.
-    """
-    try:
-        if amount <= 0:
-            return "0"
-
-        total_tax = igst_val + cgst_val + sgst_val
-        if total_tax <= 0:
-            return "0"
-
-        # taxable_amount = amount - total_tax (reverse calculation)
-        taxable_amount = amount - total_tax
-        if taxable_amount <= 0:
-            taxable_amount = amount  # Fallback
-
-        gst_rate = (total_tax / taxable_amount) * 100
-
-        closest_rate = min(STANDARD_GST_RATES, key=lambda x: abs(x - gst_rate))
-        return str(closest_rate)
-
-    except Exception as e:
-        logger.error(f"Error calculating GST rate: {str(e)}")
-        return "18"  # Default fallback
 
 
 def normalize_product_gst(gst_value):

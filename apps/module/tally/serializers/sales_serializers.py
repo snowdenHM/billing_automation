@@ -156,6 +156,10 @@ class TallySalesAnalyzedBillSerializer(serializers.ModelSerializer):
             'bill_no', 'bill_date', 'due_date', 'total', 'igst', 'igst_taxes',
             'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes', 'discount', 'discount_taxes',
             'cess', 'cess_taxes', 'freight', 'freight_taxes',
+            # Whether the discount comes off before GST and whether
+            # freight is taxed. Both change the taxable value, so the
+            # verify screen has to show and be able to correct them.
+            'discount_before_tax', 'freight_taxable',
             # round_off was missing → saved values dropped on reload; UI
             # showed blank amount + blank ledger even after successful save.
             # NOTE: TallySalesAnalyzedBill does NOT have

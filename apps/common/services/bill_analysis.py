@@ -1123,11 +1123,29 @@ def get_vendor_bill_prompt():
         "items": [
             {
                 "description": "Item/Service description",
+                "hsn": "HSN or SAC code for this line, or empty string",
+                "unit": "Unit as printed (BAGS, NOS, KG...) or empty string",
+                "gst_rate": 0,
                 "quantity": 0,
                 "price": 0,
                 "amount": 0
             }
         ],
+        "hsn_summary": [
+            {
+                "hsn": "HSN/SAC code",
+                "taxable_value": 0,
+                "cgst_rate": 0, "cgst_amount": 0,
+                "sgst_rate": 0, "sgst_amount": 0,
+                "igst_rate": 0, "igst_amount": 0
+            }
+        ],
+        "is_reverse_charge": false,
+        "discount_before_tax": false,
+        "freight_taxable": false,
+        "place_of_supply": "State name and/or code as printed, or empty string",
+        "irn": "e-invoice IRN if printed, else empty string",
+        "ack_no": "e-invoice acknowledgement number if printed, else empty string",
         "total": 0,
         "igst": 0,
         "cgst": 0,
@@ -1141,6 +1159,58 @@ def get_vendor_bill_prompt():
     ITEM FIELDS: "price" = rate per unit, "quantity" = qty, "amount" =
     the line total printed in that row's Amount column (0 if the bill
     prints no line amount). "price" x "quantity" should equal "amount".
+    "hsn" = the HSN/SAC code printed in that row. "unit" = the unit as
+    printed. "gst_rate" = that line's GST rate as a PERCENTAGE NUMBER
+    (5 for 5%, 18 for 18%, 0 for exempt). If you cannot tell, OMIT the
+    key rather than guessing 0 — a wrong 0 removes tax that is due.
+
+    📊 THE HSN/SAC SUMMARY TABLE — READ IT, IT IS AUTHORITATIVE
+    Almost every GST tax invoice carries a summary table near the
+    bottom, one row per HSN/SAC:
+
+        HSN/SAC   Taxable Value  CGST Rate  Amount  SGST Rate  Amount
+        19021900       9,047.60      2.50%  226.19      2.50%  226.19
+        11042900      14,400.00         0%                  0%
+
+    Put every row in "hsn_summary". This table is the most reliable
+    thing on the invoice: legally mandated, it states the rate per HSN
+    explicitly, and its "Taxable Value" column is the figure tax was
+    actually charged on. Use it to fill each item's "gst_rate" by
+    matching on HSN. Where the table and your reading of a line
+    disagree, TRUST THE TABLE.
+
+    CGST and SGST rates are each HALF the total rate — a row showing
+    2.50% + 2.50% is a 5% item, so "gst_rate" is 5, not 2.5. An IGST row
+    shows the full rate, so IGST 18% means "gst_rate" 18.
+
+    💰 "discount_before_tax" — this changes how much tax is due:
+      - true  — the discount is deducted from the sub-total and GST is
+                charged on the reduced figure. Tell-tales: the discount
+                row sits ABOVE the tax lines, or the HSN summary's total
+                "Taxable Value" is LESS than the sum of line amounts.
+      - false — deducted after tax, near the grand total.
+    No discount on the bill → leave it false.
+
+    🔄 "is_reverse_charge": true when the invoice says the tax is
+    payable by the RECIPIENT, not the supplier. The wording is almost
+    always one of: "Tax payable under reverse charge", "GST payable by
+    recipient under RCM", "Reverse Charge: Yes", or an "RCM" column
+    marked Y. A bill under reverse charge usually shows the tax rate but
+    NO tax amount, because the supplier does not charge it.
+
+    🚚 "freight_taxable":
+      - true  — freight/packing/forwarding appears ABOVE the tax lines,
+                or is inside the HSN summary's taxable value.
+      - false — added after tax, near the grand total.
+
+    🧾 E-INVOICE: if "IRN" and "Ack No." are printed (usually top-left
+    beside a QR code), extract them exactly. The IRN is a 64-character
+    hex string and identifies this invoice uniquely on the government
+    portal.
+
+    📍 "place_of_supply": extract it as printed. It decides inter-state
+    (IGST) vs intra-state (CGST+SGST) and is NOT always the buyer's
+    registered state.
 
     round_off / discount / cess / freight EXTRACTION RULES:
       - If the invoice explicitly prints a line like
@@ -1196,11 +1266,29 @@ def get_sales_bill_prompt():
         "items": [
             {
                 "description": "Item/Service description",
+                "hsn": "HSN or SAC code for this line, or empty string",
+                "unit": "Unit as printed (BAGS, NOS, KG...) or empty string",
+                "gst_rate": 0,
                 "quantity": 0,
                 "price": 0,
                 "amount": 0
             }
         ],
+        "hsn_summary": [
+            {
+                "hsn": "HSN/SAC code",
+                "taxable_value": 0,
+                "cgst_rate": 0, "cgst_amount": 0,
+                "sgst_rate": 0, "sgst_amount": 0,
+                "igst_rate": 0, "igst_amount": 0
+            }
+        ],
+        "is_reverse_charge": false,
+        "discount_before_tax": false,
+        "freight_taxable": false,
+        "place_of_supply": "State name and/or code as printed, or empty string",
+        "irn": "e-invoice IRN if printed, else empty string",
+        "ack_no": "e-invoice acknowledgement number if printed, else empty string",
         "total": 0,
         "igst": 0,
         "cgst": 0,
@@ -1224,6 +1312,58 @@ def get_sales_bill_prompt():
     ITEM FIELDS: "price" = rate per unit, "quantity" = qty, "amount" =
     the line total printed in that row's Amount column (0 if the invoice
     prints no line amount). "price" x "quantity" should equal "amount".
+    "hsn" = the HSN/SAC code printed in that row. "unit" = the unit as
+    printed. "gst_rate" = that line's GST rate as a PERCENTAGE NUMBER
+    (5 for 5%, 18 for 18%, 0 for exempt). If you cannot tell, OMIT the
+    key rather than guessing 0 — a wrong 0 removes tax that is due.
+
+    📊 THE HSN/SAC SUMMARY TABLE — READ IT, IT IS AUTHORITATIVE
+    Almost every GST tax invoice carries a summary table near the
+    bottom, one row per HSN/SAC:
+
+        HSN/SAC   Taxable Value  CGST Rate  Amount  SGST Rate  Amount
+        19021900       9,047.60      2.50%  226.19      2.50%  226.19
+        11042900      14,400.00         0%                  0%
+
+    Put every row in "hsn_summary". This table is the most reliable
+    thing on the invoice: legally mandated, it states the rate per HSN
+    explicitly, and its "Taxable Value" column is the figure tax was
+    actually charged on. Use it to fill each item's "gst_rate" by
+    matching on HSN. Where the table and your reading of a line
+    disagree, TRUST THE TABLE.
+
+    CGST and SGST rates are each HALF the total rate — a row showing
+    2.50% + 2.50% is a 5% item, so "gst_rate" is 5, not 2.5. An IGST row
+    shows the full rate, so IGST 18% means "gst_rate" 18.
+
+    💰 "discount_before_tax" — this changes how much tax is due:
+      - true  — the discount is deducted from the sub-total and GST is
+                charged on the reduced figure. Tell-tales: the discount
+                row sits ABOVE the tax lines, or the HSN summary's total
+                "Taxable Value" is LESS than the sum of line amounts.
+      - false — deducted after tax, near the grand total.
+    No discount on the bill → leave it false.
+
+    🔄 "is_reverse_charge": true when the invoice says the tax is
+    payable by the RECIPIENT, not the supplier. The wording is almost
+    always one of: "Tax payable under reverse charge", "GST payable by
+    recipient under RCM", "Reverse Charge: Yes", or an "RCM" column
+    marked Y. A bill under reverse charge usually shows the tax rate but
+    NO tax amount, because the supplier does not charge it.
+
+    🚚 "freight_taxable":
+      - true  — freight/packing/forwarding appears ABOVE the tax lines,
+                or is inside the HSN summary's taxable value.
+      - false — added after tax, near the grand total.
+
+    🧾 E-INVOICE: if "IRN" and "Ack No." are printed (usually top-left
+    beside a QR code), extract them exactly. The IRN is a 64-character
+    hex string and identifies this invoice uniquely on the government
+    portal.
+
+    📍 "place_of_supply": extract it as printed. It decides inter-state
+    (IGST) vs intra-state (CGST+SGST) and is NOT always the buyer's
+    registered state.
 
     round_off / discount / cess / freight EXTRACTION RULES:
       - If the invoice explicitly prints a line like

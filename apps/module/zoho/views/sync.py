@@ -3,6 +3,7 @@
 Zoho data sync views – vendors, chart of accounts, taxes, TDS/TCS.
 """
 import logging
+from decimal import Decimal, InvalidOperation
 
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
@@ -265,22 +266,49 @@ def taxes_sync_view(request, org_id):
         zoho_data = make_zoho_api_request(credentials, "settings/taxes")
         zoho_taxes = zoho_data.get("taxes", [])
 
-        existing_ids = set(
-            ZohoTaxes.objects.filter(
-                taxId__in=[t["tax_id"] for t in zoho_taxes], organization=organization
-            ).values_list("taxId", flat=True)
-        )
+        def _pct(tax):
+            try:
+                return Decimal(str(tax.get("tax_percentage")))
+            except (TypeError, ValueError, InvalidOperation):
+                return None
 
-        new_taxes = [
-            ZohoTaxes(taxId=t["tax_id"], taxName=t["tax_name"], organization=organization)
-            for t in zoho_taxes
-            if t["tax_id"] not in existing_ids
-        ]
+        existing = {
+            t.taxId: t
+            for t in ZohoTaxes.objects.filter(
+                taxId__in=[t["tax_id"] for t in zoho_taxes], organization=organization
+            )
+        }
+
+        new_taxes, updated = [], []
+        for t in zoho_taxes:
+            row = existing.get(t["tax_id"])
+            if row is None:
+                new_taxes.append(ZohoTaxes(
+                    taxId=t["tax_id"], taxName=t["tax_name"],
+                    percentage=_pct(t), organization=organization,
+                ))
+                continue
+            # Refresh rows that already exist: they were created before
+            # the percentage was stored, and a re-sync is how they get
+            # it. Rates also change — GST 2.0 moved several slabs.
+            pct, name = _pct(t), t["tax_name"]
+            if row.percentage != pct or row.taxName != name:
+                row.percentage, row.taxName = pct, name
+                updated.append(row)
 
         if new_taxes:
             ZohoTaxes.objects.bulk_create(new_taxes)
+        if updated:
+            ZohoTaxes.objects.bulk_update(updated, ["percentage", "taxName"])
 
-        return Response({"detail": f"Successfully synced {len(new_taxes)} taxes", "synced_count": len(new_taxes)})
+        return Response({
+            "detail": (
+                f"Successfully synced {len(new_taxes)} taxes"
+                + (f", refreshed {len(updated)}" if updated else "")
+            ),
+            "synced_count": len(new_taxes),
+            "updated_count": len(updated),
+        })
     except Exception as e:
         logger.error(f"Taxes sync failed: {str(e)}")
         return Response({"detail": f"Sync failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

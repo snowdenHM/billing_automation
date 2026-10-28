@@ -29,13 +29,16 @@ from apps.common.models import BillActivity
 from apps.common.services.activity import (
     BILL_FIELD_LABELS, diff_fields, record_activity, snapshot_bill_fields,
 )
+from apps.common.services.line_gst import (
+    assign_line_gst,
+    line_rate_from_payload,
+)
 from apps.common.utils import (
     get_organization_from_request,
     calculate_string_similarity,
     safe_get_nested,
     parse_bill_date,
     normalize_company_name,
-    calculate_gst_rate,
     normalize_product_gst,
 )
 from apps.common.converters import safe_float_convert, safe_int_convert
@@ -367,17 +370,99 @@ def process_analysis_data(bill, json_data, organization):
             
             if isinstance(items, list):
                 logger.warning(f"🔄 Processing {len(items)} items for product creation...")
-                # Precompute Σ(line.amount) — used as the taxable base for
-                # proportional GST distribution. Prior code used
-                # `total - (igst+cgst+sgst)`, which broke on bills whose
-                # `total` included freight/round-off; a single freight-heavy
-                # line then inherited all GST.
-                _line_amount_sum = 0.0
+                # Decide every line's GST rate up front, then take its tax
+                # from that rate. The old code did the reverse — split the
+                # bill's tax across lines by amount, then read each line's
+                # rate back out of its share — which on a mixed-rate bill
+                # put tax on exempt lines and left a row claiming 0% while
+                # holding tax. See apps/common/services/line_gst.py.
+                _hsn_summary = relevant_data.get('hsn_summary') or []
+
+                # What this vendor's wording has meant before. One query
+                # for the whole bill; empty when the vendor is new or
+                # nobody has taught us anything yet.
+                _known_items = {}
+                try:
+                    from apps.common.services.item_memory import (
+                        normalise_description, recall_item_choices,
+                    )
+                    _vendor_ledger = getattr(analyzed_bill, 'vendor', None)
+                    if _vendor_ledger is not None:
+                        _known_items = recall_item_choices(
+                            organization=organization,
+                            vendor=_vendor_ledger,
+                            descriptions=[
+                                i.get('description') for i in items
+                                if isinstance(i, dict)
+                            ],
+                        )
+                except Exception as _exc:
+                    logger.warning("Item recall skipped (%s)", _exc)
+
+                _gst_lines = []
                 for _it in items:
                     if isinstance(_it, dict):
                         _p = safe_float_convert(_it.get('price', 0))
                         _q = safe_float_convert(_it.get('quantity', 0))
-                        _line_amount_sum += _p * _q
+                        # The HSN summary table first, then the line's
+                        # own gst_rate. 'rate' is the unit price on these
+                        # payloads and is deliberately never consulted.
+                        _gst_lines.append({
+                            'amount': _p * _q,
+                            'rate': line_rate_from_payload(_it, _hsn_summary),
+                        })
+                    else:
+                        _gst_lines.append({'amount': 0.0, 'rate': None})
+
+                # A pre-tax discount lowers the base and taxable
+                # freight raises it; both change how much tax is due, so
+                # the solver has to see the same base the vendor used.
+                _disc_pre = bool(relevant_data.get('discount_before_tax'))
+                _freight_taxed = bool(relevant_data.get('freight_taxable'))
+                _base = None
+                if _disc_pre or _freight_taxed:
+                    _gross = sum(l['amount'] for l in _gst_lines)
+                    _base = _gross
+                    if _disc_pre:
+                        _base += safe_float_convert(relevant_data.get('discount', 0))
+                    if _freight_taxed:
+                        _base += safe_float_convert(relevant_data.get('freight', 0))
+                    _base = max(_base, 0.0)
+
+                # Record the decision on the bill, so the verify screen
+                # shows which reading was used and a later recompute
+                # reaches the same answer instead of guessing again.
+                _irn = str(relevant_data.get('irn') or '').strip()[:64]
+                _ack = str(relevant_data.get('ack_no') or '').strip()[:32]
+                _pos = str(relevant_data.get('place_of_supply') or '').strip()[:120]
+                _bill_updates = {}
+                if analyzed_bill.discount_before_tax != _disc_pre:
+                    _bill_updates['discount_before_tax'] = _disc_pre
+                if analyzed_bill.freight_taxable != _freight_taxed:
+                    _bill_updates['freight_taxable'] = _freight_taxed
+                _rcm = bool(relevant_data.get('is_reverse_charge'))
+                if analyzed_bill.is_reverse_charge != _rcm:
+                    _bill_updates['is_reverse_charge'] = _rcm
+                # Only overwrite with something: a bill that is not an
+                # e-invoice must not have a previously-read IRN wiped.
+                if _irn and analyzed_bill.irn != _irn:
+                    _bill_updates['irn'] = _irn
+                if _ack and analyzed_bill.ack_no != _ack:
+                    _bill_updates['ack_no'] = _ack
+                if _pos and analyzed_bill.place_of_supply != _pos:
+                    _bill_updates['place_of_supply'] = _pos
+                if _bill_updates:
+                    for _f, _v in _bill_updates.items():
+                        setattr(analyzed_bill, _f, _v)
+                    analyzed_bill.save(update_fields=list(_bill_updates))
+
+                _line_gst, _gst_strategy = assign_line_gst(
+                    _gst_lines, igst_val, cgst_val, sgst_val, taxable_base=_base,
+                )
+                logger.warning(
+                    "🧮 Line GST resolved by '%s' for %d line(s)",
+                    _gst_strategy, len(_gst_lines),
+                )
                 for idx, item in enumerate(items, 1):
                     if isinstance(item, dict):
                         # Handle decimal precision for product amounts.
@@ -404,53 +489,24 @@ def process_analysis_data(bill, json_data, organization):
                         # Debug log for each item
                         logger.warning(f"📋 Item {idx}: '{item.get('description', 'No description')}' - Price: {price_val}, Qty: {quantity_val}, Amount: {amount_val}")
 
-                        # 🧮 CALCULATE PROPORTIONAL GST FOR THIS ITEM
-                        # Base = Σ(line.amount) — using `total - taxes`
-                        # broke on bills whose total included freight/
-                        # round-off, so a freight-heavy single line
-                        # absorbed all GST.
-                        total_taxable_amount = _line_amount_sum
-                        if total_taxable_amount > 0 and amount_val > 0:
-                            # Proportional GST calculation
-                            item_proportion = amount_val / total_taxable_amount
-                            item_igst = igst_val * item_proportion
-                            item_cgst = cgst_val * item_proportion
-                            item_sgst = sgst_val * item_proportion
-                        else:
-                            # Fallback: distribute equally among items if calculation fails
-                            num_items = len([i for i in items if isinstance(i, dict) and safe_float_convert(i.get('price', 0)) > 0])
-                            if num_items > 0:
-                                item_igst = igst_val / num_items
-                                item_cgst = cgst_val / num_items
-                                item_sgst = sgst_val / num_items
-                            else:
-                                item_igst = item_cgst = item_sgst = 0
+                        # Rate and tax both come from the one resolution
+                        # above, so the row can never say 0% while holding
+                        # tax — the contradiction that used to reach the
+                        # GST rollup and the voucher.
+                        _assigned = _line_gst[idx - 1]
+                        item_igst_rounded = _assigned['igst']
+                        item_cgst_rounded = _assigned['cgst']
+                        item_sgst_rounded = _assigned['sgst']
                         
-                        # Round GST values to 2 decimal places
-                        item_igst_rounded = Decimal(str(item_igst)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                        item_cgst_rounded = Decimal(str(item_cgst)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                        item_sgst_rounded = Decimal(str(item_sgst)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                        
-                        logger.warning(f"🧮 Item {idx} proportional GST - IGST: {item_igst_rounded}, CGST: {item_cgst_rounded}, SGST: {item_sgst_rounded}")
+                        logger.warning(f"🧮 Item {idx} GST @ {_assigned['rate']}% - IGST: {item_igst_rounded}, CGST: {item_cgst_rounded}, SGST: {item_sgst_rounded}")
 
                         # � AUTO-ASSIGN LINE ITEM LEDGER FROM CHART OF ACCOUNTS (Purchase Accounts)
                         logger.warning(f"🏛️  Finding line item ledger for product '{item.get('description', 'No desc')[:30]}...'")
                         item_ledger = find_appropriate_tax_ledger(organization, float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded), ledger_type='product')
                         
-                        # Determine GST rate from tax amounts for this specific item.
-                        # amount_val is the line's taxable value, but
-                        # calculate_gst_rate backs the tax out of a tax-
-                        # INCLUSIVE amount — fed the taxable value it reads
-                        # 28% as ~38.9%, which snaps to 40% now that 40% is
-                        # a slab. Adding the line's tax back gives the true rate.
-                        item_tax_total = float(item_igst_rounded + item_cgst_rounded + item_sgst_rounded)
-                        gst_rate = calculate_gst_rate(
-                            amount_val + item_tax_total if amount_val > 0 else amount_val,
-                            float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded),
-                        )
-                        
-                        # Format GST rate to match choices using normalization
-                        formatted_gst_rate = normalize_product_gst(gst_rate)
+                        # The rate was chosen, not back-derived, so it only
+                        # needs formatting to the stored choice.
+                        formatted_gst_rate = normalize_product_gst(_assigned['rate'])
 
                         product = TallyVendorAnalyzedProduct(
                             vendor_bill_analyzed=analyzed_bill,
@@ -458,6 +514,19 @@ def process_analysis_data(bill, json_data, organization):
                             price=price_rounded,
                             quantity=quantity_val,
                             amount=amount_rounded,
+                            unit=str(item.get('unit') or '')[:24],
+                            hsn=str(item.get('hsn') or '')[:16],
+                            # Pre-fill the stock item when this vendor's
+                            # wording has been resolved before. Exact on
+                            # the normalised key only — a wrong item is
+                            # worse than an empty one, because nobody
+                            # re-reads a field that looks filled.
+                            item_name=(
+                                _known_items[normalise_description(item.get('description'))].name
+                                if _known_items.get(
+                                    normalise_description(item.get('description'))
+                                ) else None
+                            ),
                             taxes=item_ledger,  # 🎯 Line item ledger from chart_of_accounts_parents (Purchase Accounts)
                             product_gst=formatted_gst_rate,   # 🎯 Auto-assigned GST rate with % format
                             igst=item_igst_rounded,  # 🎯 Individual item IGST
@@ -947,7 +1016,18 @@ def process_existing_analysis_data(bill, existing_data, organization):
                             'amount': amount
                         })
 
-            # Now calculate GST distribution across products
+            # Resolve every line's rate once, before the loop, so each
+            # line's tax is computed from its own rate.
+            _existing_line_gst, _existing_strategy = assign_line_gst(
+                [{'amount': pd['amount'], 'rate': None} for pd in product_instances],
+                igst_val, cgst_val, sgst_val,
+            )
+            logger.warning(
+                "🧮 [EXISTING] Line GST resolved by '%s' for %d line(s)",
+                _existing_strategy, len(product_instances),
+            )
+            _existing_idx = 0
+
             created_products = []
             for product_data in product_instances:
                 item = product_data['item']
@@ -955,32 +1035,17 @@ def process_existing_analysis_data(bill, existing_data, organization):
                 quantity = product_data['quantity']
                 amount = product_data['amount']
 
-                # Calculate proportional GST for this product
-                if total_products_amount > 0:
-                    proportion = amount / total_products_amount
-                    product_igst = round(igst_val * proportion, 2)
-                    product_cgst = round(cgst_val * proportion, 2)
-                    product_sgst = round(sgst_val * proportion, 2)
-
-                    # Calculate GST rate based on the allocated GST amount
-                    if amount > 0:
-                        if gst_type == TallyVendorAnalyzedBill.GSTType.IGST:
-                            gst_rate = round((product_igst / amount) * 100, 2)
-                        elif gst_type == TallyVendorAnalyzedBill.GSTType.CGST_SGST:
-                            total_product_gst = product_cgst + product_sgst
-                            gst_rate = round((total_product_gst / amount) * 100, 2)
-                        else:
-                            gst_rate = 0
-                    else:
-                        gst_rate = 0
-                        product_igst = 0
-                        product_cgst = 0
-                        product_sgst = 0
-                else:
-                    gst_rate = 0
-                    product_igst = 0
-                    product_cgst = 0
-                    product_sgst = 0
+                # Rate first, then tax from the rate — the same rule the
+                # fresh-analysis path above uses. The proportional split
+                # that used to live here put tax on exempt lines of a
+                # mixed-rate bill and then described it with a rate that
+                # contradicted it.
+                _assigned = _existing_line_gst[_existing_idx]
+                _existing_idx += 1
+                product_igst = float(_assigned['igst'])
+                product_cgst = float(_assigned['cgst'])
+                product_sgst = float(_assigned['sgst'])
+                gst_rate = _assigned['rate']
 
                 # � AUTO-ASSIGN LINE ITEM LEDGER FROM CHART OF ACCOUNTS (EXISTING DATA)
                 logger.warning(f"🏛️  [EXISTING] Finding line item ledger for product '{item.get('description', 'No desc')[:30]}...'")
@@ -2013,6 +2078,56 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
         f"{deletion_count} deleted (consolidate mode: {getattr(analyzed_bill, 'consolidate', False)})"
     )
 
+    _learn_item_choices(analyzed_bill, organization)
+
+
+def _learn_item_choices(analyzed_bill, organization):
+    """Remember which stock item this vendor's wording turned out to mean.
+
+    The operator has just answered, on this bill, the question that item
+    auto-match could not: that "Sadabahar Soyabadi 20 Kg" from this
+    supplier is "FORTUNE SOYA 15LTR". Storing it means the next bill
+    from the same vendor arrives with its items already picked.
+
+    Only the pairs the operator actually resolved are learned — a line
+    with no stock item chosen teaches nothing. Never raises: failing to
+    learn must not fail the verify the user asked for.
+    """
+    try:
+        from apps.common.services.item_memory import remember_item_choice
+        from ..models import StockItem
+
+        vendor = getattr(analyzed_bill, "vendor", None)
+        if vendor is None:
+            return
+
+        items_by_name = {}
+        learned = 0
+        for product in analyzed_bill.products.all():
+            name = (product.item_name or "").strip()
+            description = (product.item_details or "").strip()
+            if not name or not description:
+                continue
+            if name not in items_by_name:
+                items_by_name[name] = StockItem.objects.filter(
+                    organization=organization, name=name
+                ).first()
+            stock_item = items_by_name[name]
+            if stock_item is None:
+                continue
+            remember_item_choice(
+                organization=organization, vendor=vendor,
+                description=description, stock_item=stock_item,
+            )
+            learned += 1
+
+        if learned:
+            logger.info(
+                "Learned %d item mapping(s) for vendor %s", learned, vendor
+            )
+    except Exception as exc:
+        logger.warning("Item-mapping learning skipped (%s)", exc)
+
 
 def get_structured_bill_data(analyzed_bill, organization):
     vendor_ledger = analyzed_bill.vendor
@@ -2230,6 +2345,30 @@ def vendor_bill_sync(request, org_id):
             'error': 'Vendor Not Selected',
             'message': 'This bill has no vendor picked. Select an existing vendor or create a new one before syncing to Tally.',
             'error_code': 'VENDOR_MISSING',
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    # Reverse charge: refuse rather than post a half-right voucher.
+    #
+    # Posting the input credit without the matching liability leaves the
+    # voucher balanced against the party total and the GST position
+    # wrong by the whole tax amount. Nothing would look broken, which is
+    # exactly why it has to be refused here.
+    from ..reverse_charge import purchase_rcm_blockers
+
+    rcm_reasons = purchase_rcm_blockers(analyzed_bill, organization)
+    if not rcm_reasons and analyzed_bill.is_reverse_charge and not VENDOR_BILL_EMIT_RCM_ROWS:
+        rcm_reasons = [
+            "Reverse charge is on, but this deployment is not yet emitting "
+            "RCM liability rows on the purchase feed. Your Tally developer "
+            "needs to confirm the purchase importer reads "
+            "'debit_or_credit'; until then this bill would post its input "
+            "credit without the matching liability."
+        ]
+    if rcm_reasons:
+        return Response({
+            'error': 'Reverse Charge Not Ready',
+            'message': ' '.join(rcm_reasons),
+            'error_code': 'RCM_NOT_READY',
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     # Master-sync check is now ADVISORY, not a hard block.
@@ -2724,6 +2863,28 @@ VENDOR_BILL_EMIT_ITEM_PARENT = False
 # is a <ledger> row, so ledger extras cover the whole payload.
 EXPENSE_BILL_EMIT_VENDOR_EXTRAS = True
 EXPENSE_BILL_EMIT_LEDGER_EXTRAS = True
+# --- Reverse charge on a Purchase Voucher ---
+# Whether the RCM liability rows are emitted on the purchase feed.
+#
+# OFF until the Tally side is confirmed, and that is not caution for its
+# own sake. The liability rows are ordinary <ledger> rows carrying
+# ``debit_or_credit: credit`` — a field the shared emitter already
+# supports, but which the PURCHASE importer has never been sent. The
+# docstring on _emit_ledger_entry records why: purchase vouchers omit it
+# because DR/CR is implicit there.
+#
+# If the deployed TDL ignores the field, those rows post as further
+# DEBITS: the input credit doubles and the liability never appears. The
+# voucher would still balance against the party total, so nothing would
+# look wrong — it would just be wrong, by the whole tax amount, on a
+# GST return.
+#
+# So: the Tally developer confirms the purchase importer reads
+# ``debit_or_credit``, this flips to True, and that is the whole change.
+# Until then a reverse-charge purchase bill is blocked from syncing
+# (see purchase_rcm_blockers) rather than posted incorrectly.
+VENDOR_BILL_EMIT_RCM_ROWS = False
+
 
 # --- Payment Voucher ---
 # No vendor extras: <vendor> is deliberately emitted empty on this feed
@@ -3177,6 +3338,25 @@ def prepare_sync_data(analyzed_bill, organization, cache=None):
                 or _extras_default_parent.get(tax_type, "Indirect Expenses")
             )} if VENDOR_BILL_EMIT_LEDGER_EXTRAS else {}),
         })
+
+    # ------------------------------------------------------------------
+    # Reverse charge: the liability mirroring the input credit above.
+    # Nothing is appended unless the bill is reverse-charge AND the
+    # purchase importer is known to read ``debit_or_credit`` — so for
+    # every ordinary bill this block adds nothing and the payload is
+    # byte-identical to what the connector already receives.
+    # ------------------------------------------------------------------
+    if VENDOR_BILL_EMIT_RCM_ROWS and getattr(analyzed_bill, "is_reverse_charge", False):
+        from ..reverse_charge import purchase_rcm_rows
+
+        for row in purchase_rcm_rows(analyzed_bill, organization):
+            ledgers_payload.append({
+                "amount": _fmt_money(row["amount"]),
+                "ledger": str(row["ledger"]),
+                **({"parent": _ledger_parent_name(row["ledger"]) or "Duties & Taxes"}
+                   if VENDOR_BILL_EMIT_LEDGER_EXTRAS else {}),
+                "debit_or_credit": "credit",
+            })
 
     bill_data = {
         # ``id`` is the BillMunshi bill UUID. The Tally TCP / TDL connector

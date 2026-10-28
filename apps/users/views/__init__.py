@@ -13,6 +13,7 @@ from .auth import (
     verify_email_view,
     resend_verification_email_view,
     refresh_token_view,
+    logout_view,
 )
 
 from .profile import (
@@ -33,6 +34,7 @@ __all__ = [
     "verify_email_view",
     "resend_verification_email_view",
     "refresh_token_view",
+    "logout_view",
     # Profile & User Management
     "me_view",
     "user_list_view",

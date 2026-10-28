@@ -33,7 +33,7 @@ from apps.common.services.activity import (
 )
 from apps.common.utils import (
     get_organization_from_request, calculate_string_similarity,
-    safe_get_nested, parse_bill_date, normalize_company_name, calculate_gst_rate,
+    safe_get_nested, parse_bill_date, normalize_company_name,
     normalize_product_gst
 )
 from apps.common.converters import safe_decimal, to_decimal, to_int, safe_float_convert

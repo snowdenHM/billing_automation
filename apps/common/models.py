@@ -691,3 +691,101 @@ class ExtractionSettings(models.Model):
     def load(cls):
         obj, _ = cls.objects.get_or_create(pk=cls.SINGLETON_PK)
         return obj
+
+
+# ---------------------------------------------------------------------------
+# MaintenanceMode — the switch that takes the product offline
+# ---------------------------------------------------------------------------
+
+class MaintenanceMode(models.Model):
+    """Singleton row that puts the application into maintenance.
+
+    Turning this on makes the API refuse ordinary work with HTTP 503 and
+    makes the frontend show a maintenance screen instead of the app. It
+    exists so a deploy, a migration or an incident can happen without a
+    client editing a bill against a half-updated backend and finding out
+    afterwards.
+
+    Three things are deliberately still reachable while it is on, and
+    each for a reason:
+
+    * **Django admin** — otherwise whoever flipped the switch is locked
+      out and cannot flip it back. That would make this feature a way to
+      take the product down permanently.
+    * **Authentication** — an operator has to be able to sign in to
+      check that the thing they were fixing is fixed.
+    * **The Tally connector's own endpoints** — the TCP polls on a timer
+      from a client's machine. Refusing it is harmless but noisy, and
+      ``allow_tally_connector`` lets an operator keep the feed alive
+      during a frontend-only deploy.
+
+    Staff and superusers always pass through, so the team can verify a
+    release against production before letting clients back in.
+    """
+
+    SINGLETON_PK = 1
+
+    is_active = models.BooleanField(
+        default=False,
+        verbose_name="Maintenance mode",
+        help_text=(
+            "ON: clients see the maintenance screen and the API returns 503. "
+            "OFF: the application serves normally. Staff accounts are never "
+            "blocked, so you can check a release before letting clients back in."
+        ),
+    )
+    message = models.TextField(
+        blank=True, default="",
+        help_text=(
+            "Shown to clients on the maintenance screen. Leave empty for the "
+            "default wording. Say what is happening and roughly how long."
+        ),
+    )
+    expected_back_at = models.DateTimeField(
+        null=True, blank=True,
+        verbose_name="Expected back at",
+        help_text=(
+            "Optional. Shown to clients so they know when to return. Purely "
+            "informational — maintenance does not switch itself off."
+        ),
+    )
+    allow_tally_connector = models.BooleanField(
+        default=True,
+        verbose_name="Keep the Tally connector running",
+        help_text=(
+            "The TCP polls from the client's machine on a timer. Leave this "
+            "on for a frontend-only change; turn it off when the change "
+            "touches the sync payload or the database."
+        ),
+    )
+    started_at = models.DateTimeField(null=True, blank=True, editable=False)
+    started_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, editable=False,
+        related_name="maintenance_windows",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Maintenance mode"
+        verbose_name_plural = "Maintenance mode"
+
+    def __str__(self):
+        return "ON — clients are locked out" if self.is_active else "OFF — serving normally"
+
+    def save(self, *args, **kwargs):
+        self.pk = self.SINGLETON_PK
+        super().save(*args, **kwargs)
+        # Invalidate immediately rather than waiting out the TTL: an
+        # operator flipping this is watching for it to take effect.
+        from apps.common.maintenance import invalidate_maintenance_cache
+        invalidate_maintenance_cache()
+
+    def delete(self, *args, **kwargs):
+        """Refuse deletion — a missing row would read as "not in maintenance"."""
+        return
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=cls.SINGLETON_PK)
+        return obj

@@ -18,8 +18,11 @@ from unfold.admin import (
     StackedInline as UnfoldStackedInline,
 )
 
+from django.utils import timezone
+
 from apps.common.models import (
     BillActivity, DemoRequest, EmailSettings, ExtractionSettings,
+    MaintenanceMode,
 )
 
 logger = logging.getLogger(__name__)
@@ -547,3 +550,68 @@ def _adopt_third_party_admins():
 
 
 _adopt_third_party_admins()
+
+
+@admin.register(MaintenanceMode)
+class MaintenanceModeAdmin(UnfoldModelAdmin):
+    """The switch that takes the product offline.
+
+    One row, and it cannot be added to or deleted — a second row would
+    be ambiguous and a missing one would read as "not in maintenance",
+    which is the wrong way to fail.
+    """
+
+    list_display = ("__str__", "allow_tally_connector", "expected_back_at", "updated_at")
+    list_display_links = ("__str__",)
+    readonly_fields = ("started_at", "started_by", "updated_at")
+
+    fieldsets = (
+        ("Switch", {
+            "fields": ("is_active",),
+            "description": (
+                "<b>ON</b> — clients get the maintenance screen and the API "
+                "returns 503. <b>OFF</b> — normal service.<br><br>"
+                "Django admin, sign-in and this page keep working either "
+                "way, so you cannot lock yourself out. Staff accounts are "
+                "never blocked, so you can walk through a release against "
+                "production before letting clients back in."
+            ),
+        }),
+        ("What clients see", {
+            "fields": ("message", "expected_back_at"),
+            "description": (
+                "Leave the message empty for the default wording. Saying "
+                "what is happening and roughly how long saves the support "
+                "email."
+            ),
+        }),
+        ("Integrations", {
+            "fields": ("allow_tally_connector",),
+        }),
+        ("History", {
+            "fields": ("started_at", "started_by", "updated_at"),
+            "classes": ("collapse",),
+        }),
+    )
+
+    def has_add_permission(self, request):
+        # The row is created on first view; adding a second is meaningless.
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        MaintenanceMode.load()
+        return super().changelist_view(request, extra_context)
+
+    def save_model(self, request, obj, form, change):
+        # Record who started a maintenance window, and when, so the
+        # history answers "who took it down and how long was it out".
+        if obj.is_active and not obj.started_at:
+            obj.started_at = timezone.now()
+            obj.started_by = request.user
+        elif not obj.is_active:
+            obj.started_at = None
+            obj.started_by = None
+        super().save_model(request, obj, form, change)

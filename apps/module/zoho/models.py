@@ -228,6 +228,13 @@ class ZohoTaxes(BaseTeamModel):
     """
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     taxId = models.CharField(max_length=100)
+    # Zoho's own tax percentage, from GET /settings/taxes. Without it a
+    # line can only be matched to a tax by NAME, which cannot tell
+    # "CGST 2.5%" from "CGST 9%" and so picked whichever row came first.
+    percentage = models.DecimalField(
+        max_digits=6, decimal_places=2, null=True, blank=True,
+        help_text="Tax rate as a percentage, as reported by Zoho Books.",
+    )
     taxName = models.CharField(max_length=100)
     created_at = models.DateTimeField(auto_now_add=True)
 

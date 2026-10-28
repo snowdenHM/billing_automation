@@ -157,8 +157,93 @@ def login_view(request):
 
     serializer = LoginSerializer(data=request.data, context={"request": request})
     serializer.is_valid(raise_exception=True)
-    return Response(serializer.validated_data, status=status.HTTP_200_OK)
+    return _attach_refresh_cookie(
+        Response(serializer.validated_data, status=status.HTTP_200_OK),
+        serializer.validated_data,
+    )
 
+
+# ---------------------------------------------------------------------------
+# Refresh token transport
+#
+# The refresh token used to be returned in the JSON body, and the SPA put
+# it in localStorage. Any script running on the origin could read it, and
+# because a refresh token mints new access tokens, one XSS became durable
+# account takeover rather than a session that expires.
+#
+# It now travels in an httpOnly cookie, which JavaScript cannot read. The
+# body still carries it during the migration so a client running the old
+# bundle keeps working; once every session has rolled over,
+# ``_REFRESH_IN_BODY`` can be flipped off and the token stops being
+# readable anywhere.
+# ---------------------------------------------------------------------------
+
+REFRESH_COOKIE_NAME = "bm_refresh"
+
+#: Keep returning the refresh token in the JSON body. Transitional.
+_REFRESH_IN_BODY = True
+
+
+def _attach_refresh_cookie(response, data):
+    """Move the refresh token from *data* into an httpOnly cookie."""
+    refresh = (data or {}).get("refresh")
+    if not refresh:
+        return response
+
+    secure = not settings.DEBUG
+    response.set_cookie(
+        REFRESH_COOKIE_NAME,
+        refresh,
+        max_age=int(
+            settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()
+        ) if "REFRESH_TOKEN_LIFETIME" in getattr(settings, "SIMPLE_JWT", {}) else 7 * 24 * 3600,
+        httponly=True,
+        secure=secure,
+        samesite="Lax",
+        # Scoped to the refresh endpoint so it is not attached to every
+        # API call, which keeps it out of logs and proxies.
+        path="/api/v1/auth/refresh/",
+    )
+    if not _REFRESH_IN_BODY:
+        response.data = {k: v for k, v in response.data.items() if k != "refresh"}
+    return response
+
+
+def _clear_refresh_cookie(response):
+    response.delete_cookie(REFRESH_COOKIE_NAME, path="/api/v1/auth/refresh/")
+    return response
+
+
+@extend_schema(request=None, responses={"200": None}, tags=["Auth"], methods=["POST"])
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def logout_view(request):
+    """End the session: blacklist the refresh token and drop its cookie.
+
+    Needed because the refresh token now lives in an httpOnly cookie.
+    The browser cannot delete it — only the server that set it can — so
+    without this, signing out would clear the visible tokens and leave a
+    working refresh token in the browser. That is worse than where we
+    started.
+
+    AllowAny because a caller whose access token has already expired must
+    still be able to sign out; the refresh cookie is what is being
+    revoked, and presenting it is the only authorisation this needs.
+    """
+    token = request.COOKIES.get(REFRESH_COOKIE_NAME) or (request.data or {}).get("refresh")
+
+    if token:
+        try:
+            from rest_framework_simplejwt.tokens import RefreshToken
+            RefreshToken(token).blacklist()
+        except Exception as exc:
+            # An already-expired, already-blacklisted or malformed token
+            # is not a failure to sign out — the cookie still goes.
+            logger.info("Logout: refresh token not blacklisted (%s)", exc)
+
+    return _clear_refresh_cookie(
+        Response({"detail": "Signed out."}, status=status.HTTP_200_OK)
+    )
 
 @extend_schema(request=PasswordResetRequestSerializer, responses={"200": None}, tags=["Auth"], methods=["POST"])
 @api_view(["POST"])
@@ -318,7 +403,22 @@ def resend_verification_email_view(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def refresh_token_view(request):
-    """Refresh JWT access tokens using a valid refresh token."""
-    serializer = RefreshTokenSerializer(data=request.data, context={"request": request})
+    """Refresh JWT access tokens using a valid refresh token.
+
+    The token is read from the httpOnly cookie first and from the body
+    only as a fallback, so a browser never has to hold it in storage
+    while a client on the previous bundle still works.
+    """
+    data = dict(request.data or {})
+    cookie_token = request.COOKIES.get(REFRESH_COOKIE_NAME)
+    if cookie_token and not data.get("refresh"):
+        data["refresh"] = cookie_token
+
+    serializer = RefreshTokenSerializer(data=data, context={"request": request})
     serializer.is_valid(raise_exception=True)
-    return Response(serializer.validated_data, status=status.HTTP_200_OK)
+    # A rotated refresh token has to replace the cookie, or the next
+    # refresh presents a token the server has already retired.
+    return _attach_refresh_cookie(
+        Response(serializer.validated_data, status=status.HTTP_200_OK),
+        serializer.validated_data,
+    )

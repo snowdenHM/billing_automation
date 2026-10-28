@@ -9,6 +9,7 @@ from .views import (
     verify_email_view,
     resend_verification_email_view,
     refresh_token_view,
+    logout_view,
 )
 
 app_name = "users"
@@ -18,6 +19,7 @@ urlpatterns = [
     path("auth/register/", register_view, name="register"),
     path("auth/login/", login_view, name="login"),
     path("auth/refresh/", refresh_token_view, name="refresh-token"),
+    path("auth/logout/", logout_view, name="logout"),
     path("auth/password/reset/", password_reset_request_view, name="password-reset"),
     path("auth/password/confirm/", password_reset_confirm_view, name="password-confirm"),
     path("auth/password/change/", change_password_view, name="password-change"),

@@ -192,3 +192,85 @@ def _money(value):
         return Decimal(str(value)).quantize(Decimal("0.01"))
     except Exception:
         return Decimal("0.00")
+
+
+# ---------------------------------------------------------------------------
+# Reverse charge on a PURCHASE voucher
+#
+# The Journal and Payment stacks keep their GST in a ``gst_lines`` table
+# where every row already carries its own debit/credit, so RCM there is
+# a matter of adding mirror rows to that table.
+#
+# A purchase voucher has no such table — its GST lives per product and
+# is rolled up into the payload's ledger rows. So the liability rows are
+# built at payload time instead of being stored, from the same rolled-up
+# figures the input-credit rows come from. One source, so the two sides
+# cannot drift apart.
+# ---------------------------------------------------------------------------
+
+
+def purchase_rcm_rows(analyzed_bill, organization):
+    """Liability rows mirroring a purchase bill's input GST.
+
+    Returns ``[{"tax_type", "amount", "ledger"}, ...]``, empty when
+    reverse charge is off, when there is no GST, or when the
+    organisation has no RCM ledger group configured.
+
+    Mirrors each tax head separately rather than one combined figure:
+    CGST and SGST are owed to different governments and a single lump
+    cannot be apportioned back.
+    """
+    if not getattr(analyzed_bill, "is_reverse_charge", False):
+        return []
+
+    rows = []
+    for tax_type in ("igst", "cgst", "sgst"):
+        amount = _money(getattr(analyzed_bill, tax_type, 0))
+        if amount == Decimal("0"):
+            continue
+        ledger = rcm_ledger_for(organization, tax_type)
+        if ledger is None:
+            # No RCM group configured. Returning nothing is the only safe
+            # answer: posting the liability to the input-credit ledger
+            # would cancel the credit instead of recording the debt.
+            logger.warning(
+                "Bill %s is reverse-charge but organisation %s has no RCM "
+                "ledger for %s — liability rows omitted",
+                getattr(analyzed_bill, "id", "?"), organization.id, tax_type,
+            )
+            return []
+        rows.append({"tax_type": tax_type, "amount": amount, "ledger": ledger})
+    return rows
+
+
+def purchase_rcm_blockers(analyzed_bill, organization):
+    """Why this reverse-charge purchase bill must not sync yet.
+
+    Returns a list of human-readable reasons, empty when it is safe.
+
+    Syncing a reverse-charge bill whose liability rows cannot be built
+    would post the input credit without the matching debt — the
+    voucher would look right and the GST position would be wrong by the
+    whole tax amount. Better to refuse and say why.
+    """
+    if not getattr(analyzed_bill, "is_reverse_charge", False):
+        return []
+
+    reasons = []
+    has_tax = any(
+        _money(getattr(analyzed_bill, t, 0)) != Decimal("0")
+        for t in ("igst", "cgst", "sgst")
+    )
+    if not has_tax:
+        reasons.append(
+            "Reverse charge is on but this bill carries no GST. Either the "
+            "tax is missing or the bill is not reverse-charge."
+        )
+    elif not purchase_rcm_rows(analyzed_bill, organization):
+        reasons.append(
+            "Reverse charge is on but no RCM payable ledger is configured. "
+            "Add one under Tally Integration -> Reverse charge ledgers, "
+            "otherwise the liability would post to the input-credit "
+            "ledger and cancel the credit out."
+        )
+    return reasons

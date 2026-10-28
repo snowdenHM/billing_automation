@@ -659,6 +659,77 @@ class TallyVendorAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="sgst_tally_vendor_analysed_bills"
     )
 
+    # How the discount and freight relate to the taxable value.
+    #
+    # Default False on both, so every bill already in the database keeps
+    # exactly the meaning it had: discount deducted after tax, freight
+    # added after tax. Only a bill the extraction marks otherwise, or an
+    # operator ticks, changes base.
+    #
+    # It matters because it changes the tax due. A trade discount shown
+    # on the invoice is excluded from the taxable value under CGST
+    # s.15(3)(a); freight charged on the invoice is included under
+    # s.15(2)(c). Getting either wrong misstates input credit.
+    # e-invoice identity, straight off the invoice. The IRN is the
+    # government's own unique id for this document, so matching on it
+    # makes duplicate detection exact for any e-invoiced bill instead of
+    # relying on a content hash plus a fuzzy vendor/number/amount
+    # comparison. Indexed because that is the only reason it is stored.
+    # Reverse charge on a PURCHASE voucher.
+    #
+    # Under RCM the recipient pays the GST instead of the supplier, so
+    # the same figure belongs on the voucher twice: once as input credit
+    # (the ordinary GST rows) and once as the liability owed to the
+    # government. For a trading business this is where most RCM lands —
+    # s.9(3) goods and services arrive as a tax invoice stamped "Tax
+    # payable under reverse charge", and that is a purchase, not a
+    # journal.
+    #
+    # Off by default, so every bill already in the database and every
+    # bill that is not reverse-charge behaves exactly as before.
+    is_reverse_charge = models.BooleanField(
+        default=False,
+        verbose_name="Reverse charge (RCM)",
+        help_text=(
+            "ON: the GST on this bill is payable by us, not the supplier. "
+            "Matching liability rows are added to the voucher alongside "
+            "the input-credit rows."
+        ),
+    )
+    irn = models.CharField(
+        max_length=64, blank=True, default="", db_index=True,
+        verbose_name="IRN",
+        help_text="e-invoice reference number, as printed on the invoice.",
+    )
+    ack_no = models.CharField(
+        max_length=32, blank=True, default="",
+        verbose_name="Ack No.",
+        help_text="e-invoice acknowledgement number.",
+    )
+    # Printed on the invoice precisely because it is not always the
+    # buyer's registered state. Deriving inter-state from the two GSTINs
+    # is usually right and silently wrong when it is not — and getting
+    # it wrong swaps IGST for CGST+SGST across the whole voucher.
+    place_of_supply = models.CharField(
+        max_length=120, blank=True, default="",
+        help_text="Place of supply as printed. Decides IGST vs CGST+SGST.",
+    )
+    discount_before_tax = models.BooleanField(
+        default=False,
+        verbose_name="Discount is deducted before GST",
+        help_text=(
+            "ON: GST is charged on (sub-total − discount). OFF: the "
+            "discount comes off the total after tax."
+        ),
+    )
+    freight_taxable = models.BooleanField(
+        default=False,
+        verbose_name="Freight is taxable",
+        help_text=(
+            "ON: freight is part of the value GST is charged on. OFF: it "
+            "is added after tax."
+        ),
+    )
     discount = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     discount_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="discount_tally_vendor_analysed_bills"
@@ -750,6 +821,31 @@ class TallyVendorAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
     # mismatch surfaces during review.
     ROUND_OFF_THRESHOLD = Decimal("1.00")
 
+    @property
+    def taxable_base(self):
+        """The value GST is charged on, or None when it is just the lines.
+
+        Returning None for the ordinary case is deliberate: it lets
+        ``assign_line_gst`` keep its existing behaviour untouched rather
+        than routing every bill through an adjustment path.
+
+        ``discount`` is stored signed (negative reduces the bill), so a
+        pre-tax discount is *added* here — adding a negative lowers the
+        base, which is what a trade discount does to the taxable value.
+        """
+        from decimal import Decimal as _D
+        if not (self.discount_before_tax or self.freight_taxable):
+            return None
+        subtotal = sum(
+            (p.amount or _D("0")) for p in self.products.all()
+        ) if self.pk else _D("0")
+        base = subtotal
+        if self.discount_before_tax:
+            base += (self.discount or _D("0"))
+        if self.freight_taxable:
+            base += (self.freight or _D("0"))
+        return float(max(base, _D("0")))
+
     def compute_round_off(self, save=True):
         """Recompute the round_off amount for this vendor bill.
 
@@ -823,6 +919,15 @@ class TallyVendorAnalyzedProduct(BaseOrgModel):
 
     price = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
     quantity = models.PositiveIntegerField(blank=True, null=True, default=0)
+    unit = models.CharField(
+        max_length=24, blank=True, default="",
+        help_text="Unit of measure as printed on the bill (BAGS, NOS, KG...).",
+    )
+    hsn = models.CharField(
+        max_length=16, blank=True, default="", db_index=True,
+        verbose_name="HSN/SAC",
+        help_text="HSN or SAC code for this line, read off the invoice.",
+    )
     amount = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
 
     product_gst = models.CharField(max_length=50, choices=GST_CHOICES, blank=True, null=True)
@@ -2147,6 +2252,56 @@ class TallySalesAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
         related_name="sgst_tally_sales_analysed_bills",
     )
 
+    # How the discount and freight relate to the taxable value.
+    #
+    # Default False on both, so every bill already in the database keeps
+    # exactly the meaning it had: discount deducted after tax, freight
+    # added after tax. Only a bill the extraction marks otherwise, or an
+    # operator ticks, changes base.
+    #
+    # It matters because it changes the tax due. A trade discount shown
+    # on the invoice is excluded from the taxable value under CGST
+    # s.15(3)(a); freight charged on the invoice is included under
+    # s.15(2)(c). Getting either wrong misstates input credit.
+    # e-invoice identity, straight off the invoice. The IRN is the
+    # government's own unique id for this document, so matching on it
+    # makes duplicate detection exact for any e-invoiced bill instead of
+    # relying on a content hash plus a fuzzy vendor/number/amount
+    # comparison. Indexed because that is the only reason it is stored.
+    irn = models.CharField(
+        max_length=64, blank=True, default="", db_index=True,
+        verbose_name="IRN",
+        help_text="e-invoice reference number, as printed on the invoice.",
+    )
+    ack_no = models.CharField(
+        max_length=32, blank=True, default="",
+        verbose_name="Ack No.",
+        help_text="e-invoice acknowledgement number.",
+    )
+    # Printed on the invoice precisely because it is not always the
+    # buyer's registered state. Deriving inter-state from the two GSTINs
+    # is usually right and silently wrong when it is not — and getting
+    # it wrong swaps IGST for CGST+SGST across the whole voucher.
+    place_of_supply = models.CharField(
+        max_length=120, blank=True, default="",
+        help_text="Place of supply as printed. Decides IGST vs CGST+SGST.",
+    )
+    discount_before_tax = models.BooleanField(
+        default=False,
+        verbose_name="Discount is deducted before GST",
+        help_text=(
+            "ON: GST is charged on (sub-total − discount). OFF: the "
+            "discount comes off the total after tax."
+        ),
+    )
+    freight_taxable = models.BooleanField(
+        default=False,
+        verbose_name="Freight is taxable",
+        help_text=(
+            "ON: freight is part of the value GST is charged on. OFF: it "
+            "is added after tax."
+        ),
+    )
     discount = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     discount_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True,
@@ -2218,6 +2373,27 @@ class TallySalesAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
 
     ROUND_OFF_THRESHOLD = Decimal("1.00")
 
+    @property
+    def taxable_base(self):
+        """The value GST is charged on, or None when it is just the lines.
+
+        Mirrors the vendor stack — see the note there for why a pre-tax
+        discount is added rather than subtracted (``discount`` is stored
+        signed).
+        """
+        from decimal import Decimal as _D
+        if not (self.discount_before_tax or self.freight_taxable):
+            return None
+        subtotal = sum(
+            (p.amount or _D("0")) for p in self.products.all()
+        ) if self.pk else _D("0")
+        base = subtotal
+        if self.discount_before_tax:
+            base += (self.discount or _D("0"))
+        if self.freight_taxable:
+            base += (self.freight or _D("0"))
+        return float(max(base, _D("0")))
+
     def compute_round_off(self, save=True):
         """Recompute round_off. Same formula as the vendor stack."""
         from decimal import Decimal as _D
@@ -2269,6 +2445,15 @@ class TallySalesAnalyzedProduct(BaseOrgModel):
 
     price = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
     quantity = models.PositiveIntegerField(blank=True, null=True, default=0)
+    unit = models.CharField(
+        max_length=24, blank=True, default="",
+        help_text="Unit of measure as printed on the bill (BAGS, NOS, KG...).",
+    )
+    hsn = models.CharField(
+        max_length=16, blank=True, default="", db_index=True,
+        verbose_name="HSN/SAC",
+        help_text="HSN or SAC code for this line, read off the invoice.",
+    )
     amount = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
 
     product_gst = models.CharField(max_length=50, choices=GST_CHOICES, blank=True, null=True)
@@ -2772,3 +2957,61 @@ class TallyReceiptGstLine(BaseOrgModel):
 
     def __str__(self) -> str:
         return f"{self.tax_type} {self.rate} ₹{self.amount} ({self.debit_or_credit})"
+
+
+class ItemDescriptionMapping(BaseOrgModel):
+    """What a vendor calls something, and which stock item it really is.
+
+    Item auto-match was exact-name-only on both sides, so it almost
+    never fired: a vendor's description is never the Tally item name.
+    "Sadabahar Soyabadi 20 Kg" has to become "FORTUNE SOYA 15LTR", and
+    no string comparison gets there. Picking the item by hand on every
+    line of every bill was the most repeated action in the product.
+
+    Nothing clever is needed to fix it. The operator already answers the
+    question every time they verify a bill; this remembers the answer.
+    Vendors send the same descriptions month after month, so coverage
+    gets high within one billing cycle.
+
+    Scoped to (organisation, vendor, normalised description) on purpose.
+    Two vendors use the same words for different goods, and one client's
+    mapping must never reach another's.
+    """
+
+    vendor = models.ForeignKey(
+        Ledger, on_delete=models.CASCADE,
+        related_name="item_description_mappings",
+        help_text="The vendor whose wording this is.",
+    )
+    description_key = models.CharField(
+        max_length=255, db_index=True,
+        help_text="Normalised description — lowercase, punctuation collapsed.",
+    )
+    description_sample = models.CharField(
+        max_length=255, blank=True, default="",
+        help_text="The description as last seen, for the admin to read.",
+    )
+    stock_item = models.ForeignKey(
+        "tally.StockItem", on_delete=models.CASCADE,
+        related_name="description_mappings",
+    )
+    hit_count = models.PositiveIntegerField(default=1)
+    last_used_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "tally_item_description_mapping"
+        verbose_name = "Item description mapping"
+        verbose_name_plural = "Item description mappings"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "vendor", "description_key"],
+                name="uniq_item_mapping_per_vendor_description",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "vendor", "description_key"]),
+        ]
+
+    def __str__(self):
+        return f"{self.description_sample or self.description_key} -> {self.stock_item}"
