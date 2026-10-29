@@ -46,7 +46,7 @@ from .bill_view_helpers import (
 )
 from .helpers import find_zoho_customer_ledger_enhanced
 from .payment_voucher_helpers import (
-    ZOHO_CUSTOMER_PAYMENTS_URL,
+    ZOHO_CUSTOMER_PAYMENTS_PATH,
     build_customer_payment_payload,
     zoho_payment_sync_base,
     zoho_payment_verify_base,
@@ -213,7 +213,7 @@ def receipt_bill_sync_view(request, org_id, bill_id):
         bill_model=ReceiptBill,
         analysed_model=ReceiptZohoBill,
         build_payload_fn=build_customer_payment_payload,
-        endpoint_url=ZOHO_CUSTOMER_PAYMENTS_URL,
+        endpoint_path=ZOHO_CUSTOMER_PAYMENTS_PATH,
         label='Receipt',
         tag='RECEIPT',
     )

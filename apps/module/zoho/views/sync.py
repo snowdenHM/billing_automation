@@ -23,9 +23,36 @@ from ..serializers.settings import (
     ZohoTaxesSerializer,
     ZohoTdsTcsSerializer,
 )
-from .helpers import get_organization_from_request, get_zoho_credentials, make_zoho_api_request
+from .helpers import ZohoApiError, get_organization_from_request, get_zoho_credentials, make_zoho_api_request
 
 logger = logging.getLogger(__name__)
+def _sync_error_response(exc, what):
+    """Turn a failed sync into something the operator can act on.
+
+    Every handler used to return ``f"Sync failed: {str(e)}"``. For a
+    Zoho rejection that produced "Sync failed: 400 Client Error: for
+    url: https://www.zohoapis.in/...?organization_id=..." — no cause,
+    and an internal URL on the operator's screen. ``ZohoApiError``
+    carries Zoho's own message; anything else is ours and stays
+    generic, because an unexpected traceback is not a message for a
+    user.
+    """
+    if isinstance(exc, ZohoApiError):
+        logger.warning("%s sync failed: %s", what, exc.message)
+        return Response(
+            {
+                "detail": f"Could not sync {what}. {exc.message}",
+                "zoho_code": exc.zoho_code,
+            },
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    logger.exception("%s sync failed", what)
+    return Response(
+        {"detail": f"Could not sync {what}. Check the server logs for details."},
+        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
+
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +110,7 @@ def vendors_sync_view(request, org_id):
 
         return Response({"detail": f"Successfully synced {synced_count} vendors", "synced_count": synced_count})
     except Exception as e:
-        return Response({"detail": f"Sync failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return _sync_error_response(e, "vendors")
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +177,7 @@ def customers_sync_view(request, org_id):
         return Response({"detail": f"Successfully synced {synced_count} customers", "synced_count": synced_count})
     except Exception as e:
         logger.error(f"Customers sync failed: {str(e)}")
-        return Response({"detail": f"Sync failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return _sync_error_response(e, "customers")
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +251,7 @@ def chart_of_accounts_sync_view(request, org_id):
         return Response({"detail": f"Authentication error: {str(e)}"}, status=status.HTTP_401_UNAUTHORIZED)
     except Exception as e:
         logger.error(f"Chart of accounts sync failed: {str(e)}")
-        return Response({"detail": f"Sync failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return _sync_error_response(e, "the chart of accounts")
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +338,7 @@ def taxes_sync_view(request, org_id):
         })
     except Exception as e:
         logger.error(f"Taxes sync failed: {str(e)}")
-        return Response({"detail": f"Sync failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return _sync_error_response(e, "taxes")
 
 
 # ---------------------------------------------------------------------------
@@ -414,4 +441,4 @@ def tds_tcs_sync_view(request, org_id):
 
     except Exception as e:
         logger.error(f"TDS/TCS sync failed: {str(e)}")
-        return Response({"detail": f"Sync failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return _sync_error_response(e, "TDS/TCS")

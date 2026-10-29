@@ -87,7 +87,8 @@ logger = logging.getLogger(__name__)
 # Seconds. An HTTP call with no timeout pins a worker indefinitely.
 ZOHO_HTTP_TIMEOUT = 30
 
-ZOHO_INVOICES_URL = "https://www.zohoapis.in/books/v3/invoices"
+#: Path only. The host is per-account — see zoho_api_base.
+ZOHO_INVOICES_PATH = "invoices"
 
 _ANALYSIS_FALLBACK = {
     "invoiceNumber": "", "dateIssued": "", "dueDate": "",
@@ -519,7 +520,10 @@ def sales_bill_sync_view(request, org_id, bill_id):
     except ValueError as e:
         return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-    url = f"{ZOHO_INVOICES_URL}?organization_id={current_token.organisationId}"
+    url = (
+        f"{zoho_api_base(current_token)}/books/v3/invoices"
+        f"?organization_id={current_token.organisationId}"
+    )
     headers = {
         'Authorization': f'Zoho-oauthtoken {current_token.accessToken}',
         'Content-Type': 'application/json',

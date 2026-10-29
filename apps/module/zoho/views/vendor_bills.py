@@ -69,6 +69,7 @@ from ..serializers.vendor_bills import (
 )
 from apps.common.services.line_gst import line_rate_from_payload
 from .helpers import (
+    zoho_api_base,
     get_zoho_credentials,
     refresh_zoho_access_token,
     make_zoho_api_request,
@@ -1803,7 +1804,10 @@ def vendor_bill_sync_view(request, org_id, bill_id):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         # Sync to Zoho Books
-        url = f"https://www.zohoapis.in/books/v3/bills?organization_id={current_token.organisationId}"
+        url = (
+            f"{zoho_api_base(current_token)}/books/v3/bills"
+            f"?organization_id={current_token.organisationId}"
+        )
         payload = json.dumps(bill_data)
         headers = {
             'Authorization': f'Zoho-oauthtoken {current_token.accessToken}',

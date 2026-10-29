@@ -24,6 +24,7 @@ from .views import (
     move_bill_between_modules_view,
     # Credentials / OAuth
     zoho_credentials_view,
+    zoho_connection_test_view,
     generate_token_view,
     initiate_oauth_view,
     oauth_callback_view,
@@ -103,6 +104,7 @@ urlpatterns = [
         # ============================================================================
         path('status/', zoho_status_view, name='zoho_status'),
         path('settings/credentials/', zoho_credentials_view, name='zoho_credentials'),
+        path('settings/credentials/test/', zoho_connection_test_view, name='zoho_connection_test'),
         path('oauth/initiate/', initiate_oauth_view, name='initiate_oauth'),
         path('oauth/callback/', oauth_callback_view, name='oauth_callback'),
         path('generate-token/', generate_token_view, name='generate_token'),

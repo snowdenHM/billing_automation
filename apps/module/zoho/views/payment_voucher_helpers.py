@@ -33,8 +33,10 @@ logger = logging.getLogger(__name__)
 
 ZOHO_HTTP_TIMEOUT = 30
 
-ZOHO_CUSTOMER_PAYMENTS_URL = "https://www.zohoapis.in/books/v3/customerpayments"
-ZOHO_VENDOR_PAYMENTS_URL = "https://www.zohoapis.in/books/v3/vendorpayments"
+#: Paths only — the host is per-account (see zoho_api_base), because
+#: a token is valid in exactly one Zoho data centre.
+ZOHO_CUSTOMER_PAYMENTS_PATH = "customerpayments"
+ZOHO_VENDOR_PAYMENTS_PATH = "vendorpayments"
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +225,7 @@ def _extract_payment_id(response_json):
 
 def zoho_payment_sync_base(
     request, org_id, bill_id, *,
-    bill_model, analysed_model, build_payload_fn, endpoint_url, label, tag,
+    bill_model, analysed_model, build_payload_fn, endpoint_path, label, tag,
 ):
     """Generic sync view: build the payload, POST it, record the remote id."""
     organization = get_organization_from_request(request, org_id=org_id)
@@ -281,7 +283,10 @@ def zoho_payment_sync_base(
     except ValueError as e:
         return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-    url = f"{endpoint_url}?organization_id={current_token.organisationId}"
+    url = (
+        f"{zoho_api_base(current_token)}/books/v3/{endpoint_path}"
+        f"?organization_id={current_token.organisationId}"
+    )
     headers = {
         'Authorization': f'Zoho-oauthtoken {current_token.accessToken}',
         'Content-Type': 'application/json',

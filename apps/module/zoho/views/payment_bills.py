@@ -47,7 +47,7 @@ from .bill_view_helpers import (
 )
 from .helpers import find_zoho_vendor_ledger_enhanced
 from .payment_voucher_helpers import (
-    ZOHO_VENDOR_PAYMENTS_URL,
+    ZOHO_VENDOR_PAYMENTS_PATH,
     build_vendor_payment_payload,
     zoho_payment_sync_base,
     zoho_payment_verify_base,
@@ -214,7 +214,7 @@ def payment_bill_sync_view(request, org_id, bill_id):
         bill_model=PaymentBill,
         analysed_model=PaymentZohoBill,
         build_payload_fn=build_vendor_payment_payload,
-        endpoint_url=ZOHO_VENDOR_PAYMENTS_URL,
+        endpoint_path=ZOHO_VENDOR_PAYMENTS_PATH,
         label='Payment',
         tag='PAYMENT',
     )

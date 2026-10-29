@@ -14,6 +14,7 @@ from .helpers import (
 # Credentials & OAuth
 from .credentials import (
     zoho_credentials_view,
+    zoho_connection_test_view,
     generate_token_view,
     initiate_oauth_view,
     oauth_callback_view,
@@ -108,6 +109,7 @@ __all__ = [
     "make_zoho_api_request",
     # Credentials
     "zoho_credentials_view",
+    "zoho_connection_test_view",
     "generate_token_view",
     "initiate_oauth_view",
     "oauth_callback_view",

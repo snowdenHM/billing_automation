@@ -69,6 +69,68 @@ class ZohoCredentials(BaseTeamModel):
     clientId = models.CharField(max_length=100)
     clientSecret = models.CharField(max_length=100)
     accessCode = models.CharField(max_length=200, default="Your Access Code")
+    # Zoho runs independent data centres. An account exists in exactly
+    # one of them, and both the login host and the API host differ per
+    # DC. The whole OAuth flow used to be hardcoded to India, so an
+    # account whose Books organisation lives anywhere else could not be
+    # connected at all — the authorisation succeeded against the Indian
+    # login server and produced a token valid only there, where the
+    # account has no organisation. Zoho then says "this user is not
+    # associated with any organization", which reads like a missing
+    # organisation rather than the wrong country.
+    class Region(models.TextChoices):
+        INDIA = "in", "India (zoho.in)"
+        US = "com", "United States (zoho.com)"
+        EUROPE = "eu", "Europe (zoho.eu)"
+        AUSTRALIA = "com.au", "Australia (zoho.com.au)"
+        JAPAN = "jp", "Japan (zoho.jp)"
+        CANADA = "ca", "Canada (zohocloud.ca)"
+        SAUDI = "sa", "Saudi Arabia (zoho.sa)"
+
+    region = models.CharField(
+        max_length=8, choices=Region.choices, default=Region.INDIA,
+        help_text=(
+            "The Zoho data centre this account belongs to. Check the "
+            "address bar when signed in to Zoho Books."
+        ),
+    )
+
+    # Which Zoho data centre this account lives in, taken from the
+    # ``api_domain`` the token response carries.
+    #
+    # Every call used to hardcode ``https://www.zohoapis.in``. For an
+    # account on another DC — .com, .eu, .com.au — that reaches a server
+    # the token is not valid for, and Zoho answers "this user is not
+    # associated with any organization", which reads like a missing
+    # organisation rather than a wrong host. Zoho tells us the right one
+    # at token time; this is where it goes.
+    api_domain = models.CharField(
+        max_length=64, blank=True, default="",
+        help_text="Zoho API host for this account, e.g. https://www.zohoapis.in",
+    )
+
+    #: Canada is the one DC whose hostname is not ``zoho.<tld>``.
+    _ACCOUNTS_HOSTS = {"ca": "https://accounts.zohocloud.ca"}
+    _API_HOSTS = {"ca": "https://www.zohoapis.ca"}
+
+    @property
+    def accounts_base(self):
+        """Where this account signs in and exchanges tokens."""
+        region = self.region or self.Region.INDIA
+        return self._ACCOUNTS_HOSTS.get(region, f"https://accounts.zoho.{region}")
+
+    @property
+    def api_base(self):
+        """Where this account's Books data lives.
+
+        ``api_domain`` is what Zoho itself returned with the token, so it
+        wins; the region is the fallback for rows that predate it.
+        """
+        stored = (self.api_domain or "").strip().rstrip("/")
+        if stored:
+            return stored
+        region = self.region or self.Region.INDIA
+        return self._API_HOSTS.get(region, f"https://www.zohoapis.{region}")
     organisationId = models.CharField(max_length=100, default="Your organisationId")
     redirectUrl = models.CharField(max_length=200, default="Your Redirect URL")
     accessToken = models.CharField(max_length=200, null=True, blank=True)
@@ -102,7 +164,7 @@ class ZohoCredentials(BaseTeamModel):
 
         # Build refresh token URL
         url = (
-            "https://accounts.zoho.in/oauth/v2/token"
+            f"{self.accounts_base}/oauth/v2/token"
             f"?refresh_token={self.refreshToken}"
             f"&client_id={self.clientId}"
             f"&client_secret={self.clientSecret}"

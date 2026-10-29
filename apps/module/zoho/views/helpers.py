@@ -80,7 +80,7 @@ def refresh_zoho_access_token(current_token):
     client_secret = current_token.clientSecret
 
     url = (
-        f"https://accounts.zoho.in/oauth/v2/token?"
+        f"{credentials.accounts_base}/oauth/v2/token?"
         f"refresh_token={refresh_token}&client_id={client_id}"
         f"&client_secret={client_secret}&grant_type=refresh_token"
     )
@@ -104,6 +104,56 @@ def refresh_zoho_access_token(current_token):
 # API request
 # ---------------------------------------------------------------------------
 
+#: Fallback when a credentials row predates ``api_domain``. India is the
+#: right guess for this product's clients, and a wrong guess now fails
+#: loudly through ZohoApiError rather than silently.
+DEFAULT_ZOHO_API_DOMAIN = "https://www.zohoapis.in"
+
+
+def zoho_api_base(credentials):
+    """The Zoho API host for *credentials*.
+
+    Zoho runs separate data centres and a token is only valid in the one
+    that issued it. The host was hardcoded to ``.in`` in eight places,
+    so an account on any other DC got "this user is not associated with
+    any organization" — Zoho's way of saying "not here", which reads
+    like a missing organisation.
+    """
+    base = getattr(credentials, "api_base", None)
+    if base:
+        return base
+    domain = (getattr(credentials, "api_domain", "") or "").strip().rstrip("/")
+    return domain or DEFAULT_ZOHO_API_DOMAIN
+
+
+def zoho_api_url(credentials, path):
+    """Absolute Books v3 URL for *path* on this account's data centre."""
+    return f"{zoho_api_base(credentials)}/books/v3/{path.lstrip('/')}"
+
+
+class ZohoApiError(Exception):
+    """A Zoho Books API call that failed, carrying Zoho's own reason.
+
+    ``requests`` raises HTTPError whose str() is
+    "400 Client Error: for url: https://...?organization_id=...". That
+    reached the operator verbatim: it names no cause, and it puts an
+    internal URL on their screen. Zoho itself always replies with
+    ``{"code": 57, "message": "You are not authorized ..."}`` — the
+    actual answer — and that was going only to the log.
+
+    So the body is parsed here and travels with the exception.
+    """
+
+    def __init__(self, message, *, status_code=None, zoho_code=None):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.zoho_code = zoho_code
+
+    def __str__(self):
+        return self.message
+
+
 def make_zoho_api_request(credentials, endpoint, method="GET", data=None):
     """Make authenticated request to Zoho API with proactive token refresh support."""
     if credentials.token_expiry and timezone.now() >= (credentials.token_expiry - timezone.timedelta(minutes=5)):
@@ -113,7 +163,10 @@ def make_zoho_api_request(credentials, endpoint, method="GET", data=None):
     def _make_request(access_token):
         headers = {"Authorization": f"Zoho-oauthtoken {access_token}", "Content-Type": "application/json"}
         separator = "&" if "?" in endpoint else "?"
-        url = f"https://www.zohoapis.in/books/v3/{endpoint}{separator}organization_id={credentials.organisationId}"
+        url = (
+            f"{zoho_api_base(credentials)}/books/v3/{endpoint}"
+            f"{separator}organization_id={credentials.organisationId}"
+        )
 
         if method == "GET":
             response = requests.get(url, headers=headers, timeout=30)
@@ -139,12 +192,49 @@ def make_zoho_api_request(credentials, endpoint, method="GET", data=None):
 
     except requests.RequestException as e:
         logger.error(f"Zoho API request failed: {str(e)}")
-        if hasattr(e, "response") and e.response is not None:
-            try:
-                logger.error(f"Zoho API error response: {e.response.json()}")
-            except Exception:
-                logger.error(f"Zoho API error response (raw): {e.response.text}")
-        raise
+        resp = getattr(e, "response", None)
+
+        if resp is None:
+            # Never reached Zoho at all — DNS, TLS, timeout.
+            raise ZohoApiError(
+                "Could not reach Zoho Books. Check the server's network "
+                "connection and try again."
+            ) from e
+
+        body, zoho_code, zoho_message = None, None, None
+        try:
+            body = resp.json()
+            zoho_code = body.get("code")
+            zoho_message = body.get("message")
+            logger.error(f"Zoho API error response: {body}")
+        except Exception:
+            logger.error(f"Zoho API error response (raw): {resp.text[:500]}")
+
+        # Zoho's own words first. They are written for the person who
+        # has to fix it, and they distinguish a wrong organisation id
+        # from an expired token from a missing scope — which the status
+        # code alone cannot.
+        if zoho_message:
+            detail = zoho_message
+            if zoho_code is not None:
+                detail = f"{zoho_message} (Zoho code {zoho_code})"
+        elif resp.status_code == 401:
+            detail = (
+                "Zoho rejected the access token. Reconnect this workspace "
+                "to Zoho Books."
+            )
+        elif resp.status_code == 400:
+            detail = (
+                "Zoho rejected the request. The organisation ID is the "
+                "usual cause — check it matches the Zoho Books account "
+                "these credentials belong to."
+            )
+        else:
+            detail = f"Zoho Books returned HTTP {resp.status_code}."
+
+        raise ZohoApiError(
+            detail, status_code=resp.status_code, zoho_code=zoho_code,
+        ) from e
 
 
 # ---------------------------------------------------------------------------

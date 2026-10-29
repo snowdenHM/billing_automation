@@ -95,6 +95,34 @@ def invalidate_maintenance_cache():
     cache.delete(_CACHE_KEY)
 
 
+def _is_staff(user) -> bool:
+    return bool(
+        user is not None
+        and getattr(user, "is_authenticated", False)
+        and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+    )
+
+
+def _user_from_jwt(request):
+    """The user behind this request's bearer token, or None.
+
+    Cheap when there is no Authorization header, which is the common
+    case for the static and admin paths that reach this.
+    """
+    header = request.META.get("HTTP_AUTHORIZATION") or ""
+    if not header.lower().startswith("bearer "):
+        return None
+    try:
+        from rest_framework_simplejwt.authentication import JWTAuthentication
+
+        result = JWTAuthentication().authenticate(request)
+        return result[0] if result else None
+    except Exception:
+        # An expired or malformed token is not staff, and is not this
+        # middleware's problem to report — the view will say so.
+        return None
+
+
 def _is_exempt(request, state) -> bool:
     """Whether this request goes through despite maintenance being on."""
     path = request.path or "/"
@@ -104,10 +132,17 @@ def _is_exempt(request, state) -> bool:
 
     # Staff and superusers always pass, so the team can verify a release
     # against production before letting clients back in.
-    user = getattr(request, "user", None)
-    if user is not None and getattr(user, "is_authenticated", False):
-        if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
-            return True
+    #
+    # `request.user` alone is not enough here. Middleware runs before DRF
+    # does its authentication, and `AuthenticationMiddleware` only reads
+    # the *session*. Every API call carries a JWT instead, so at this
+    # point `request.user` is AnonymousUser for exactly the requests the
+    # exemption is meant to cover — staff were being locked out of their
+    # own maintenance window. So the token is resolved here too.
+    if _is_staff(getattr(request, "user", None)):
+        return True
+    if _is_staff(_user_from_jwt(request)):
+        return True
 
     if state["allow_tally_connector"] and path.startswith(_TALLY_CONNECTOR_PREFIXES):
         return True

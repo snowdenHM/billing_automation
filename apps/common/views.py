@@ -360,6 +360,26 @@ def book_demo_verify_view(request):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def maintenance_status_view(request):
-    """Whether the application is in maintenance, and what to tell people."""
+    """Whether the application is in maintenance, and what to tell people.
+
+    ``exempt_for_you`` is the important field. The middleware already
+    lets staff through, so for them the API keeps answering — but the
+    frontend gate was reading the global flag and showing them the
+    maintenance screen anyway, which defeated the one thing the
+    exemption exists for: walking through a release against production
+    before letting clients back in.
+
+    The server decides, not the browser. ``AllowAny`` on purpose — a
+    signed-out visitor must still be told the site is down — but when a
+    token is presented the answer is specific to that user.
+    """
     from apps.common.maintenance import get_maintenance_state
-    return Response(get_maintenance_state())
+
+    state = dict(get_maintenance_state())
+    user = getattr(request, "user", None)
+    state["exempt_for_you"] = bool(
+        user is not None
+        and getattr(user, "is_authenticated", False)
+        and (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+    )
+    return Response(state)

@@ -39,6 +39,7 @@ from ..serializers.journal_bills import (
     ZohoJournalBillMultipleUploadSerializer,
 )
 from .helpers import (
+    zoho_api_base,
     get_zoho_credentials,
     refresh_zoho_access_token,
     analyze_zoho_bill,
@@ -461,7 +462,10 @@ def journal_bill_sync_view(request, org_id, bill_id):
         logger.info(f"[JOURNAL SYNC] Syncing bill {bill_id} with {len(bill_data['line_items'])} line items")
 
         # Call Zoho API
-        url = f"https://www.zohoapis.in/books/v3/journals?organization_id={current_token.organisationId}"
+        url = (
+            f"{zoho_api_base(current_token)}/books/v3/journals"
+            f"?organization_id={current_token.organisationId}"
+        )
         headers = {
             'Authorization': f'Zoho-oauthtoken {current_token.accessToken}',
             'Content-Type': 'application/json',
