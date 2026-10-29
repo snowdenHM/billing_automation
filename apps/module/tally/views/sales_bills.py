@@ -443,6 +443,9 @@ def process_analysis_data(bill, json_data, organization):
                 # the solver has to see the same base the vendor used.
                 _disc_pre = bool(relevant_data.get('discount_before_tax'))
                 _freight_taxed = bool(relevant_data.get('freight_taxable'))
+                # MRP-priced lines carry their own GST, so the rate has
+                # to be applied the other way round.
+                _incl = bool(relevant_data.get('lines_include_gst'))
                 _base = None
                 if _disc_pre or _freight_taxed:
                     _gross = sum(l['amount'] for l in _gst_lines)
@@ -464,6 +467,11 @@ def process_analysis_data(bill, json_data, organization):
                     _bill_updates['discount_before_tax'] = _disc_pre
                 if analyzed_bill.freight_taxable != _freight_taxed:
                     _bill_updates['freight_taxable'] = _freight_taxed
+                if analyzed_bill.lines_include_gst != _incl:
+                    _bill_updates['lines_include_gst'] = _incl
+                _rcm = bool(relevant_data.get('is_reverse_charge'))
+                if analyzed_bill.is_reverse_charge != _rcm:
+                    _bill_updates['is_reverse_charge'] = _rcm
                 # Only overwrite with something: a bill that is not an
                 # e-invoice must not have a previously-read IRN wiped.
                 if _irn and analyzed_bill.irn != _irn:
@@ -479,6 +487,7 @@ def process_analysis_data(bill, json_data, organization):
 
                 _line_gst, _gst_strategy = assign_line_gst(
                     _gst_lines, igst_val, cgst_val, sgst_val, taxable_base=_base,
+                    lines_include_gst=_incl,
                 )
                 logger.warning(
                     "🧮 Line GST resolved by '%s' for %d line(s)",
@@ -1035,9 +1044,38 @@ def process_existing_analysis_data(bill, existing_data, organization):
 
             # Resolve every line's rate once, before the loop, so each
             # line's tax is computed from its own rate.
+            # Same base and same per-line rates the fresh-analysis path
+            # uses. This call used to pass neither, so re-analysing a
+            # bill that already had data silently dropped both: a
+            # pre-tax discount stopped lowering the GST base, and the
+            # rates printed in the HSN table were ignored in favour of
+            # solving for them. The two paths produced different tax on
+            # the same document, and only one of them was right.
+            _hsn_summary = existing_data.get('hsn_summary') or []
+            _existing_gst_lines = [
+                {
+                    'amount': pd['amount'],
+                    'rate': line_rate_from_payload(pd['item'], _hsn_summary),
+                }
+                for pd in product_instances
+            ]
+
+            _disc_pre = bool(existing_data.get('discount_before_tax'))
+            _freight_taxed = bool(existing_data.get('freight_taxable'))
+            _incl = bool(existing_data.get('lines_include_gst'))
+            _base = None
+            if _disc_pre or _freight_taxed:
+                _base = sum(l['amount'] for l in _existing_gst_lines)
+                if _disc_pre:
+                    _base += safe_float_convert(existing_data.get('discount', 0))
+                if _freight_taxed:
+                    _base += safe_float_convert(existing_data.get('freight', 0))
+                _base = max(_base, 0.0)
+
             _existing_line_gst, _existing_strategy = assign_line_gst(
-                [{'amount': pd['amount'], 'rate': None} for pd in product_instances],
-                igst_val, cgst_val, sgst_val,
+                _existing_gst_lines,
+                igst_val, cgst_val, sgst_val, taxable_base=_base,
+                lines_include_gst=_incl,
             )
             logger.warning(
                 "🧮 [EXISTING] Line GST resolved by '%s' for %d line(s)",
@@ -1204,21 +1242,56 @@ def calculate_product_gst(amount, product_gst_str, gst_type):
         # Calculate total GST amount
         gst_amount = (amount_decimal * gst_percentage) / Decimal("100")
 
-        # Distribute GST based on gst_type
-        if gst_type == TallySalesAnalyzedBill.GSTType.IGST:
-            # All GST goes to IGST
-            return round(gst_amount, 2), Decimal("0"), Decimal("0")
-        elif gst_type == TallySalesAnalyzedBill.GSTType.CGST_SGST:
-            # Split equally between CGST and SGST
-            half_gst = gst_amount / Decimal("2")
-            return Decimal("0"), round(half_gst, 2), round(half_gst, 2)
-        else:
-            # Unknown GST type - return zeros
-            return Decimal("0"), Decimal("0"), Decimal("0")
+        # One splitting rule for the module. This used to round each
+        # half of the total independently, which turns an 18.91 total
+        # into 9.46 + 9.46 = 18.92 — a paisa the bill never charged —
+        # and left two functions in this file splitting the same
+        # number two different ways.
+        return _split_gst_total(gst_amount, gst_type, TallySalesAnalyzedBill)
 
     except (ValueError, InvalidOperation) as e:
         logger.warning(f"Error calculating product GST: {str(e)}")
         return Decimal("0"), Decimal("0"), Decimal("0")
+
+
+def _split_gst_total(total, gst_type, model):
+    """Put a line's GST total on the heads the bill actually uses.
+
+    One half is rounded and the other takes the remainder. Rounding
+    both independently makes 18.91 come back as 9.46 + 9.46 = 18.92 —
+    a paisa the bill never charged, on every line with odd paise. The
+    same rule is in ``apps/common/services/line_gst._split``.
+    """
+    total = _to_decimal(total, "0")
+    if gst_type == model.GSTType.IGST:
+        return round(total, 2), Decimal("0"), Decimal("0")
+    if gst_type == model.GSTType.CGST_SGST:
+        half = round(total / Decimal("2"), 2)
+        return Decimal("0"), half, total - half
+    return Decimal("0"), Decimal("0"), Decimal("0")
+
+
+def line_tax_from_payload(item, amount, product_gst_str, gst_type, model):
+    """A line's GST, preferring what the verify screen actually showed.
+
+    The screen is where a pre-tax discount or taxable freight has
+    already moved the base, so recomputing ``amount x rate`` here threw
+    that correction away: the operator could move the figure, save, and
+    watch the old one come back. Nothing read the payload's per-line
+    tax at all, which made both tax-base toggles ornamental.
+
+    Only the *total* is taken from the payload. Which heads it lands on
+    stays a server decision from ``gst_type``, so a stale client cannot
+    post CGST+SGST on an inter-state bill.
+
+    A payload that carries none of the three keys is an older shape;
+    those fall back to the amount x rate rule unchanged.
+    """
+    keys = ("igst", "cgst", "sgst")
+    if not any(k in item for k in keys):
+        return calculate_product_gst(amount, product_gst_str, gst_type)
+    total = sum((_to_decimal(item.get(k), "0") for k in keys), Decimal("0"))
+    return _split_gst_total(total, gst_type, model)
 
 
 # ✅
@@ -1589,6 +1662,35 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                 if not final_amt or final_amt == 0:
                     setattr(analyzed_bill, ledger_field, None)
 
+        # Whether the discount comes off before GST, and whether freight
+        # is taxable. Both change the value GST is charged on, so a wrong
+        # one misstates input credit — s.15(3)(a) excludes a trade
+        # discount from taxable value, s.15(2)(c) includes invoice
+        # freight in it.
+        #
+        # Analysis sets these from what the bill says. Verify has to
+        # accept them too: until it did, the operator could see the two
+        # readings were wrong and had no way to save a correction, which
+        # is the same as not having the fields at all.
+        for _flag in ('discount_before_tax', 'freight_taxable',
+                      'lines_include_gst', 'is_reverse_charge'):
+            if _flag in analyzed_data:
+                setattr(analyzed_bill, _flag, bool(analyzed_data[_flag]))
+
+        # Place of supply, IRN and Ack No. Extraction has written these
+        # since e-invoicing went in and nothing ever returned them, so
+        # a misread place of supply — the field that decides IGST vs
+        # CGST+SGST — could not be corrected by the person looking at
+        # the invoice.
+        for _field, _limit in (
+            ('place_of_supply', 120), ('irn', 64), ('ack_no', 32),
+        ):
+            if _field in analyzed_data:
+                setattr(
+                    analyzed_bill, _field,
+                    str(analyzed_data[_field] or '').strip()[:_limit],
+                )
+
         # Determine GST type — bill-level fields first, then per-line sum
         # as a fallback. A mixed-rate bill can zero-out its bill-level
         # summary (the source of truth is per-line) but still carry real
@@ -1875,16 +1977,26 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 if product.product_gst != normalized_gst:
                     product.product_gst = normalized_gst
                     needs_update = True
+            # HSN and unit round-trip so an operator's correction sticks
+            # and a re-save does not blank what the invoice printed.
+            for _field, _limit in (('hsn', 16), ('unit', 24)):
+                if _field in item:
+                    _value = str(item.get(_field) or '')[:_limit]
+                    if getattr(product, _field, '') != _value:
+                        setattr(product, _field, _value)
+                        needs_update = True
 
             # Calculate GST values based on gst_type from analyzed_bill
             # This ensures GST is correctly distributed according to bill's GST type
             current_amount = _to_decimal(item.get('amount'), str(product.amount))
             current_product_gst = item.get('product_gst', product.product_gst)
 
-            calc_igst, calc_cgst, calc_sgst = calculate_product_gst(
+            calc_igst, calc_cgst, calc_sgst = line_tax_from_payload(
+                item,
                 current_amount,
                 current_product_gst,
-                analyzed_bill.gst_type
+                analyzed_bill.gst_type,
+                TallySalesAnalyzedBill,
             )
 
             # Update GST values if calculated values differ
@@ -1962,10 +2074,12 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
             product_gst_str = normalize_product_gst(item.get('product_gst', '18%'))  # 🎯 Normalize GST value
 
             # Calculate GST values based on gst_type from analyzed_bill
-            calc_igst, calc_cgst, calc_sgst = calculate_product_gst(
+            calc_igst, calc_cgst, calc_sgst = line_tax_from_payload(
+                item,
                 product_amount,
                 product_gst_str,
-                analyzed_bill.gst_type
+                analyzed_bill.gst_type,
+                TallySalesAnalyzedBill,
             )
 
             product = TallySalesAnalyzedProduct(
@@ -1976,6 +2090,8 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 price=_to_decimal(item.get('price'), "0"),
                 quantity=_to_int(item.get('quantity'), 0),
                 amount=product_amount,
+                unit=str(item.get('unit') or '')[:24],
+                hsn=str(item.get('hsn') or '')[:16],
                 product_gst=product_gst_str,  # 🎯 Already normalized above
                 igst=calc_igst,
                 cgst=calc_cgst,
@@ -2730,7 +2846,13 @@ def prepare_sync_data(analyzed_bill, organization, cache=None):
                     organization, item_name, cache.setdefault("stock_items", {})
                 )
                 item_entry.update({
-                    "unit": (getattr(stock_item, 'unit', None) or "Nos"),
+                    # Same fallback order as gst_rate below: the master
+                    # first, then what the invoice line itself said.
+                    "unit": (
+                        getattr(stock_item, 'unit', None)
+                        or getattr(line, 'unit', None)
+                        or "Nos"
+                    ),
                     # Fall back to the line's own GST rate when the stock
                     # item master has none — on a bill that rate is the more
                     # reliable of the two.
@@ -2739,7 +2861,15 @@ def prepare_sync_data(analyzed_bill, organization, cache=None):
                         or getattr(line, 'product_gst', None)
                         or ""
                     ),
-                    "hsn_code": (getattr(stock_item, 'hsn_code', None) or ""),
+                    # An unmapped stock item used to send an empty HSN,
+                    # which is the one field GSTR-1's HSN summary is
+                    # built from. The line carries what the invoice
+                    # printed, so use it rather than shipping nothing.
+                    "hsn_code": (
+                        getattr(stock_item, 'hsn_code', None)
+                        or getattr(line, 'hsn', None)
+                        or ""
+                    ),
                 })
                 # Stock GROUP. Separate flag because it was not part of the
                 # request: with no <parent> Tally files a newly created item

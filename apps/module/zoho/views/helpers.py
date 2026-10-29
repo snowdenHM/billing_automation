@@ -54,11 +54,28 @@ def get_zoho_credentials(organization):
             },
         )
 
+        # Keep the stored app identity in step with the environment,
+        # but only write when it has actually moved. This ran on every
+        # Zoho call, so an unchanged deployment was issuing an UPDATE
+        # per request for nothing.
         if not created:
-            credentials.clientId = client_id
-            credentials.clientSecret = client_secret
-            credentials.redirectUrl = redirect_url
-            credentials.save(update_fields=["clientId", "clientSecret", "redirectUrl"])
+            drifted = [
+                field
+                for field, value in (
+                    ("clientId", client_id),
+                    ("clientSecret", client_secret),
+                    ("redirectUrl", redirect_url),
+                )
+                if getattr(credentials, field) != value
+            ]
+            if drifted:
+                for field, value in (
+                    ("clientId", client_id),
+                    ("clientSecret", client_secret),
+                    ("redirectUrl", redirect_url),
+                ):
+                    setattr(credentials, field, value)
+                credentials.save(update_fields=drifted)
 
         if credentials.accessToken and not credentials.is_token_valid():
             if not credentials.refresh_token():
@@ -235,6 +252,58 @@ def make_zoho_api_request(credentials, endpoint, method="GET", data=None):
         raise ZohoApiError(
             detail, status_code=resp.status_code, zoho_code=zoho_code,
         ) from e
+
+
+# ---------------------------------------------------------------------------
+# Paged reads
+# ---------------------------------------------------------------------------
+
+#: Zoho's own ceiling. Asking for more is silently clamped, so sending
+#: the maximum is the difference between one request and three.
+ZOHO_MAX_PER_PAGE = 200
+
+#: A stop so a server-side bug cannot turn a sync into an endless loop.
+#: At 200 rows a page this is 40,000 contacts — far past any real
+#: client, and the count is reported when it trips rather than silently
+#: truncating.
+_MAX_PAGES = 200
+
+
+def fetch_all_zoho_pages(credentials, endpoint, collection):
+    """Every row of a paged Zoho collection, not just the first page.
+
+    Zoho caps a list response at 200 rows and reports the rest through
+    ``page_context.has_more_page``. Reading the first page only looks
+    like a working sync on a small test account and quietly loses most
+    of a real one — a vendor that never arrived cannot be matched, so
+    its bills land unassigned with nothing to say why.
+
+    Returns ``(rows, truncated)``. ``truncated`` is True only if the
+    page ceiling was reached, which means rows are genuinely missing.
+    """
+    separator = "&" if "?" in endpoint else "?"
+    rows, page = [], 1
+
+    while page <= _MAX_PAGES:
+        payload = make_zoho_api_request(
+            credentials,
+            f"{endpoint}{separator}page={page}&per_page={ZOHO_MAX_PER_PAGE}",
+        )
+        batch = payload.get(collection) or []
+        rows.extend(batch)
+
+        context = payload.get("page_context") or {}
+        # No page_context at all means an unpaged response: what came
+        # back is everything. An empty batch means the same.
+        if not context.get("has_more_page") or not batch:
+            return rows, False
+        page += 1
+
+    logger.warning(
+        "Zoho %s paging hit the %s-page ceiling at %s rows",
+        endpoint, _MAX_PAGES, len(rows),
+    )
+    return rows, True
 
 
 # ---------------------------------------------------------------------------

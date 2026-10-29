@@ -730,6 +730,15 @@ class TallyVendorAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
             "is added after tax."
         ),
     )
+    lines_include_gst = models.BooleanField(
+        default=False,
+        verbose_name="Line amounts include GST",
+        help_text=(
+            "ON: the printed line amounts already hold their GST (MRP "
+            "pricing on a retail or pharmacy bill), so the taxable value "
+            "is lower than the amount. OFF: GST is added on top."
+        ),
+    )
     discount = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     discount_taxes = models.ForeignKey(
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="discount_tally_vendor_analysed_bills"
@@ -2286,6 +2295,17 @@ class TallySalesAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
         max_length=120, blank=True, default="",
         help_text="Place of supply as printed. Decides IGST vs CGST+SGST.",
     )
+    # A sales invoice carries the same declaration a purchase one does
+    # ("Tax payable under reverse charge"), and GSTR-1 asks for it per
+    # invoice. It was only ever modelled on the purchase side.
+    is_reverse_charge = models.BooleanField(
+        default=False,
+        verbose_name="Reverse charge (RCM)",
+        help_text=(
+            "ON: the GST on this invoice is payable by the recipient, "
+            "not by us."
+        ),
+    )
     discount_before_tax = models.BooleanField(
         default=False,
         verbose_name="Discount is deducted before GST",
@@ -2300,6 +2320,15 @@ class TallySalesAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
         help_text=(
             "ON: freight is part of the value GST is charged on. OFF: it "
             "is added after tax."
+        ),
+    )
+    lines_include_gst = models.BooleanField(
+        default=False,
+        verbose_name="Line amounts include GST",
+        help_text=(
+            "ON: the printed line amounts already hold their GST (MRP "
+            "pricing on a retail or pharmacy bill), so the taxable value "
+            "is lower than the amount. OFF: GST is added on top."
         ),
     )
     discount = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, default=Decimal("0"))

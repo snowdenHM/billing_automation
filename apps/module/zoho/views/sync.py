@@ -23,9 +23,81 @@ from ..serializers.settings import (
     ZohoTaxesSerializer,
     ZohoTdsTcsSerializer,
 )
-from .helpers import ZohoApiError, get_organization_from_request, get_zoho_credentials, make_zoho_api_request
+from .helpers import (
+    ZohoApiError, fetch_all_zoho_pages, get_organization_from_request,
+    get_zoho_credentials, make_zoho_api_request,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _upsert_master(model, organization, lookup, defaults):
+    """update_or_create that survives a duplicated master row.
+
+    None of these tables carries a unique constraint on its Zoho id, so
+    two syncs running at once — an impatient double-click is enough —
+    can each insert the same row. From then on ``update_or_create``
+    raises MultipleObjectsReturned and the sync is broken for good,
+    long after the double-click is forgotten.
+
+    Adding the constraint is the real fix, but it cannot be done from
+    here: every one of these masters is the target of ``CASCADE``
+    foreign keys from analysed bill data, so de-duplicating a live
+    database would take the bills with it. That needs a decision and a
+    migration of its own.
+
+    Until then: keep the oldest row, update it, and say in the log that
+    there are duplicates to clean up.
+
+    Returns True if a row was created.
+    """
+    rows = list(model.objects.filter(organization=organization, **lookup)[:2])
+    if len(rows) > 1:
+        logger.warning(
+            "%s has duplicate rows for %s in organisation %s — updating the "
+            "oldest. These need de-duplicating.",
+            model.__name__, lookup, organization.id,
+        )
+    if rows:
+        row = rows[0]
+        changed = [
+            field for field, value in defaults.items()
+            if getattr(row, field) != value
+        ]
+        if changed:
+            for field, value in defaults.items():
+                setattr(row, field, value)
+            row.save(update_fields=changed)
+        return False
+
+    model.objects.create(organization=organization, **lookup, **defaults)
+    return True
+
+
+def _sync_detail(what, created, updated, truncated=False):
+    """One line an operator can read without opening the logs.
+
+    A re-sync of an unchanged list used to report "synced 0",
+    which reads as a failure. Separating created from updated says
+    the list was read and nothing had changed.
+    """
+    if not created and not updated:
+        return (
+            f"Zoho returned no {what}. If you expect some, check they "
+            f"exist in this Zoho Books organisation."
+        )
+    parts = []
+    if created:
+        parts.append(f"{created} new")
+    if updated:
+        parts.append(f"{updated} updated")
+    detail = f"Successfully synced {what}: {', '.join(parts)}"
+    if truncated:
+        detail += (
+            ". Zoho has more than this sync can page through — "
+            "some are missing."
+        )
+    return detail
 def _sync_error_response(exc, what):
     """Turn a failed sync into something the operator can act on.
 
@@ -91,25 +163,47 @@ def vendors_sync_view(request, org_id):
 
     try:
         credentials = get_zoho_credentials(organization)
-        zoho_data = make_zoho_api_request(credentials, "contacts")
+        # Filter on Zoho's side. Pulling the whole contact book and
+        # discarding customers here means a workspace whose first 200
+        # contacts are all customers syncs no vendors at all.
+        contacts, truncated = fetch_all_zoho_pages(
+            credentials, "contacts?contact_type=vendor", "contacts",
+        )
 
-        synced_count = 0
-        for contact in zoho_data.get("contacts", []):
-            if contact.get("contact_type") == "vendor":
-                _, created = ZohoVendor.objects.update_or_create(
-                    organization=organization,
-                    contactId=contact["contact_id"],
-                    defaults={
-                        "companyName": contact.get("company_name", ""),
-                        "gstNo": contact.get("gst_no", ""),
-                        "gst_treatment": contact.get("gst_treatment", ""),
-                    },
-                )
-                if created:
-                    synced_count += 1
+        created_count = updated_count = 0
+        for contact in contacts:
+            if contact.get("contact_type") != "vendor":
+                continue
+            created = _upsert_master(
+                ZohoVendor, organization,
+                {"contactId": contact["contact_id"]},
+                {
+                    # A vendor trading under a personal name has no
+                    # company_name, and a blank here is a row nobody can
+                    # pick and no bill can match.
+                    "companyName": (
+                        contact.get("company_name")
+                        or contact.get("contact_name")
+                        or ""
+                    )[:100],
+                    "gstNo": (contact.get("gst_no") or "")[:30],
+                    "gst_treatment": contact.get("gst_treatment") or "",
+                },
+            )
+            if created:
+                created_count += 1
+            else:
+                updated_count += 1
 
-        return Response({"detail": f"Successfully synced {synced_count} vendors", "synced_count": synced_count})
+        return Response({
+            "detail": _sync_detail("vendors", created_count, updated_count, truncated),
+            "synced_count": created_count,
+            "updated_count": updated_count,
+            "total_vendors": created_count + updated_count,
+            "truncated": truncated,
+        })
     except Exception as e:
+        logger.error(f"Vendors sync failed: {str(e)}")
         return _sync_error_response(e, "vendors")
 
 
@@ -153,28 +247,42 @@ def customers_sync_view(request, org_id):
 
     try:
         credentials = get_zoho_credentials(organization)
-        zoho_data = make_zoho_api_request(credentials, "contacts?contact_type=customer")
+        contacts, truncated = fetch_all_zoho_pages(
+            credentials, "contacts?contact_type=customer", "contacts",
+        )
 
-        synced_count = 0
-        for contact in zoho_data.get("contacts", []):
+        created_count = updated_count = 0
+        for contact in contacts:
             if contact.get("contact_type") != "customer":
                 continue
-            _, created = ZohoCustomer.objects.update_or_create(
-                organization=organization,
-                contactId=contact["contact_id"],
-                defaults={
+            created = _upsert_master(
+                ZohoCustomer, organization,
+                {"contactId": contact["contact_id"]},
+                {
                     # Individual customers have no company_name; falling back
                     # to contact_name keeps the picker from showing blanks.
-                    "companyName": contact.get("company_name") or contact.get("contact_name", ""),
-                    "gstNo": contact.get("gst_no", ""),
-                    "gst_treatment": contact.get("gst_treatment", ""),
-                    "place_of_supply": contact.get("place_of_contact", ""),
+                    "companyName": (
+                        contact.get("company_name")
+                        or contact.get("contact_name")
+                        or ""
+                    )[:100],
+                    "gstNo": (contact.get("gst_no") or "")[:30],
+                    "gst_treatment": contact.get("gst_treatment") or "",
+                    "place_of_supply": (contact.get("place_of_contact") or "")[:10],
                 },
             )
             if created:
-                synced_count += 1
+                created_count += 1
+            else:
+                updated_count += 1
 
-        return Response({"detail": f"Successfully synced {synced_count} customers", "synced_count": synced_count})
+        return Response({
+            "detail": _sync_detail("customers", created_count, updated_count, truncated),
+            "synced_count": created_count,
+            "updated_count": updated_count,
+            "total_customers": created_count + updated_count,
+            "truncated": truncated,
+        })
     except Exception as e:
         logger.error(f"Customers sync failed: {str(e)}")
         return _sync_error_response(e, "customers")
@@ -223,15 +331,17 @@ def chart_of_accounts_sync_view(request, org_id):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        zoho_data = make_zoho_api_request(credentials, "chartofaccounts")
+        accounts, coa_truncated = fetch_all_zoho_pages(
+            credentials, "chartofaccounts", "chartofaccounts",
+        )
 
         synced_count = 0
         updated_count = 0
-        for account in zoho_data.get("chartofaccounts", []):
-            _, created = ZohoChartOfAccount.objects.update_or_create(
-                organization=organization,
-                accountId=account["account_id"],
-                defaults={"accountName": account.get("account_name", "")},
+        for account in accounts:
+            created = _upsert_master(
+                ZohoChartOfAccount, organization,
+                {"accountId": account["account_id"]},
+                {"accountName": (account.get("account_name") or "")[:100]},
             )
             if created:
                 synced_count += 1
@@ -240,10 +350,13 @@ def chart_of_accounts_sync_view(request, org_id):
 
         return Response(
             {
-                "detail": f"Successfully synced chart of accounts: {synced_count} new, {updated_count} updated",
+                "detail": _sync_detail(
+                    "chart of accounts", synced_count, updated_count, coa_truncated,
+                ),
                 "synced_count": synced_count,
                 "updated_count": updated_count,
-                "total_accounts": len(zoho_data.get("chartofaccounts", [])),
+                "total_accounts": len(accounts),
+                "truncated": coa_truncated,
             }
         )
 
@@ -397,45 +510,65 @@ def tds_tcs_sync_view(request, org_id):
 
     try:
         credentials = get_zoho_credentials(organization)
-        synced_count = 0
 
-        # TDS
-        tds_data = make_zoho_api_request(credentials, "settings/taxes?is_tds_request=true")
-        tds_taxes = tds_data.get("taxes", [])
-        existing_tds = set(
-            ZohoTdsTcs.objects.filter(taxId__in=[t["tax_id"] for t in tds_taxes], taxType="TDS", organization=organization).values_list("taxId", flat=True)
+        def _load(endpoint, tax_type):
+            """Insert new rows and refresh the ones already held.
+
+            Refreshing matters as much as inserting. A TDS section's
+            rate changes by notification — 194C has moved more than
+            once — and a row that only ever gets written on first sight
+            keeps the old rate for ever. Nothing reports that: the
+            deduction is simply computed at the wrong percentage and
+            the challan is short.
+            """
+            payload = make_zoho_api_request(credentials, endpoint)
+            rows = payload.get("taxes") or []
+
+            existing = {
+                r.taxId: r
+                for r in ZohoTdsTcs.objects.filter(
+                    taxId__in=[t["tax_id"] for t in rows if t.get("tax_id")],
+                    taxType=tax_type, organization=organization,
+                )
+            }
+
+            created, updated = [], []
+            for t in rows:
+                tax_id = t.get("tax_id")
+                if not tax_id:
+                    continue
+                name = str(t.get("tax_name") or "")[:100]
+                pct = str(t.get("tax_percentage", 0))[:100]
+                row = existing.get(tax_id)
+                if row is None:
+                    created.append(ZohoTdsTcs(
+                        taxId=tax_id, taxName=name, taxPercentage=pct,
+                        taxType=tax_type, organization=organization,
+                    ))
+                elif row.taxName != name or row.taxPercentage != pct:
+                    row.taxName, row.taxPercentage = name, pct
+                    updated.append(row)
+
+            if created:
+                ZohoTdsTcs.objects.bulk_create(created)
+            if updated:
+                ZohoTdsTcs.objects.bulk_update(updated, ["taxName", "taxPercentage"])
+            return len(created), len(updated)
+
+        tds_new, tds_updated = _load("settings/taxes?is_tds_request=true", "TDS")
+        tcs_new, tcs_updated = _load(
+            "settings/taxes?is_tcs_request=true&filter_by=Taxes.All", "TCS",
         )
-        new_tds = [
-            ZohoTdsTcs(taxId=t["tax_id"], taxName=t["tax_name"], taxPercentage=t.get("tax_percentage", 0), taxType="TDS", organization=organization)
-            for t in tds_taxes
-            if t["tax_id"] not in existing_tds
-        ]
-
-        # TCS
-        tcs_data = make_zoho_api_request(credentials, "settings/taxes?is_tcs_request=true&filter_by=Taxes.All")
-        tcs_taxes = tcs_data.get("taxes", [])
-        existing_tcs = set(
-            ZohoTdsTcs.objects.filter(taxId__in=[t["tax_id"] for t in tcs_taxes], taxType="TCS", organization=organization).values_list("taxId", flat=True)
-        )
-        new_tcs = [
-            ZohoTdsTcs(taxId=t["tax_id"], taxName=t["tax_name"], taxPercentage=t.get("tax_percentage", 0), taxType="TCS", organization=organization)
-            for t in tcs_taxes
-            if t["tax_id"] not in existing_tcs
-        ]
-
-        if new_tds:
-            ZohoTdsTcs.objects.bulk_create(new_tds)
-            synced_count += len(new_tds)
-        if new_tcs:
-            ZohoTdsTcs.objects.bulk_create(new_tcs)
-            synced_count += len(new_tcs)
 
         return Response(
             {
-                "detail": f"Successfully synced {synced_count} TDS/TCS taxes",
-                "synced_count": synced_count,
-                "tds_count": len(new_tds),
-                "tcs_count": len(new_tcs),
+                "detail": _sync_detail(
+                    "TDS/TCS", tds_new + tcs_new, tds_updated + tcs_updated,
+                ),
+                "synced_count": tds_new + tcs_new,
+                "updated_count": tds_updated + tcs_updated,
+                "tds_count": tds_new,
+                "tcs_count": tcs_new,
             }
         )
 

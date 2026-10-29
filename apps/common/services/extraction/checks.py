@@ -135,7 +135,20 @@ def _run(data, document_text=None, page_count=None):
     tax = sum(v for v in (igst, cgst, sgst) if v)
 
     if total is not None and items:
-        expected = line_sum + tax
+        # The adjustments are part of the bill's own arithmetic, and
+        # leaving them out made every discounted bill report a mismatch
+        # of exactly its discount. Each is signed, so they simply add.
+        adjustments = sum(
+            v for v in (
+                _num(data.get("cess")), _num(data.get("discount")),
+                _num(data.get("freight")), _num(data.get("round_off")),
+            ) if v
+        )
+        # MRP-priced lines already hold their GST; adding it again makes
+        # the bill look wrong by exactly its own tax.
+        expected = line_sum + adjustments
+        if not data.get("lines_include_gst"):
+            expected += tax
         if abs(expected - total) > TOLERANCE:
             out.append(_finding(
                 "total_mismatch",

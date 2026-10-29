@@ -57,9 +57,18 @@ def _q(value):
     return Decimal(str(value)).quantize(_PAISE, rounding=ROUND_HALF_UP)
 
 
-def _tax_for(amount, rate):
-    """Tax on *amount* at *rate* percent, to the paise."""
-    return _q(Decimal(str(amount)) * Decimal(str(rate)) / Decimal("100"))
+def _tax_for(amount, rate, inclusive=False):
+    """Tax on *amount* at *rate* percent, to the paise.
+
+    With *inclusive*, *amount* already contains the tax — an MRP-priced
+    retail or pharmacy line — so the tax is the part of it that the
+    rate accounts for, ``amount x r / (100 + r)``, not ``x r / 100``.
+    """
+    amount = Decimal(str(amount))
+    rate = Decimal(str(rate))
+    if inclusive:
+        return _q(amount * rate / (Decimal("100") + rate))
+    return _q(amount * rate / Decimal("100"))
 
 
 def _split(total, inter_state):
@@ -72,7 +81,7 @@ def _split(total, inter_state):
     return {"igst": _q(0), "cgst": half, "sgst": _q(total - half)}
 
 
-def _solve_rates(amounts, target, candidates):
+def _solve_rates(amounts, target, candidates, inclusive=False):
     """Rates from *candidates* whose tax on *amounts* sums to *target*.
 
     Returns a list of rates, or None when nothing matches. Depth-first
@@ -91,7 +100,7 @@ def _solve_rates(amounts, target, candidates):
     top = max(candidates)
     suffix_max = [Decimal("0")] * (n + 1)
     for i in range(n - 1, -1, -1):
-        suffix_max[i] = suffix_max[i + 1] + _tax_for(amounts[i], top)
+        suffix_max[i] = suffix_max[i + 1] + _tax_for(amounts[i], top, inclusive)
 
     best = []
     states = [0]
@@ -110,14 +119,15 @@ def _solve_rates(amounts, target, candidates):
                 return True
             return False
         for rate in candidates:
-            if walk(i + 1, running + _tax_for(amounts[i], rate), chosen + [rate]):
+            if walk(i + 1, running + _tax_for(amounts[i], rate, inclusive), chosen + [rate]):
                 return True
         return False
 
     return best if walk(0, Decimal("0"), []) else None
 
 
-def assign_line_gst(lines, igst_total, cgst_total, sgst_total, taxable_base=None):
+def assign_line_gst(lines, igst_total, cgst_total, sgst_total, taxable_base=None,
+                    lines_include_gst=False):
     """Decide each line's GST rate, then its tax.
 
     *lines* is a list of ``{"amount": <number>, "rate": <number|None>}``.
@@ -140,6 +150,12 @@ def assign_line_gst(lines, igst_total, cgst_total, sgst_total, taxable_base=None
     Returns ``(results, strategy)`` where *results* mirrors *lines* as
     ``{"rate", "taxable_value", "igst", "cgst", "sgst"}`` and *strategy*
     names which branch decided it, for the log.
+
+    *lines_include_gst* says the line amounts are tax-inclusive — the
+    MRP case on a retail or pharmacy bill, where "397.05" already
+    holds its 5%. The rate is then applied the other way round and
+    ``taxable_value`` comes back lower than the amount. Without it such
+    a bill has tax added on top of tax it already carried.
     """
     igst_total = _q(igst_total or 0)
     cgst_total = _q(cgst_total or 0)
@@ -166,10 +182,13 @@ def assign_line_gst(lines, igst_total, cgst_total, sgst_total, taxable_base=None
     def build(rates, strategy):
         out = []
         for taxable, rate in zip(taxables, rates):
-            total = _tax_for(taxable, rate)
+            total = _tax_for(taxable, rate, lines_include_gst)
+            # On an inclusive line the taxable value is what is left
+            # once its own tax is taken out of the amount.
+            value = _q(taxable) - total if lines_include_gst else _q(taxable)
             out.append({
                 "rate": float(rate),
-                "taxable_value": _q(taxable),
+                "taxable_value": value,
                 **_split(total, inter_state),
             })
         return out, strategy
@@ -192,9 +211,15 @@ def assign_line_gst(lines, igst_total, cgst_total, sgst_total, taxable_base=None
 
     # 2. Single-rate bill: the blended rate is itself a slab. This is the
     #    common case and it is exact, so it is tried before any search.
-    blended = float(tax_total) / taxable_total * 100
+    # Inclusive amounts hold the tax, so the rate they imply is
+    # tax / (amount - tax), not tax / amount.
+    if lines_include_gst:
+        _net = taxable_total - float(tax_total)
+        blended = float(tax_total) / _net * 100 if _net > 0 else 0.0
+    else:
+        blended = float(tax_total) / taxable_total * 100
     nearest = min(STANDARD_GST_RATES, key=lambda s: abs(s - blended))
-    if abs(sum((_tax_for(t, nearest) for t in taxables), Decimal("0")) - tax_total) <= MATCH_TOLERANCE:
+    if abs(sum((_tax_for(t, nearest, lines_include_gst) for t in taxables), Decimal("0")) - tax_total) <= MATCH_TOLERANCE:
         return build([float(nearest)] * len(lines), "single-rate")
 
     # 3. Mixed rates. Hold the lines whose rate the OCR did read, and
@@ -205,12 +230,13 @@ def assign_line_gst(lines, igst_total, cgst_total, sgst_total, taxable_base=None
         if rate is None:
             unknown_idx.append(i)
         else:
-            fixed_tax += _tax_for(taxables[i], float(rate))
+            fixed_tax += _tax_for(taxables[i], float(rate), lines_include_gst)
 
     solved = _solve_rates(
         [taxables[i] for i in unknown_idx],
         tax_total - fixed_tax,
         [Decimal(str(s)) for s in STANDARD_GST_RATES],
+        lines_include_gst,
     )
     if solved is not None:
         rates = [float(r) if r is not None else 0.0 for r in known]
@@ -231,11 +257,19 @@ def assign_line_gst(lines, igst_total, cgst_total, sgst_total, taxable_base=None
     )
     rates = []
     for taxable in taxables:
+        if taxable <= 0:
+            rates.append(0.0)
+            continue
         share = Decimal(str(taxable)) / Decimal(str(taxable_total))
         line_tax = tax_total * share
-        rates.append(
-            float(line_tax / Decimal(str(taxable)) * 100) if taxable > 0 else 0.0
+        # ``build`` applies the rate the same way round as the bill, so
+        # the rate handed back has to be derived that way too, or an
+        # inclusive line would come out holding more tax than its share.
+        divisor = (
+            Decimal(str(taxable)) - line_tax if lines_include_gst
+            else Decimal(str(taxable))
         )
+        rates.append(float(line_tax / divisor * 100) if divisor > 0 else 0.0)
     return build(rates, "proportional-fallback")
 
 

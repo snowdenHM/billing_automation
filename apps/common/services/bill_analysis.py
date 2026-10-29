@@ -1034,6 +1034,11 @@ def check_ocr_totals_sanity(relevant_data):
             + _f(relevant_data.get('freight'))
             + _f(relevant_data.get('round_off'))
         )
+        # On an MRP-priced bill the line amounts already hold their
+        # GST, so adding the tax again double-counts it and every such
+        # bill reads as a mismatch of exactly its own tax.
+        if relevant_data.get('lines_include_gst'):
+            tax_sum = 0.0
         computed = line_sum + tax_sum + adjustments
         printed = _f(relevant_data.get('total'))
 
@@ -1143,6 +1148,7 @@ def get_vendor_bill_prompt():
         "is_reverse_charge": false,
         "discount_before_tax": false,
         "freight_taxable": false,
+        "lines_include_gst": false,
         "place_of_supply": "State name and/or code as printed, or empty string",
         "irn": "e-invoice IRN if printed, else empty string",
         "ack_no": "e-invoice acknowledgement number if printed, else empty string",
@@ -1202,6 +1208,18 @@ def get_vendor_bill_prompt():
       - true  — freight/packing/forwarding appears ABOVE the tax lines,
                 or is inside the HSN summary's taxable value.
       - false — added after tax, near the grand total.
+
+    🏷️ "lines_include_gst":
+      - true  — the printed line amounts ALREADY contain their GST.
+                Tell-tales: an MRP column, a pharmacy / retail / FMCG
+                bill, "Rate (incl. GST)", "Price incl. tax", or the
+                line amounts summing to the grand total with the tax
+                shown only as a memo ("CGST+SGST = 18.92") rather than
+                added to it.
+      - false — GST is added on top of the line amounts, i.e. the
+                lines plus the tax equal the total. This is the
+                default; only set true when the arithmetic or a
+                printed label says so.
 
     🧾 E-INVOICE: if "IRN" and "Ack No." are printed (usually top-left
     beside a QR code), extract them exactly. The IRN is a 64-character
@@ -1286,6 +1304,7 @@ def get_sales_bill_prompt():
         "is_reverse_charge": false,
         "discount_before_tax": false,
         "freight_taxable": false,
+        "lines_include_gst": false,
         "place_of_supply": "State name and/or code as printed, or empty string",
         "irn": "e-invoice IRN if printed, else empty string",
         "ack_no": "e-invoice acknowledgement number if printed, else empty string",
@@ -1355,6 +1374,18 @@ def get_sales_bill_prompt():
       - true  — freight/packing/forwarding appears ABOVE the tax lines,
                 or is inside the HSN summary's taxable value.
       - false — added after tax, near the grand total.
+
+    🏷️ "lines_include_gst":
+      - true  — the printed line amounts ALREADY contain their GST.
+                Tell-tales: an MRP column, a pharmacy / retail / FMCG
+                bill, "Rate (incl. GST)", "Price incl. tax", or the
+                line amounts summing to the grand total with the tax
+                shown only as a memo ("CGST+SGST = 18.92") rather than
+                added to it.
+      - false — GST is added on top of the line amounts, i.e. the
+                lines plus the tax equal the total. This is the
+                default; only set true when the arithmetic or a
+                printed label says so.
 
     🧾 E-INVOICE: if "IRN" and "Ack No." are printed (usually top-left
     beside a QR code), extract them exactly. The IRN is a 64-character

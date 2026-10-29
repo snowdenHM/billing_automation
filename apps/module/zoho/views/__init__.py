@@ -44,8 +44,13 @@ from .vendor_bills import (
     vendor_bill_verify_view,
     vendor_bill_sync_view,
     vendor_bill_delete_view,
-    move_bill_between_modules_view,
 )
+
+# Moving a bill between voucher types
+from .bill_move import move_bill_between_modules_view
+
+# Creating a vendor or customer in Zoho Books
+from .contacts import zoho_contact_create_view
 
 # Expense bills
 from .expense_bills import (
@@ -134,6 +139,7 @@ __all__ = [
     "vendor_bill_sync_view",
     "vendor_bill_delete_view",
     "move_bill_between_modules_view",
+    "zoho_contact_create_view",
     # Expense bills
     "expense_bills_list_view",
     "expense_bill_upload_view",

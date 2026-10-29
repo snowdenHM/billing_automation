@@ -48,8 +48,17 @@ class ZohoCredentialsSerializer(serializers.ModelSerializer):
 
     organization = OrgField(required=True)
 
+    # The OAuth app identity belongs to the deployment, not to a
+    # workspace. ``get_zoho_credentials`` rewrites all three from the
+    # environment on every call, so a value saved here survived until
+    # the next request and then silently reverted — a settings field
+    # that takes input and discards it is worse than one that is
+    # plainly disabled. The redirect URL in particular *must* match the
+    # one registered on the Zoho app, so it cannot be per-workspace.
+    clientId = serializers.CharField(read_only=True)
+    redirectUrl = serializers.CharField(read_only=True)
+
     # Write-only: an admin can paste new values, nobody can read them back.
-    clientSecret = serializers.CharField(write_only=True, required=False, allow_blank=True)
     accessCode = serializers.CharField(write_only=True, required=False, allow_blank=True)
     accessToken = serializers.CharField(write_only=True, required=False, allow_blank=True)
     refreshToken = serializers.CharField(write_only=True, required=False, allow_blank=True)
@@ -75,8 +84,9 @@ class ZohoCredentialsSerializer(serializers.ModelSerializer):
             # and connecting an account on the wrong one fails in a way
             # that looks like a missing organisation.
             "region",
-            # Write-only
-            "clientSecret",
+            # Write-only. The client secret is absent on purpose: it
+            # comes from the environment, so accepting one here would
+            # only discard it. Its mask and presence flag remain below.
             "accessCode",
             "accessToken",
             "refreshToken",
@@ -94,6 +104,7 @@ class ZohoCredentialsSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id", "created_at", "update_at", "token_expiry", "is_connected",
+            "clientId", "redirectUrl",
         ]
 
     def get_clientSecret_masked(self, obj):

@@ -59,6 +59,10 @@ class TallySalesAnalyzedProductSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'item_name', 'item_details', 'taxes', 'taxes_name',
             'price', 'quantity', 'amount', 'product_gst',
+            # Read off the invoice line and stored, but never returned,
+            # so the voucher's HSN could only ever come from the stock
+            # item master — blank whenever the item was not mapped.
+            'hsn', 'unit',
             'igst', 'cgst', 'sgst',
             'cgst_ledger', 'cgst_ledger_name',
             'sgst_ledger', 'sgst_ledger_name',
@@ -160,6 +164,14 @@ class TallySalesAnalyzedBillSerializer(serializers.ModelSerializer):
             # freight is taxed. Both change the taxable value, so the
             # verify screen has to show and be able to correct them.
             'discount_before_tax', 'freight_taxable',
+            # MRP-priced lines already hold their GST; without this the
+            # verify screen taxes an amount that was taxed once already.
+            'lines_include_gst',
+            'is_reverse_charge',
+            # Extracted and stored since e-invoicing went in, and never
+            # returned — so the operator could not see, let alone
+            # correct, the field that decides IGST vs CGST+SGST.
+            'place_of_supply', 'irn', 'ack_no',
             # round_off was missing → saved values dropped on reload; UI
             # showed blank amount + blank ledger even after successful save.
             # NOTE: TallySalesAnalyzedBill does NOT have

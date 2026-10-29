@@ -22,6 +22,7 @@ from .views import (
     vendor_bill_sync_view,
     vendor_bill_delete_view,
     move_bill_between_modules_view,
+    zoho_contact_create_view,
     # Credentials / OAuth
     zoho_credentials_view,
     zoho_connection_test_view,
@@ -122,6 +123,9 @@ urlpatterns = [
         path('taxes/sync/', taxes_sync_view, name='taxes_sync'),
         path('tds-tcs/', tds_tcs_list_view, name='tds_tcs_list'),
         path('tds-tcs/sync/', tds_tcs_sync_view, name='tds_tcs_sync'),
+
+        # Creating a master in Zoho, rather than reading one back.
+        path('contacts/create/', zoho_contact_create_view, name='zoho_contact_create'),
 
         # ============================================================================
         # Bill Moving Between Modules API Endpoints

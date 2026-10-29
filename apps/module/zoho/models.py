@@ -35,6 +35,18 @@ UNIQUE_ZOHO_SALES_BILL_NAME = "uniq_zoho_salesbill_org_name"
 UNIQUE_ZOHO_RECEIPT_BILL_NAME = "uniq_zoho_receiptbill_org_name"
 UNIQUE_ZOHO_PAYMENT_BILL_NAME = "uniq_zoho_paymentbill_org_name"
 
+# One row per Zoho object per workspace. Without these the masters had
+# no key at all: two syncs running at once — an impatient double-click
+# is enough — each inserted the same vendor, and from then on every
+# ``update_or_create`` against it raised MultipleObjectsReturned and the
+# sync stayed broken long after the double-click was forgotten.
+UNIQUE_ZOHO_VENDOR_CONTACT = "uniq_zoho_vendor_org_contact"
+UNIQUE_ZOHO_CUSTOMER_CONTACT = "uniq_zoho_customer_org_contact"
+UNIQUE_ZOHO_COA_ACCOUNT = "uniq_zoho_coa_org_account"
+UNIQUE_ZOHO_TAX = "uniq_zoho_tax_org_tax"
+UNIQUE_ZOHO_TDSTCS = "uniq_zoho_tdstcs_org_tax_type"
+UNIQUE_ZOHO_CREDENTIALS_ORG = "uniq_zoho_credentials_org"
+
 
 # -----------------------------
 # Helpers / Base
@@ -143,6 +155,12 @@ class ZohoCredentials(BaseTeamModel):
     class Meta:
         verbose_name = "Zoho Credential"
         verbose_name_plural = "Zoho Credentials"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization"],
+                name=UNIQUE_ZOHO_CREDENTIALS_ORG,
+            ),
+        ]
 
     def __str__(self):
         return f"{self.organization.name} · ZohoCredentials"
@@ -252,6 +270,12 @@ class ZohoVendor(BaseTeamModel):
     class Meta:
         verbose_name = "Zoho Vendor"
         verbose_name_plural = "Zoho Vendors"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "contactId"],
+                name=UNIQUE_ZOHO_VENDOR_CONTACT,
+            ),
+        ]
 
     def __str__(self):
         return self.companyName
@@ -274,6 +298,12 @@ class ZohoChartOfAccount(BaseTeamModel):
     class Meta:
         verbose_name = "Zoho Chart of Account"
         verbose_name_plural = "Zoho Chart of Accounts"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "accountId"],
+                name=UNIQUE_ZOHO_COA_ACCOUNT,
+            ),
+        ]
 
     def __str__(self):
         return self.accountName
@@ -303,6 +333,12 @@ class ZohoTaxes(BaseTeamModel):
     class Meta:
         verbose_name = "Zoho Tax"
         verbose_name_plural = "Zoho Taxes"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "taxId"],
+                name=UNIQUE_ZOHO_TAX,
+            ),
+        ]
 
     def __str__(self):
         return self.taxName
@@ -331,6 +367,12 @@ class ZohoTdsTcs(BaseTeamModel):
     class Meta:
         verbose_name = "Zoho TDS/TCS Tax"
         verbose_name_plural = "Zoho TDS and TCS Taxes"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "taxId", "taxType"],
+                name=UNIQUE_ZOHO_TDSTCS,
+            ),
+        ]
 
     def __str__(self):
         pct = self.taxPercentage if self.taxPercentage not in (None, "") else "0"
@@ -427,6 +469,24 @@ class VendorBill(BaseTeamModel, TrashableMixin):
     class Meta:
         verbose_name = "Vendor Bill"
         verbose_name_plural = "Vendor Bills"
+        # Every bill list is the same query: this workspace's
+        # un-trashed bills, optionally one status group, newest
+        # first, one page at a time. Only `organization_id` was
+        # indexed, so Postgres read and sorted the whole
+        # workspace on each page load. Partial on is_deleted
+        # because trashed rows are never in these lists.
+        indexes = [
+            models.Index(
+                fields=["organization", "-created_at"],
+                name="zb_vnd_org_created",
+                condition=Q(is_deleted=False),
+            ),
+            models.Index(
+                fields=["organization", "status", "-created_at"],
+                name="zb_vnd_org_status_crt",
+                condition=Q(is_deleted=False),
+            ),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "billmunshiName"],
@@ -474,7 +534,7 @@ class VendorZohoBill(BaseTeamModel):
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     selectBill = models.ForeignKey("VendorBill", on_delete=models.CASCADE, null=True, blank=True)
-    vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
+    vendor = models.ForeignKey("ZohoVendor", on_delete=models.SET_NULL, null=True, blank=True)
     bill_no = models.CharField(max_length=50, null=True, blank=True)
     bill_date = models.DateField(null=True, blank=True)
     due_date = models.DateField(null=True, blank=True)
@@ -482,13 +542,13 @@ class VendorZohoBill(BaseTeamModel):
     discount_type = models.CharField(choices=DISCOUNT_TYPE_CHOICES, max_length=20, null=True, blank=True, default="Percentage")
     discount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, default=Decimal("0"), help_text="User-entered discount value (percentage or flat amount)")
     discount_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, default=Decimal("0"), help_text="Calculated discount amount in INR (auto-calculated)")
-    discount_account = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True, related_name="discount_bills")
+    discount_account = models.ForeignKey("ZohoChartOfAccount", on_delete=models.SET_NULL, null=True, blank=True, related_name="discount_bills")
     adjustment_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, default=Decimal("0"))
     adjustment_description = models.CharField(max_length=255, null=True, blank=True, default="Adjustment")
     igst = models.CharField(max_length=50, null=True, blank=True, default=0)
     cgst = models.CharField(max_length=50, null=True, blank=True, default=0)
     sgst = models.CharField(max_length=50, null=True, blank=True, default=0)
-    tds_tcs_id = models.ForeignKey("ZohoTdsTcs", on_delete=models.CASCADE, null=True, blank=True)
+    tds_tcs_id = models.ForeignKey("ZohoTdsTcs", on_delete=models.SET_NULL, null=True, blank=True)
     is_tax = models.CharField(choices=TAX_TYPE_CHOICES, max_length=100, null=True, blank=True, default="NOT_APPLICABLE")
     note = models.CharField(max_length=100, null=True, blank=True, default="Enter Your Description")
 
@@ -523,8 +583,8 @@ class VendorZohoProduct(BaseTeamModel):
     zohoBill = models.ForeignKey("VendorZohoBill", on_delete=models.CASCADE, related_name="products")
     item_name = models.CharField(max_length=1000, null=True, blank=True)
     item_details = models.CharField(max_length=2000, null=True, blank=True)
-    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
-    taxes = models.ForeignKey("ZohoTaxes", on_delete=models.CASCADE, null=True, blank=True)
+    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.SET_NULL, null=True, blank=True)
+    taxes = models.ForeignKey("ZohoTaxes", on_delete=models.SET_NULL, null=True, blank=True)
     reverse_charge_tax_id = models.BooleanField(default=False)
     itc_eligibility = models.CharField(
         choices=ITC_ELIGIBILITY_CHOICES,
@@ -596,14 +656,14 @@ class VendorZohoConsolidatedProduct(BaseTeamModel):
     # Tax handling for consolidated item
     chart_of_accounts = models.ForeignKey(
         "ZohoChartOfAccount",
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         help_text="Primary chart of accounts for consolidated item"
     )
     taxes = models.ForeignKey(
         "ZohoTaxes",
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         help_text="Tax applied to consolidated item (highest tax rate or most common)"
@@ -703,6 +763,24 @@ class JournalBill(BaseTeamModel, TrashableMixin):
     class Meta:
         verbose_name = "Journal Bill"
         verbose_name_plural = "Journal Bills"
+        # Every bill list is the same query: this workspace's
+        # un-trashed bills, optionally one status group, newest
+        # first, one page at a time. Only `organization_id` was
+        # indexed, so Postgres read and sorted the whole
+        # workspace on each page load. Partial on is_deleted
+        # because trashed rows are never in these lists.
+        indexes = [
+            models.Index(
+                fields=["organization", "-created_at"],
+                name="zb_jnl_org_created",
+                condition=Q(is_deleted=False),
+            ),
+            models.Index(
+                fields=["organization", "status", "-created_at"],
+                name="zb_jnl_org_status_crt",
+                condition=Q(is_deleted=False),
+            ),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "billmunshiName"],
@@ -739,12 +817,12 @@ class JournalZohoBill(BaseTeamModel):
     )
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     selectBill = models.ForeignKey("JournalBill", on_delete=models.CASCADE, null=True, blank=True)
-    vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
+    vendor = models.ForeignKey("ZohoVendor", on_delete=models.SET_NULL, null=True, blank=True)
     bill_no = models.CharField(max_length=50, null=True, blank=True)
     bill_date = models.DateField(null=True, blank=True)
     due_date = models.DateField(null=True, blank=True)
     vendor_coa = models.ForeignKey(
-        ZohoChartOfAccount, on_delete=models.CASCADE, blank=True, null=True,
+        ZohoChartOfAccount, on_delete=models.SET_NULL, blank=True, null=True,
         related_name="vendor_tally_expense_analysed_bills"
     )
     vendor_debit_or_credit = models.CharField(
@@ -754,14 +832,14 @@ class JournalZohoBill(BaseTeamModel):
     total = models.CharField(max_length=50, null=True, blank=True, default=0)
     igst = models.CharField(max_length=50, null=True, blank=True, default=0)
     igst_coa = models.ForeignKey(
-        ZohoChartOfAccount, on_delete=models.CASCADE, blank=True, null=True, related_name="igst_tally_expense_analysed_bills"
+        ZohoChartOfAccount, on_delete=models.SET_NULL, blank=True, null=True, related_name="igst_tally_expense_analysed_bills"
     )
     igst_debit_or_credit = models.CharField(
         choices=TRANSACTION_TYPE_CHOICES, max_length=10, blank=True, null=True, default="debit"
     )
     cgst = models.CharField(max_length=50, null=True, blank=True, default=0)
     cgst_coa = models.ForeignKey(
-        ZohoChartOfAccount, on_delete=models.CASCADE, blank=True, null=True,
+        ZohoChartOfAccount, on_delete=models.SET_NULL, blank=True, null=True,
         related_name="cgst_tally_expense_analysed_bills"
     )
     cgst_debit_or_credit = models.CharField(
@@ -769,7 +847,7 @@ class JournalZohoBill(BaseTeamModel):
     )
     sgst = models.CharField(max_length=50, null=True, blank=True, default=0)
     sgst_coa = models.ForeignKey(
-        ZohoChartOfAccount, on_delete=models.CASCADE, blank=True, null=True,
+        ZohoChartOfAccount, on_delete=models.SET_NULL, blank=True, null=True,
         related_name="sgst_tally_expense_analysed_bills"
     )
     sgst_debit_or_credit = models.CharField(
@@ -811,7 +889,7 @@ class JournalZohoProduct(BaseTeamModel):
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     zohoBill = models.ForeignKey("JournalZohoBill", on_delete=models.CASCADE, related_name="products")
     item_details = models.CharField(max_length=2000, null=True, blank=True)
-    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
+    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.SET_NULL, null=True, blank=True)
     amount = models.CharField(max_length=50, null=True, blank=True)
     debit_or_credit = models.CharField(choices=TRANSACTION_TYPE_CHOICES, max_length=10, null=True, blank=True,
                                        default="debit")
@@ -863,7 +941,7 @@ class JournalZohoConsolidatedProduct(BaseTeamModel):
     # Account handling for consolidated entry
     chart_of_accounts = models.ForeignKey(
         "ZohoChartOfAccount",
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         help_text="Primary chart of accounts for consolidated entry"
@@ -961,6 +1039,24 @@ class ExpenseBill(BaseTeamModel, TrashableMixin):
     class Meta:
         verbose_name = "Expense Bill"
         verbose_name_plural = "Expense Bills"
+        # Every bill list is the same query: this workspace's
+        # un-trashed bills, optionally one status group, newest
+        # first, one page at a time. Only `organization_id` was
+        # indexed, so Postgres read and sorted the whole
+        # workspace on each page load. Partial on is_deleted
+        # because trashed rows are never in these lists.
+        indexes = [
+            models.Index(
+                fields=["organization", "-created_at"],
+                name="zb_exp_org_created",
+                condition=Q(is_deleted=False),
+            ),
+            models.Index(
+                fields=["organization", "status", "-created_at"],
+                name="zb_exp_org_status_crt",
+                condition=Q(is_deleted=False),
+            ),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "billmunshiName"],
@@ -993,8 +1089,8 @@ class ExpenseZohoBill(BaseTeamModel):
     """
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     selectBill = models.ForeignKey("ExpenseBill", on_delete=models.CASCADE, null=True, blank=True)
-    vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
-    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
+    vendor = models.ForeignKey("ZohoVendor", on_delete=models.SET_NULL, null=True, blank=True)
+    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.SET_NULL, null=True, blank=True)
     bill_no = models.CharField(max_length=50, null=True, blank=True)
     bill_date = models.DateField(null=True, blank=True)
     due_date = models.DateField(null=True, blank=True)
@@ -1034,8 +1130,8 @@ class ExpenseZohoProduct(BaseTeamModel):
     zohoBill = models.ForeignKey("ExpenseZohoBill", on_delete=models.CASCADE, related_name="products")
     item_details = models.CharField(max_length=2000, null=True, blank=True)
     amount = models.CharField(max_length=50, null=True, blank=True)
-    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
-    taxes = models.ForeignKey("ZohoTaxes", on_delete=models.CASCADE, null=True, blank=True)
+    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.SET_NULL, null=True, blank=True)
+    taxes = models.ForeignKey("ZohoTaxes", on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -1079,14 +1175,14 @@ class ExpenseZohoConsolidatedProduct(BaseTeamModel):
     # Account and tax handling for consolidated entry
     chart_of_accounts = models.ForeignKey(
         "ZohoChartOfAccount",
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         help_text="Primary chart of accounts for consolidated entry"
     )
     taxes = models.ForeignKey(
         "ZohoTaxes",
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         help_text="Tax applied to consolidated entry (highest tax rate or most common)"
@@ -1142,6 +1238,12 @@ class ZohoCustomer(BaseTeamModel):
     class Meta:
         verbose_name = "Zoho Customer"
         verbose_name_plural = "Zoho Customers"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "contactId"],
+                name=UNIQUE_ZOHO_CUSTOMER_CONTACT,
+            ),
+        ]
 
     def __str__(self):
         return self.companyName
@@ -1215,6 +1317,24 @@ class SalesBill(BaseTeamModel, TrashableMixin):
     class Meta:
         verbose_name = "Sales Invoice"
         verbose_name_plural = "Sales Invoices"
+        # Every bill list is the same query: this workspace's
+        # un-trashed bills, optionally one status group, newest
+        # first, one page at a time. Only `organization_id` was
+        # indexed, so Postgres read and sorted the whole
+        # workspace on each page load. Partial on is_deleted
+        # because trashed rows are never in these lists.
+        indexes = [
+            models.Index(
+                fields=["organization", "-created_at"],
+                name="zb_sls_org_created",
+                condition=Q(is_deleted=False),
+            ),
+            models.Index(
+                fields=["organization", "status", "-created_at"],
+                name="zb_sls_org_status_crt",
+                condition=Q(is_deleted=False),
+            ),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "billmunshiName"],
@@ -1257,7 +1377,7 @@ class SalesZohoBill(BaseTeamModel):
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True, editable=False)
     selectBill = models.ForeignKey("SalesBill", on_delete=models.CASCADE, null=True, blank=True)
-    customer = models.ForeignKey("ZohoCustomer", on_delete=models.CASCADE, null=True, blank=True)
+    customer = models.ForeignKey("ZohoCustomer", on_delete=models.SET_NULL, null=True, blank=True)
     bill_no = models.CharField(max_length=50, null=True, blank=True, help_text="Posted to Zoho as invoice_number")
     bill_date = models.DateField(null=True, blank=True)
     due_date = models.DateField(null=True, blank=True)
@@ -1265,7 +1385,7 @@ class SalesZohoBill(BaseTeamModel):
     discount_type = models.CharField(choices=DISCOUNT_TYPE_CHOICES, max_length=20, null=True, blank=True, default="Percentage")
     discount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, default=Decimal("0"), help_text="User-entered discount value (percentage or flat amount)")
     discount_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, default=Decimal("0"), help_text="Calculated discount amount in INR (auto-calculated)")
-    discount_account = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True, related_name="discount_sales_invoices")
+    discount_account = models.ForeignKey("ZohoChartOfAccount", on_delete=models.SET_NULL, null=True, blank=True, related_name="discount_sales_invoices")
     adjustment_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, default=Decimal("0"))
     adjustment_description = models.CharField(max_length=255, null=True, blank=True, default="Adjustment")
     # Output tax on this side of the ledger. Which ledger is the right one
@@ -1301,8 +1421,8 @@ class SalesZohoProduct(BaseTeamModel):
     zohoBill = models.ForeignKey("SalesZohoBill", on_delete=models.CASCADE, related_name="products")
     item_name = models.CharField(max_length=1000, null=True, blank=True)
     item_details = models.CharField(max_length=2000, null=True, blank=True)
-    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
-    taxes = models.ForeignKey("ZohoTaxes", on_delete=models.CASCADE, null=True, blank=True)
+    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.SET_NULL, null=True, blank=True)
+    taxes = models.ForeignKey("ZohoTaxes", on_delete=models.SET_NULL, null=True, blank=True)
     rate = models.CharField(max_length=50, null=True, blank=True)
     quantity = models.CharField(max_length=50, null=True, blank=True, default=0)
     amount = models.CharField(max_length=50, null=True, blank=True)
@@ -1332,8 +1452,8 @@ class SalesZohoConsolidatedProduct(BaseTeamModel):
     total_quantity = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, default=Decimal("1"))
     consolidated_rate = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     consolidated_amount = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
-    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True)
-    taxes = models.ForeignKey("ZohoTaxes", on_delete=models.CASCADE, null=True, blank=True)
+    chart_of_accounts = models.ForeignKey("ZohoChartOfAccount", on_delete=models.SET_NULL, null=True, blank=True)
+    taxes = models.ForeignKey("ZohoTaxes", on_delete=models.SET_NULL, null=True, blank=True)
     original_entries_count = models.IntegerField(default=0)
     consolidation_notes = models.TextField(null=True, blank=True)
 
@@ -1436,6 +1556,24 @@ class ReceiptBill(_BaseZohoPaymentUpload, TrashableMixin):
     class Meta:
         verbose_name = "Receipt Voucher"
         verbose_name_plural = "Receipt Vouchers"
+        # Every bill list is the same query: this workspace's
+        # un-trashed bills, optionally one status group, newest
+        # first, one page at a time. Only `organization_id` was
+        # indexed, so Postgres read and sorted the whole
+        # workspace on each page load. Partial on is_deleted
+        # because trashed rows are never in these lists.
+        indexes = [
+            models.Index(
+                fields=["organization", "-created_at"],
+                name="zb_rcp_org_created",
+                condition=Q(is_deleted=False),
+            ),
+            models.Index(
+                fields=["organization", "status", "-created_at"],
+                name="zb_rcp_org_status_crt",
+                condition=Q(is_deleted=False),
+            ),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "billmunshiName"],
@@ -1469,6 +1607,24 @@ class PaymentBill(_BaseZohoPaymentUpload, TrashableMixin):
     class Meta:
         verbose_name = "Payment Voucher"
         verbose_name_plural = "Payment Vouchers"
+        # Every bill list is the same query: this workspace's
+        # un-trashed bills, optionally one status group, newest
+        # first, one page at a time. Only `organization_id` was
+        # indexed, so Postgres read and sorted the whole
+        # workspace on each page load. Partial on is_deleted
+        # because trashed rows are never in these lists.
+        indexes = [
+            models.Index(
+                fields=["organization", "-created_at"],
+                name="zb_pay_org_created",
+                condition=Q(is_deleted=False),
+            ),
+            models.Index(
+                fields=["organization", "status", "-created_at"],
+                name="zb_pay_org_status_crt",
+                condition=Q(is_deleted=False),
+            ),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "billmunshiName"],
@@ -1522,11 +1678,11 @@ class ReceiptZohoBill(_BaseZohoAnalysedPayment):
     """An analysed receipt, ready to POST to Zoho Books ``customerpayments``."""
 
     selectBill = models.ForeignKey("ReceiptBill", on_delete=models.CASCADE, null=True, blank=True)
-    customer = models.ForeignKey("ZohoCustomer", on_delete=models.CASCADE, null=True, blank=True)
+    customer = models.ForeignKey("ZohoCustomer", on_delete=models.SET_NULL, null=True, blank=True)
     # Zoho calls this ``account_id`` on a customer payment: the bank or cash
     # account the money was deposited into.
     deposit_to_account = models.ForeignKey(
-        "ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True,
+        "ZohoChartOfAccount", on_delete=models.SET_NULL, null=True, blank=True,
         related_name="receipt_deposits",
     )
     # [{"invoice_id": "...", "amount_applied": 0.0}, ...]. Optional: Zoho
@@ -1545,10 +1701,10 @@ class PaymentZohoBill(_BaseZohoAnalysedPayment):
     """An analysed payment, ready to POST to Zoho Books ``vendorpayments``."""
 
     selectBill = models.ForeignKey("PaymentBill", on_delete=models.CASCADE, null=True, blank=True)
-    vendor = models.ForeignKey("ZohoVendor", on_delete=models.CASCADE, null=True, blank=True)
+    vendor = models.ForeignKey("ZohoVendor", on_delete=models.SET_NULL, null=True, blank=True)
     # Zoho calls this ``paid_through_account_id`` on a vendor payment.
     paid_through_account = models.ForeignKey(
-        "ZohoChartOfAccount", on_delete=models.CASCADE, null=True, blank=True,
+        "ZohoChartOfAccount", on_delete=models.SET_NULL, null=True, blank=True,
         related_name="payment_withdrawals",
     )
     # [{"bill_id": "...", "amount_applied": 0.0}, ...]
