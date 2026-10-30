@@ -1964,6 +1964,14 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                     if getattr(product, _field, '') != _value:
                         setattr(product, _field, _value)
                         needs_update = True
+            if 'discount' in item:
+                # Stored as a magnitude: the sign an operator types is
+                # not a decision, and treating it as one would make the
+                # same keystroke add on one bill and subtract on the next.
+                _disc = abs(_to_decimal(item.get('discount'), "0"))
+                if (product.discount or Decimal('0')) != _disc:
+                    product.discount = _disc
+                    needs_update = True
 
             # Calculate GST values based on gst_type from analyzed_bill
             # This ensures GST is correctly distributed according to bill's GST type
@@ -2071,6 +2079,7 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
                 amount=product_amount,
                 unit=str(item.get('unit') or '')[:24],
                 hsn=str(item.get('hsn') or '')[:16],
+                discount=abs(_to_decimal(item.get('discount'), "0")),
                 product_gst=product_gst_str,  # 🎯 Already normalized above
                 igst=calc_igst,
                 cgst=calc_cgst,
@@ -3094,6 +3103,21 @@ def prepare_sync_data(analyzed_bill, organization, cache=None):
     bill_url = f"{_base}/tally/vendor-bill/{analyzed_bill.selected_bill.id}"
     notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
 
+    # A converted voucher must say so. Without this Tally receives a
+    # rupee figure with nothing recording that it began as 10,000 USD
+    # at a notified rate — the conversion becomes unauditable the
+    # moment it leaves this system. Appended to the existing narration
+    # text: no tag is added and an INR bill (rate 1) reads exactly as
+    # it did before.
+    _ccy = (getattr(analyzed_bill, "currency", None) or "INR").upper()
+    _fx = getattr(analyzed_bill, "exchange_rate", None)
+    if _ccy != "INR" and _fx:
+        _ref = (getattr(analyzed_bill, "exchange_rate_reference", "") or "").strip()
+        notes_message += (
+            f" | Converted from {_ccy} at 1 {_ccy} = {_fx} INR"
+            + (f" ({_ref})" if _ref else "")
+        )
+
     Q2 = Decimal('0.01')
 
     def _money(value):
@@ -3270,10 +3294,41 @@ def prepare_sync_data(analyzed_bill, organization, cache=None):
                 item_entry["purchase_ledger_parent"] = (
                     _ledger_parent_name(purchase_ledger_obj) or "Purchase Accounts"
                 )
+            # A line discount is posted net, not as a tag of its own:
+            # adding one would change the voucher's shape and the
+            # connector's TDL would have to be rebuilt for it.
+            #
+            # BOTH price and amount are netted, so that
+            # ``price x quantity == amount`` still holds. Netting the
+            # amount alone would leave the two disagreeing, and a TDL
+            # that re-derives the amount from price x quantity would
+            # then drop the discount without saying so. Netting both
+            # survives either reading, and the discounted rate is the
+            # rate this line actually cost.
+            # No discount on this line means the stored figures are
+            # emitted exactly as before — not re-derived. Deriving the
+            # price from amount / quantity unconditionally would change
+            # the output for every existing bill whose stored price x
+            # quantity does not equal its amount, which is the ordinary
+            # case whenever a fractional quantity was truncated into
+            # the integer field.
+            _line_qty = int(getattr(line, 'quantity', 0) or 0)
+            _line_disc = abs(_money(getattr(line, 'discount', 0)))
+            if _line_disc == 0:
+                _line_price = _money(getattr(line, 'price', 0))
+                _line_amount = _money(getattr(line, 'amount', 0))
+            else:
+                _line_amount = _money(getattr(line, 'amount', 0)) - _line_disc
+                if _line_amount < 0:
+                    _line_amount = Decimal('0.00')
+                _line_price = (
+                    _line_amount / _line_qty if _line_qty
+                    else _money(getattr(line, 'price', 0)) - _line_disc
+                )
             item_entry.update({
-                "price": _fmt_money(getattr(line, 'price', 0)),
-                "quantity": int(getattr(line, 'quantity', 0) or 0),
-                "amount": _fmt_money(getattr(line, 'amount', 0)),
+                "price": _fmt_money(_line_price),
+                "quantity": _line_qty,
+                "amount": _fmt_money(_line_amount),
             })
             items_payload.append(item_entry)
         else:

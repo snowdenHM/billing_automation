@@ -157,6 +157,20 @@ def _run(data, document_text=None, page_count=None):
                 computed=round(expected, 2), stated=round(total, 2),
             ))
 
+    # The document names a currency other than the rupee. Said here
+    # rather than acted on: setting the bill's currency without also
+    # freezing a rate would leave every figure on it restated by
+    # whatever the rate happens to be, so the operator is told and the
+    # currency field on the voucher is where they answer.
+    _ccy = str(data.get("currency") or "").strip().upper()
+    if _ccy and _ccy != "INR":
+        out.append(_finding(
+            "currency_not_inr",
+            f"This bill appears to be written in {_ccy}. Set the currency on "
+            f"the voucher so the amounts post to Tally in rupees.",
+            currency=_ccy,
+        ))
+
     if igst and (cgst or sgst):
         out.append(_finding(
             "igst_with_cgst_sgst",

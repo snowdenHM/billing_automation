@@ -938,6 +938,18 @@ class TallyVendorAnalyzedProduct(BaseOrgModel):
         help_text="HSN or SAC code for this line, read off the invoice.",
     )
     amount = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
+    discount = models.DecimalField(
+        max_digits=50, decimal_places=2, blank=True, null=True,
+        default=Decimal("0"),
+        verbose_name="Line discount",
+        help_text=(
+            "Discount shown against this line. Always applied as a "
+            "reduction — the magnitude is used and the sign ignored, so "
+            "an operator typing 17.70 and one typing -17.70 get the "
+            "same answer. GST on this line is charged on "
+            "(amount - discount)."
+        ),
+    )
 
     product_gst = models.CharField(max_length=50, choices=GST_CHOICES, blank=True, null=True)
     igst = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True, default=Decimal("0"))
@@ -2484,6 +2496,18 @@ class TallySalesAnalyzedProduct(BaseOrgModel):
         help_text="HSN or SAC code for this line, read off the invoice.",
     )
     amount = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
+    discount = models.DecimalField(
+        max_digits=50, decimal_places=2, blank=True, null=True,
+        default=Decimal("0"),
+        verbose_name="Line discount",
+        help_text=(
+            "Discount shown against this line. Always applied as a "
+            "reduction — the magnitude is used and the sign ignored, so "
+            "an operator typing 17.70 and one typing -17.70 get the "
+            "same answer. GST on this line is charged on "
+            "(amount - discount)."
+        ),
+    )
 
     product_gst = models.CharField(max_length=50, choices=GST_CHOICES, blank=True, null=True)
     igst = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True, default=Decimal("0"))

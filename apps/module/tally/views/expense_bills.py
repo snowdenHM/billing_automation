@@ -1976,7 +1976,10 @@ def prepare_expense_sync_data(analyzed_bill, organization):
     # Base URL is configurable so staging/self-hosted deployments
     # don't leak the production domain into Tally narration.
     _base = getattr(settings, "SITE_URL", "https://billmunshi.com").rstrip("/")
-    bill_url = f"{_base}/tally/expense-bill/{analyzed_bill.selected_bill.id}"
+    # The journal entry is reached at /tally/journal-entry now. The
+    # old path still routes to the same page, so narrations already
+    # posted to Tally keep working.
+    bill_url = f"{_base}/tally/journal-entry/{analyzed_bill.selected_bill.id}"
     notes_message = f"Bill from {vendor_name} entered via BillMunshi {bill_url}"
 
     Q2 = Decimal('0.01')

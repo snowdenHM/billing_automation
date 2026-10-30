@@ -1149,6 +1149,7 @@ def get_vendor_bill_prompt():
         "discount_before_tax": false,
         "freight_taxable": false,
         "lines_include_gst": false,
+        "currency": "INR",
         "place_of_supply": "State name and/or code as printed, or empty string",
         "irn": "e-invoice IRN if printed, else empty string",
         "ack_no": "e-invoice acknowledgement number if printed, else empty string",
@@ -1208,6 +1209,24 @@ def get_vendor_bill_prompt():
       - true  — freight/packing/forwarding appears ABOVE the tax lines,
                 or is inside the HSN summary's taxable value.
       - false — added after tax, near the grand total.
+
+    💱 "currency": the ISO code of the currency the amounts are
+      written in — one of INR, USD, EUR, GBP, CAD, JPY, AUD, AED, SGD.
+      Read it off the symbols and words actually printed: "₹", "Rs.",
+      "INR" are INR; "$", "USD" are USD; "€" EUR; "£" GBP; "AED",
+      "Dhs", "د.إ" AED; "¥", "JPY" JPY; "S$", "SGD" SGD; "C$", "CAD"
+      CAD; "A$", "AUD" AUD. An Indian GST invoice is INR unless it
+      plainly says otherwise, so return "INR" when nothing on the
+      document names a currency — a guess here restates every figure on
+      the bill. Return the code only, never a symbol.
+
+    💰 "total" is the GRAND TOTAL PAYABLE — the last figure on the
+      bill, after every discount and adjustment. Many bills print two:
+      a "TOTAL" that is only the sum of the lines, and below it
+      "G. Total" / "Grand Total" / "Net Payable" / "Amount Payable"
+      after "LESS DISCOUNT" and "Oth. Adj.". Take the LOWER, later one.
+      Reading the pre-discount TOTAL makes every discounted bill look
+      as though it does not add up by exactly its own discount.
 
     🏷️ "lines_include_gst":
       - true  — the printed line amounts ALREADY contain their GST.
@@ -1305,6 +1324,7 @@ def get_sales_bill_prompt():
         "discount_before_tax": false,
         "freight_taxable": false,
         "lines_include_gst": false,
+        "currency": "INR",
         "place_of_supply": "State name and/or code as printed, or empty string",
         "irn": "e-invoice IRN if printed, else empty string",
         "ack_no": "e-invoice acknowledgement number if printed, else empty string",
@@ -1374,6 +1394,24 @@ def get_sales_bill_prompt():
       - true  — freight/packing/forwarding appears ABOVE the tax lines,
                 or is inside the HSN summary's taxable value.
       - false — added after tax, near the grand total.
+
+    💱 "currency": the ISO code of the currency the amounts are
+      written in — one of INR, USD, EUR, GBP, CAD, JPY, AUD, AED, SGD.
+      Read it off the symbols and words actually printed: "₹", "Rs.",
+      "INR" are INR; "$", "USD" are USD; "€" EUR; "£" GBP; "AED",
+      "Dhs", "د.إ" AED; "¥", "JPY" JPY; "S$", "SGD" SGD; "C$", "CAD"
+      CAD; "A$", "AUD" AUD. An Indian GST invoice is INR unless it
+      plainly says otherwise, so return "INR" when nothing on the
+      document names a currency — a guess here restates every figure on
+      the bill. Return the code only, never a symbol.
+
+    💰 "total" is the GRAND TOTAL PAYABLE — the last figure on the
+      bill, after every discount and adjustment. Many bills print two:
+      a "TOTAL" that is only the sum of the lines, and below it
+      "G. Total" / "Grand Total" / "Net Payable" / "Amount Payable"
+      after "LESS DISCOUNT" and "Oth. Adj.". Take the LOWER, later one.
+      Reading the pre-discount TOTAL makes every discounted bill look
+      as though it does not add up by exactly its own discount.
 
     🏷️ "lines_include_gst":
       - true  — the printed line amounts ALREADY contain their GST.

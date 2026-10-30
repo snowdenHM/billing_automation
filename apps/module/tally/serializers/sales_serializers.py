@@ -63,6 +63,9 @@ class TallySalesAnalyzedProductSerializer(serializers.ModelSerializer):
             # so the voucher's HSN could only ever come from the stock
             # item master — blank whenever the item was not mapped.
             'hsn', 'unit',
+            # A discount shown against this one line, which reduces what
+            # GST is charged on for this line alone.
+            'discount',
             'igst', 'cgst', 'sgst',
             'cgst_ledger', 'cgst_ledger_name',
             'sgst_ledger', 'sgst_ledger_name',

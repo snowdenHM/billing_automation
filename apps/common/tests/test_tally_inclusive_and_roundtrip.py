@@ -332,3 +332,74 @@ class VerifyKeepsWhatTheScreenShowedTests(TestCase):
 
         analysed.refresh_from_db()
         self.assertTrue(analysed.is_reverse_charge)
+
+
+class LineDiscountTests(TestCase):
+    """A discount against one line, and what reaches Tally for it."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            email="ld@example.com", password="x", first_name="L", last_name="D",
+        )
+        cls.org = Organization.objects.create(
+            name="Line Disc Co", created_by=cls.user, owner=cls.user,
+        )
+
+    def _bill(self, discount, n=1):
+        from apps.module.tally.models import Ledger, ParentLedger, TallyConfig
+        TallyConfig.objects.update_or_create(
+            organization=self.org, defaults={"tally_product_allow_sync": True},
+        )
+        parent = ParentLedger.objects.create(
+            organization=self.org, parent=f"Purchase Accounts {n}",
+        )
+        ledger = Ledger.objects.create(
+            organization=self.org, name=f"Purchase Accounts @5% {n}", parent=parent,
+        )
+        bill = TallyVendorBill.objects.create(
+            organization=self.org, bill_munshi_name=f"LD-{n}",
+        )
+        analysed = TallyVendorAnalyzedBill.objects.create(
+            organization=self.org, selected_bill=bill, bill_no=f"LD-{n}",
+            total=Decimal("354.00"),
+        )
+        TallyVendorAnalyzedProduct.objects.create(
+            organization=self.org, vendor_bill_analyzed=analysed,
+            item_name="LIZOMED I V", price=Decimal("354.00"), quantity=1,
+            amount=Decimal("354.00"), product_gst="5%", taxes=ledger,
+            hsn="3004", unit="Nos", discount=discount,
+        )
+        return analysed
+
+    def _item(self, analysed):
+        from apps.module.tally.views.vendor_bills import prepare_sync_data
+        return prepare_sync_data(analysed, self.org)["data"]["items"][0]
+
+    def test_a_line_without_a_discount_is_emitted_untouched(self):
+        """Every existing bill has to keep posting exactly as it did."""
+        item = self._item(self._bill(Decimal("0.00"), n=1))
+
+        self.assertEqual(item["price"], "354.00")
+        self.assertEqual(item["amount"], "354.00")
+
+    def test_a_line_discount_is_posted_net_with_no_new_tag(self):
+        item = self._item(self._bill(Decimal("17.70"), n=2))
+
+        self.assertEqual(item["amount"], "336.30")
+        # Price is netted too, so price x quantity still equals amount —
+        # a connector that re-derives the amount cannot drop the
+        # discount without saying so.
+        self.assertEqual(item["price"], "336.30")
+        self.assertNotIn("discount", item)
+
+    def test_the_sign_of_the_discount_does_not_change_the_answer(self):
+        """It is a reduction either way; the sign is not a decision."""
+        item = self._item(self._bill(Decimal("-17.70"), n=3))
+
+        self.assertEqual(item["amount"], "336.30")
+
+    def test_a_discount_larger_than_the_line_cannot_go_negative(self):
+        item = self._item(self._bill(Decimal("9999.00"), n=4))
+
+        self.assertEqual(item["amount"], "0.00")
