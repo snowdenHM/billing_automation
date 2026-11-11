@@ -17,6 +17,15 @@ and next.
 Ties on ``created_at`` are broken by ``id`` so the sequence is stable — bills
 uploaded in the same batch often share a timestamp to the second, and without
 a tiebreak Next/Back could loop between them.
+
+Navigation walks every bill the list page shows, not only the ones still
+awaiting verification. It used to filter on ``status="Analysed"``, which
+meant an organisation with six purchase vouchers and one unverified bill
+had both Next and Back greyed out on that bill — correct for a work
+queue, but the operator is looking at a list of six and reads it as the
+buttons being broken. Checking a bill against its neighbours is a normal
+thing to want after it is verified. Callers that do want queue-only
+movement can still pass ``status``.
 """
 
 from django.db.models import Q
@@ -26,31 +35,33 @@ from django.db.models import Q
 QUEUE_STATUS = "Analysed"
 
 
-def _queue(bill, status):
-    """Bills of the same type and organisation that are still to be processed.
+def _queue(bill, status=None):
+    """The bills of the same type and organisation this one sits among.
 
     Trashed bills are excluded: a bill someone deleted must not turn up as
     the next thing to verify. Applied on capability (``alive()``) so this
     stays correct for any bill model, trashable or not.
+
+    ``status`` narrows the set to one status when a caller asks for it.
     """
     manager = bill.__class__.objects
     base = manager.alive() if hasattr(manager, "alive") else manager.all()
-    return (
-        base.filter(organization=bill.organization, status=status)
-        .exclude(id=bill.id)
-    )
+    queryset = base.filter(organization=bill.organization)
+    if status:
+        queryset = queryset.filter(status=status)
+    return queryset.exclude(id=bill.id)
 
 
-def get_adjacent_bill_ids(bill, status=QUEUE_STATUS):
+def get_adjacent_bill_ids(bill, status=None):
     """Return ``(previous_id, next_id)`` as strings, or ``None`` at either end.
 
     Ordering is newest-first, matching the list view:
 
         previous  <-  [ newer bills ]  current  [ older bills ]  ->  next
 
-    The current bill does not need to be in the queue itself. A verified bill
-    still has neighbours, because position is decided by ``created_at`` rather
-    than by membership of the filtered set.
+    Every bill of this type in the organisation is a candidate, so a
+    verified bill has neighbours just as an unverified one does. Pass
+    ``status`` to walk only the bills with that status.
     """
     created_at = getattr(bill, "created_at", None)
     if created_at is None:

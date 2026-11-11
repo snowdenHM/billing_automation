@@ -362,15 +362,18 @@ class BaseBillDetailSerializer(serializers.ModelSerializer):
         if not hasattr(self, "_adjacent_cache"):
             self._adjacent_cache = {}
         if obj.id not in self._adjacent_cache:
-            self._adjacent_cache[obj.id] = get_adjacent_bill_ids(
-                obj, status=obj.__class__.BillStatus.ANALYSED,
-            )
+            # No status filter: Next and Back walk the list the operator is
+            # looking at. Scoping this to ANALYSED meant an organisation
+            # with six purchase vouchers and one unverified bill had both
+            # buttons dead on that bill, which reads as broken rather than
+            # as "the queue has one item".
+            self._adjacent_cache[obj.id] = get_adjacent_bill_ids(obj)
         return self._adjacent_cache[obj.id]
 
     def get_next_bill(self, obj):
-        """The next bill in the verification queue (older than this one)."""
+        """The next bill in the list (older than this one)."""
         return self._adjacent(obj)[1]
 
     def get_previous_bill(self, obj):
-        """The previous bill in the verification queue (newer than this one)."""
+        """The previous bill in the list (newer than this one)."""
         return self._adjacent(obj)[0]

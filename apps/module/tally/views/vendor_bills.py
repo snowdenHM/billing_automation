@@ -3001,11 +3001,17 @@ EXPENSE_BILL_EMIT_LEDGER_EXTRAS = True
 # look wrong — it would just be wrong, by the whole tax amount, on a
 # GST return.
 #
-# So: the Tally developer confirms the purchase importer reads
-# ``debit_or_credit``, this flips to True, and that is the whole change.
-# Until then a reverse-charge purchase bill is blocked from syncing
-# (see purchase_rcm_blockers) rather than posted incorrectly.
-VENDOR_BILL_EMIT_RCM_ROWS = False
+# The user settled this on 2026-11-11: the Tally developer owns their
+# own importer, and our job is to send the payload. So the rows go out.
+#
+# What this adds, and ONLY for a bill whose ``is_reverse_charge`` is
+# set: one extra <ledger> row per GST line, carrying a
+# <debit_or_credit>credit</debit_or_credit> child. Every bill without
+# the flag — which is every bill that exists today, the field defaults
+# to False — produces byte-identical XML to before.
+#
+# One line to revert if the importer turns out not to read it.
+VENDOR_BILL_EMIT_RCM_ROWS = True
 
 
 # --- Payment Voucher ---
