@@ -1,9 +1,13 @@
 """A line's amount must not depend on which analysis path read it.
 
-``TallyVendorAnalyzedProduct.quantity`` and its sales twin are
-``PositiveIntegerField``, so "2.5 kg" is stored as 2. That is a known
-limitation of the schema. What was not known is that the two paths which
-read an extracted line disagreed about what to do with the rest of it:
+The quantity columns were ``PositiveIntegerField`` until migration 0058,
+so "2.5 kg" was stored as 2. They are ``DecimalField`` now and the
+quantity survives. The payload still emits ``int()`` until the Tally dev
+confirms ``<quantity>`` takes a decimal — see
+``TALLY_EMIT_DECIMAL_QUANTITY``.
+
+The bug this file was written for is separate: the two paths which read
+an extracted line disagreed about what to do with the rest of it:
 
 * ``process_analysis_data`` (fresh analysis) multiplied the price by the
   *float* quantity, so a 2.5 x 100 line came to 250.
@@ -31,32 +35,36 @@ class ReadLineAmountsTests(SimpleTestCase):
         self.assertEqual(price, 100.0)
         self.assertEqual(amount, 250.0, "the fractional part was dropped from the amount")
 
-    def test_a_fractional_quantity_is_truncated_for_storage(self):
-        """The field cannot hold it; the caller must get the int it will store."""
+    def test_a_fractional_quantity_survives_storage(self):
+        """The column holds it now; nothing may round it on the way in."""
+        from decimal import Decimal
+
         _, quantity, _ = read_line_amounts({"price": 100, "quantity": 2.5})
-        self.assertEqual(quantity, 2)
-        self.assertIsInstance(quantity, int)
+        self.assertEqual(quantity, Decimal("2.5"))
+        self.assertIsInstance(quantity, Decimal)
 
-    def test_the_truncation_is_logged(self):
-        """A quantity that cannot be stored exactly must leave a trace."""
-        with self.assertLogs("apps.module.tally.views.helpers", level="WARNING") as logs:
-            read_line_amounts({"price": 100, "quantity": 2.5, "description": "Rice"})
-        self.assertTrue(
-            any("Fractional quantity" in line for line in logs.output),
-            logs.output,
+    def test_three_decimal_places_are_kept(self):
+        """Enough for kg / litre / metre, which is what this is for."""
+        from decimal import Decimal
+
+        _, quantity, _ = read_line_amounts({"price": 10, "quantity": "1.125"})
+        self.assertEqual(quantity, Decimal("1.125"))
+
+    def test_the_payload_still_emits_an_integer(self):
+        """Until the Tally dev confirms, the sync bytes do not move."""
+        from decimal import Decimal
+
+        from apps.module.tally.views.vendor_bills import (
+            TALLY_EMIT_DECIMAL_QUANTITY, _fmt_quantity,
         )
 
-    def test_a_whole_quantity_is_silent(self):
-        """No warning for the ordinary case, or the log becomes noise."""
-        import logging
-
-        logger = logging.getLogger("apps.module.tally.views.helpers")
-        with self.assertLogs(logger, level="WARNING") as logs:
-            logger.warning("sentinel")  # assertLogs needs at least one record
-            read_line_amounts({"price": 100, "quantity": 3})
-        self.assertEqual(
-            [line for line in logs.output if "Fractional" in line], [],
+        self.assertFalse(
+            TALLY_EMIT_DECIMAL_QUANTITY,
+            "decimal quantities are being emitted into the Tally payload",
         )
+        self.assertEqual(_fmt_quantity(Decimal("2.500")), 2)
+        self.assertEqual(_fmt_quantity(Decimal("8.000")), 8)
+        self.assertEqual(_fmt_quantity(None), 0)
 
     def test_both_analysis_paths_agree(self):
         """The two callers must compute one answer for one line.
@@ -86,8 +94,10 @@ class ReadLineAmountsTests(SimpleTestCase):
         for line in ({}, {"price": None, "quantity": None},
                      {"price": "abc", "quantity": "xyz"},
                      {"price": "1,200.50", "quantity": "2"}):
+            from decimal import Decimal
+
             price, quantity, amount = read_line_amounts(line)
-            self.assertIsInstance(quantity, int)
+            self.assertIsInstance(quantity, Decimal)
             self.assertGreaterEqual(quantity, 0)
             self.assertIsInstance(amount, float)
 
@@ -100,10 +110,12 @@ class ReadLineAmountsTests(SimpleTestCase):
         enough to reach it. The quantity is clamped; the amount keeps its
         sign, because the money is the part that has to stay right.
         """
+        from decimal import Decimal
+
         price, quantity, amount = read_line_amounts(
             {"price": 100, "quantity": -3, "description": "LESS: RETURN"}
         )
-        self.assertEqual(quantity, 0, "a negative quantity reached the column")
+        self.assertEqual(quantity, Decimal("0"), "a negative quantity was stored")
         self.assertEqual(amount, -300.0, "the line lost the sign of its money")
 
     def test_the_clamped_sign_is_logged(self):

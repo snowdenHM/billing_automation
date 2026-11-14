@@ -180,8 +180,19 @@ def login_view(request):
 
 REFRESH_COOKIE_NAME = "bm_refresh"
 
-#: Keep returning the refresh token in the JSON body. Transitional.
-_REFRESH_IN_BODY = True
+#: Keep returning the refresh token in the JSON body.
+#:
+#: Off as of 2026-11-14. The shipped bundle has been cookie-only since
+#: the 2026-11-11 deploy: it never reads ``data.refresh``, and it clears
+#: any leftover ``refresh_token`` from localStorage on its first
+#: refresh. With this off the token is no longer readable by script
+#: anywhere, which was the whole point of moving it to an httpOnly
+#: cookie.
+#:
+#: The cost is one reload for anyone still running the pre-deploy bundle
+#: in a tab they have not refreshed since. Set back to True if that
+#: turns out to be anybody.
+_REFRESH_IN_BODY = False
 
 
 def _attach_refresh_cookie(response, data):
@@ -274,8 +285,9 @@ def password_reset_request_view(request):
         reset_url = _build_frontend_url(
             f"/auth/reset-password?uidb64={uidb64}&token={token}"
         )
-        # Django's default PasswordResetTokenGenerator TTL is
-        # PASSWORD_RESET_TIMEOUT (3 days). Show minutes in a human way.
+        # The link's lifetime is PASSWORD_RESET_TIMEOUT, set in
+        # settings (two hours, down from Django's three-day default).
+        # Shown to the reader in minutes so the email can say it.
         ttl_minutes = int(getattr(settings, "PASSWORD_RESET_TIMEOUT", 3 * 24 * 3600) / 60)
         try:
             send_templated_email(
@@ -297,6 +309,39 @@ def password_reset_request_view(request):
     return Response({"detail": "If the email exists, a reset link was sent."})
 
 
+
+
+def _revoke_all_refresh_tokens(user):
+    """Blacklist every outstanding refresh token this user holds.
+
+    A password change has to end the other sessions, or it does not do
+    the one job people change their password for. Rotation plus
+    blacklist-after-rotation only retires a token once it is *used*; a
+    stolen refresh token that is simply held stays valid for its whole
+    seven days, so the attacker keeps the account for a week after the
+    victim "locked them out".
+
+    Never raises: a password that was changed but whose sessions could
+    not be cleared is still a password that was changed, and failing the
+    request would leave the user worse off.
+    """
+    try:
+        from rest_framework_simplejwt.token_blacklist.models import (
+            BlacklistedToken, OutstandingToken,
+        )
+
+        revoked = 0
+        for token in OutstandingToken.objects.filter(user=user):
+            _, created = BlacklistedToken.objects.get_or_create(token=token)
+            revoked += 1 if created else 0
+        if revoked:
+            logger.info("Revoked %d refresh token(s) for user %s", revoked, user.pk)
+        return revoked
+    except Exception as exc:
+        logger.warning("Could not revoke refresh tokens for user %s: %s", user.pk, exc)
+        return 0
+
+
 @extend_schema(request=PasswordResetConfirmSerializer, responses={"200": None}, tags=["Auth"], methods=["POST"])
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -307,7 +352,11 @@ def password_reset_confirm_view(request):
     user = serializer.validated_data["user_obj"]
     user.set_password(serializer.validated_data["new_password"])
     user.save(update_fields=["password"])
-    return Response({"detail": "Password has been reset successfully."})
+    # Whoever had this account before this reset does not keep it.
+    _revoke_all_refresh_tokens(user)
+    return _clear_refresh_cookie(
+        Response({"detail": "Password has been reset successfully."})
+    )
 
 
 @extend_schema(request=ChangePasswordSerializer, responses={"200": None}, tags=["Auth"], methods=["POST"])
@@ -319,7 +368,13 @@ def change_password_view(request):
     serializer.is_valid(raise_exception=True)
     request.user.set_password(serializer.validated_data["new_password"])
     request.user.save(update_fields=["password"])
-    return Response({"detail": "Password changed successfully."})
+    # Every other session this account had ends here. The caller's own
+    # access token keeps working until it expires, which is what makes
+    # the response usable; their refresh token does not.
+    _revoke_all_refresh_tokens(request.user)
+    return _clear_refresh_cookie(
+        Response({"detail": "Password changed successfully."})
+    )
 
 
 @extend_schema(responses={"200": None}, tags=["Auth"], methods=["GET"])

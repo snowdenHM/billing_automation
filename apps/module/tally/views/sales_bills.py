@@ -171,7 +171,7 @@ def process_analysis_data(bill, json_data, organization):
     """Process AI extracted data and create analyzed bill"""
     try:
         # Log the raw JSON data for debugging
-        logger.warning(f"📄 Raw JSON data from OpenAI: {json.dumps(json_data, indent=2)}")
+        logger.info(f"📄 Raw JSON data from OpenAI: {json.dumps(json_data, indent=2)}")
 
         # Validate bill ownership
         bill_belongs_to_org, ownership_description = validate_bill_ownership(json_data, organization)
@@ -253,7 +253,7 @@ def process_analysis_data(bill, json_data, organization):
             
             # If GST number is empty, try to extract from address
             if not customer_gst and customer_address:
-                logger.warning(f"🔍 GST field empty, searching in address: {customer_address}")
+                logger.info(f"🔍 GST field empty, searching in address: {customer_address}")
                 import re
                 # Enhanced GST number patterns for Indian format (2 digits + 10 alphanumeric + 1 digit + 2 characters)
                 gst_patterns = [
@@ -268,7 +268,7 @@ def process_analysis_data(bill, json_data, organization):
                     matches = re.findall(pattern, customer_address.upper())
                     if matches:
                         customer_gst = matches[0] if isinstance(matches[0], str) else matches[0]
-                        logger.warning(f"✅ Extracted GST from address: {customer_gst}")
+                        logger.info(f"✅ Extracted GST from address: {customer_gst}")
                         break
         else:
             company_name = str(to_data).strip()
@@ -276,7 +276,7 @@ def process_analysis_data(bill, json_data, organization):
             customer_address = ''
 
         # Log extracted customer information
-        logger.warning(f"📊 Extracted customer info - Company: '{company_name}', GST: '{customer_gst}', Address: '{customer_address[:100]}{'...' if len(customer_address) > 100 else ''}'")
+        logger.info(f"📊 Extracted customer info - Company: '{company_name}', GST: '{customer_gst}', Address: '{customer_address[:100]}{'...' if len(customer_address) > 100 else ''}'")
         
         # Parse date with multiple format support
         bill_date = parse_bill_date(date_issued)
@@ -287,22 +287,25 @@ def process_analysis_data(bill, json_data, organization):
         
         # Log customer finding result
         if customer:
-            logger.warning(f"✅ Successfully found and assigned customer: {customer.name} (ID: {customer.id}, GST: {getattr(customer, 'gst_in', 'None')})")
+            logger.info(f"✅ Successfully found and assigned customer: {customer.name} (ID: {customer.id}, GST: {getattr(customer, 'gst_in', 'None')})")
         else:
-            logger.error(f"❌ No customer found for Company: '{company_name}', GST: '{customer_gst}'")
+            logger.warning(
+                "No customer matched for bill %s — the analysed bill will "
+                "have no customer assigned.", getattr(bill, "id", "unknown"),
+            )
             logger.warning("⚠️  This will create an analyzed bill without customer assignment")
 
         # Continue with bill processing regardless of customer status
-        logger.warning(f"🔄 Continuing with bill processing - Company: '{company_name}'")
+        logger.info(f"🔄 Continuing with bill processing - Company: '{company_name}'")
 
         # Determine GST type with safe conversion
-        logger.warning(f"📋 Starting GST values extraction from relevant_data...")
+        logger.info(f"📋 Starting GST values extraction from relevant_data...")
         igst_val = safe_float_convert(relevant_data.get('igst', 0))
         cgst_val = safe_float_convert(relevant_data.get('cgst', 0))
         sgst_val = safe_float_convert(relevant_data.get('sgst', 0))
 
         # Log GST values for debugging
-        logger.warning(f"💰 GST Values extracted - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
+        logger.info(f"💰 GST Values extracted - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
 
         if igst_val > 0:
             gst_type = TallySalesAnalyzedBill.GSTType.IGST
@@ -311,10 +314,10 @@ def process_analysis_data(bill, json_data, organization):
         else:
             gst_type = TallySalesAnalyzedBill.GSTType.UNKNOWN
 
-        logger.warning(f"🏷️  Determined GST Type: {gst_type}")
+        logger.info(f"🏷️  Determined GST Type: {gst_type}")
 
         # 🏛️ FIND APPROPRIATE TAX LEDGERS FOR BILL-LEVEL GST VALUES
-        logger.warning(f"🏛️ [NEW BILL] Finding bill-level tax ledgers - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
+        logger.info(f"🏛️ [NEW BILL] Finding bill-level tax ledgers - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
         
         igst_tax_ledger = None
         cgst_tax_ledger = None
@@ -322,18 +325,18 @@ def process_analysis_data(bill, json_data, organization):
         
         if igst_val > 0:
             igst_tax_ledger = find_appropriate_tax_ledger(organization, igst_val, 0, 0, ledger_type='bill')
-            logger.warning(f"🎯 [NEW BILL] IGST Tax Ledger: {igst_tax_ledger.name if igst_tax_ledger else 'None'}")
+            logger.info(f"🎯 [NEW BILL] IGST Tax Ledger: {igst_tax_ledger.name if igst_tax_ledger else 'None'}")
         
         if cgst_val > 0:
             cgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, cgst_val, 0, ledger_type='bill')
-            logger.warning(f"🎯 [NEW BILL] CGST Tax Ledger: {cgst_tax_ledger.name if cgst_tax_ledger else 'None'}")
+            logger.info(f"🎯 [NEW BILL] CGST Tax Ledger: {cgst_tax_ledger.name if cgst_tax_ledger else 'None'}")
         
         if sgst_val > 0:
             sgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, 0, sgst_val, ledger_type='bill')
-            logger.warning(f"🎯 [NEW BILL] SGST Tax Ledger: {sgst_tax_ledger.name if sgst_tax_ledger else 'None'}")
+            logger.info(f"🎯 [NEW BILL] SGST Tax Ledger: {sgst_tax_ledger.name if sgst_tax_ledger else 'None'}")
 
         # Create analyzed bill
-        logger.warning(f"🏗️  Starting analyzed bill creation...")
+        logger.info(f"🏗️  Starting analyzed bill creation...")
         with transaction.atomic():
             # Round decimal values to 2 decimal places to avoid validation errors
             from decimal import Decimal, ROUND_HALF_UP
@@ -356,7 +359,7 @@ def process_analysis_data(bill, json_data, organization):
             cess_rounded     = Decimal(str(cess_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             freight_rounded  = Decimal(str(freight_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
-            logger.warning(f"💵 Bill amounts - Total: {total_rounded}, IGST: {igst_rounded}, CGST: {cgst_rounded}, SGST: {sgst_rounded}")
+            logger.info(f"💵 Bill amounts - Total: {total_rounded}, IGST: {igst_rounded}, CGST: {cgst_rounded}, SGST: {sgst_rounded}")
 
             # ``get_or_create`` is idempotent under the double-analysis
             # race (sync analyze button + async RQ job). ``defaults`` are
@@ -407,18 +410,18 @@ def process_analysis_data(bill, json_data, organization):
                 analyzed_bill.gst_type = gst_type
                 analyzed_bill.save()
 
-            logger.warning(f"✅ Created TallySalesAnalyzedBill with ID: {analyzed_bill.id}")
-            logger.warning(f"✅ [NEW BILL] Saved analyzed bill with tax ledgers - IGST: {analyzed_bill.igst_taxes}, CGST: {analyzed_bill.cgst_taxes}, SGST: {analyzed_bill.sgst_taxes}")
+            logger.info(f"✅ Created TallySalesAnalyzedBill with ID: {analyzed_bill.id}")
+            logger.info(f"✅ [NEW BILL] Saved analyzed bill with tax ledgers - IGST: {analyzed_bill.igst_taxes}, CGST: {analyzed_bill.cgst_taxes}, SGST: {analyzed_bill.sgst_taxes}")
 
             # Create analyzed products with safe item extraction and tax ledger automation
             product_instances = []
             items = relevant_data.get('items', [])
             
             # Debug log for items extraction
-            logger.warning(f"📝 Items extraction - Found {len(items) if isinstance(items, list) else 0} items: {items}")
+            logger.info(f"📝 Items extraction - Found {len(items) if isinstance(items, list) else 0} items: {items}")
             
             if isinstance(items, list):
-                logger.warning(f"🔄 Processing {len(items)} items for product creation...")
+                logger.info(f"🔄 Processing {len(items)} items for product creation...")
                 # Decide every line's GST rate up front, then take its tax
                 # from that rate — see the note in the vendor-bill view and
                 # apps/common/services/line_gst.py. Splitting the bill's tax
@@ -536,7 +539,7 @@ def process_analysis_data(bill, json_data, organization):
                         amount_rounded = Decimal(str(amount_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
                         # Debug log for each item
-                        logger.warning(f"📋 Item {idx}: '{item.get('description', 'No description')}' - Price: {price_val}, Qty: {quantity_val}, Amount: {amount_val}")
+                        logger.info(f"📋 Item {idx}: '{item.get('description', 'No description')}' - Price: {price_val}, Qty: {quantity_val}, Amount: {amount_val}")
 
                         # Rate and tax both come from the one resolution
                         # above, so a row can never claim 0% while holding
@@ -546,10 +549,10 @@ def process_analysis_data(bill, json_data, organization):
                         item_cgst_rounded = _assigned['cgst']
                         item_sgst_rounded = _assigned['sgst']
                         
-                        logger.warning(f"🧮 Item {idx} GST @ {_assigned['rate']}% - IGST: {item_igst_rounded}, CGST: {item_cgst_rounded}, SGST: {item_sgst_rounded}")
+                        logger.info(f"🧮 Item {idx} GST @ {_assigned['rate']}% - IGST: {item_igst_rounded}, CGST: {item_cgst_rounded}, SGST: {item_sgst_rounded}")
 
                         # � AUTO-ASSIGN LINE ITEM LEDGER FROM CHART OF ACCOUNTS (Purchase Accounts)
-                        logger.warning(f"🏛️  Finding line item ledger for product '{item.get('description', 'No desc')[:30]}...'")
+                        logger.info(f"🏛️  Finding line item ledger for product '{item.get('description', 'No desc')[:30]}...'")
                         item_ledger = find_appropriate_tax_ledger(organization, float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded), ledger_type='product')
                         
                         # The rate was chosen, not back-derived.
@@ -597,16 +600,16 @@ def process_analysis_data(bill, json_data, organization):
                         )
                         product_instances.append(product)
                         
-                        logger.warning(f"📦 Created product {idx}: '{item.get('description', '')[:50]}...' | Line Item Ledger: '{item_ledger.name if item_ledger else 'None'}' (Parent: {item_ledger.parent.parent if item_ledger else 'N/A'}) | GST: {formatted_gst_rate}")
+                        logger.info(f"📦 Created product {idx}: '{item.get('description', '')[:50]}...' | Line Item Ledger: '{item_ledger.name if item_ledger else 'None'}' (Parent: {item_ledger.parent.parent if item_ledger else 'N/A'}) | GST: {formatted_gst_rate}")
                     else:
                         logger.warning(f"❌ Item {idx} is not a dict: {item}")
             else:
                 logger.warning(f"❌ Items is not a list: {type(items)} - {items}")
 
             if product_instances:
-                logger.warning(f"💾 Saving {len(product_instances)} product instances to database...")
+                logger.info(f"💾 Saving {len(product_instances)} product instances to database...")
                 TallySalesAnalyzedProduct.objects.bulk_create(product_instances)
-                logger.warning(f"✅ Successfully created {len(product_instances)} products for bill {analyzed_bill.id}")
+                logger.info(f"✅ Successfully created {len(product_instances)} products for bill {analyzed_bill.id}")
 
                 # ✅ AUTO-CREATE CONSOLIDATED PRODUCT FOR MULTI-ITEM BILLS
                 if len(product_instances) > 1:
@@ -675,7 +678,7 @@ def process_analysis_data(bill, json_data, organization):
             bill.process = True
             bill.save(update_fields=['status', 'process'])
 
-            logger.warning(f"🎉 ANALYSIS COMPLETE - Bill {bill.id} status updated to ANALYSED")
+            logger.info(f"🎉 ANALYSIS COMPLETE - Bill {bill.id} status updated to ANALYSED")
 
             return analyzed_bill
 
@@ -872,17 +875,17 @@ def sales_bill_analyze(request, org_id):
 
     try:
         # Check if bill already has analyzed data
-        logger.warning(f"🔍 Checking if bill {bill_id} already has analyzed data...")
+        logger.info(f"🔍 Checking if bill {bill_id} already has analyzed data...")
         
         if bill.analysed_data:
-            logger.warning(f"📊 Bill has existing analyzed data, using process_existing_analysis_data()")
+            logger.info(f"📊 Bill has existing analyzed data, using process_existing_analysis_data()")
             analyzed_bill = process_existing_analysis_data(bill, bill.analysed_data, organization)
-            logger.warning(f"✅ process_existing_analysis_data completed successfully")
+            logger.info(f"✅ process_existing_analysis_data completed successfully")
         else:
-            logger.warning(f"🚀 No existing data found, running new OpenAI analysis for bill {bill_id}")
+            logger.info(f"🚀 No existing data found, running new OpenAI analysis for bill {bill_id}")
             analysis_result = analyze_bill_with_ai(bill, organization)
             
-            logger.warning(f"📋 analyze_bill_with_ai result: success={analysis_result.get('success', 'unknown')}")
+            logger.info(f"📋 analyze_bill_with_ai result: success={analysis_result.get('success', 'unknown')}")
             
             if not analysis_result.get('success'):
                 logger.error(f"❌ Analysis failed: {analysis_result.get('error', 'Unknown error')}")
@@ -894,12 +897,12 @@ def sales_bill_analyze(request, org_id):
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
             analyzed_bill = analysis_result.get('analyzed_bill')
-            logger.warning(f"✅ Got analyzed_bill from analysis_result: {analyzed_bill}")
+            logger.info(f"✅ Got analyzed_bill from analysis_result: {analyzed_bill}")
 
-        logger.warning(f"🔎 Starting duplicate check for bill {bill.bill_munshi_name}...")
+        logger.info(f"🔎 Starting duplicate check for bill {bill.bill_munshi_name}...")
         # Check for duplicate bills after analysis
         is_duplicate, duplicate_bills, max_similarity = check_duplicate_tally_sales_bill(bill, organization)
-        logger.warning(f"🔍 Duplicate check complete - is_duplicate: {is_duplicate}, count: {len(duplicate_bills) if duplicate_bills else 0}")
+        logger.info(f"🔍 Duplicate check complete - is_duplicate: {is_duplicate}, count: {len(duplicate_bills) if duplicate_bills else 0}")
 
         # Persist duplicate metadata on the bill row so the list page's
         # duplicate badge + detail modal have data to render. Was
@@ -919,7 +922,7 @@ def sales_bill_analyze(request, org_id):
             "analyzed_bill": TallySalesAnalyzedBillSerializer(analyzed_bill).data
         }
         
-        logger.warning(f"📝 Created response_data with analyzed_bill serialized")
+        logger.info(f"📝 Created response_data with analyzed_bill serialized")
 
         # Add duplicate warnings if found
         if is_duplicate:
@@ -950,7 +953,7 @@ def sales_bill_analyze(request, org_id):
 
             logger.warning(f"Duplicate Tally customer bill detected for {bill.bill_munshi_name} - {len(duplicate_bills)} similar bills found")
 
-        logger.warning(f"🎉 API Response ready - sending success response with status 200")
+        logger.info(f"🎉 API Response ready - sending success response with status 200")
         return Response(response_data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -1020,7 +1023,7 @@ def process_existing_analysis_data(bill, existing_data, organization):
             gst_type = TallySalesAnalyzedBill.GSTType.UNKNOWN
 
         # 🏛️ FIND APPROPRIATE TAX LEDGERS FOR BILL-LEVEL GST VALUES
-        logger.warning(f"🏛️ [EXISTING BILL] Finding tax ledgers - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
+        logger.info(f"🏛️ [EXISTING BILL] Finding tax ledgers - IGST: {igst_val}, CGST: {cgst_val}, SGST: {sgst_val}")
         
         igst_tax_ledger = None
         cgst_tax_ledger = None
@@ -1028,15 +1031,15 @@ def process_existing_analysis_data(bill, existing_data, organization):
         
         if igst_val > 0:
             igst_tax_ledger = find_appropriate_tax_ledger(organization, igst_val, 0, 0, ledger_type='bill')
-            logger.warning(f"🎯 [EXISTING BILL] IGST Tax Ledger: {igst_tax_ledger.name if igst_tax_ledger else 'None'}")
+            logger.info(f"🎯 [EXISTING BILL] IGST Tax Ledger: {igst_tax_ledger.name if igst_tax_ledger else 'None'}")
         
         if cgst_val > 0:
             cgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, cgst_val, 0, ledger_type='bill')
-            logger.warning(f"🎯 [EXISTING BILL] CGST Tax Ledger: {cgst_tax_ledger.name if cgst_tax_ledger else 'None'}")
+            logger.info(f"🎯 [EXISTING BILL] CGST Tax Ledger: {cgst_tax_ledger.name if cgst_tax_ledger else 'None'}")
         
         if sgst_val > 0:
             sgst_tax_ledger = find_appropriate_tax_ledger(organization, 0, 0, sgst_val, ledger_type='bill')
-            logger.warning(f"🎯 [EXISTING BILL] SGST Tax Ledger: {sgst_tax_ledger.name if sgst_tax_ledger else 'None'}")
+            logger.info(f"🎯 [EXISTING BILL] SGST Tax Ledger: {sgst_tax_ledger.name if sgst_tax_ledger else 'None'}")
 
         # Create analyzed bill without Django validation to avoid GST mismatch errors
         with transaction.atomic():
@@ -1061,7 +1064,7 @@ def process_existing_analysis_data(bill, existing_data, organization):
 
             # Save without calling clean() to skip validation
             analyzed_bill.save(skip_validation=True)
-            logger.warning(f"✅ [EXISTING BILL] Saved analyzed bill with tax ledgers - IGST: {analyzed_bill.igst_taxes}, CGST: {analyzed_bill.cgst_taxes}, SGST: {analyzed_bill.sgst_taxes}")
+            logger.info(f"✅ [EXISTING BILL] Saved analyzed bill with tax ledgers - IGST: {analyzed_bill.igst_taxes}, CGST: {analyzed_bill.cgst_taxes}, SGST: {analyzed_bill.sgst_taxes}")
 
             # Create analyzed products with proper GST calculation
             product_instances = []
@@ -1149,7 +1152,7 @@ def process_existing_analysis_data(bill, existing_data, organization):
                 gst_rate = _assigned['rate']
 
                 # � AUTO-ASSIGN LINE ITEM LEDGER FROM CHART OF ACCOUNTS (EXISTING DATA)
-                logger.warning(f"🏛️  [EXISTING] Finding line item ledger for product '{item.get('description', 'No desc')[:30]}...'")
+                logger.info(f"🏛️  [EXISTING] Finding line item ledger for product '{item.get('description', 'No desc')[:30]}...'")
                 item_ledger = find_appropriate_tax_ledger(organization, product_igst, product_cgst, product_sgst, ledger_type='product')
                 
                 # Create product instance without validation
@@ -1167,7 +1170,7 @@ def process_existing_analysis_data(bill, existing_data, organization):
                     organization=organization
                 )
                 
-                logger.warning(f"📦 [EXISTING] Created product: '{item.get('description', 'No desc')[:30]}...' | Line Item Ledger: '{item_ledger.name if item_ledger else 'None'}' (Parent: {item_ledger.parent.parent if item_ledger else 'N/A'}) | GST: {gst_rate}%")
+                logger.info(f"📦 [EXISTING] Created product: '{item.get('description', 'No desc')[:30]}...' | Line Item Ledger: '{item_ledger.name if item_ledger else 'None'}' (Parent: {item_ledger.parent.parent if item_ledger else 'N/A'}) | GST: {gst_rate}%")
                 created_products.append(product)
 
             # Bulk create products without validation
@@ -2350,7 +2353,7 @@ def get_structured_bill_data(analyzed_bill, organization):
                 "tax_ledger": cp.taxes.name if cp.taxes else "",
                 "tax_ledger_id": str(cp.taxes.id) if cp.taxes else None,
                 "price": float(cp.price or 0),
-                "quantity": int(cp.quantity or 0),
+                "quantity": _fmt_quantity(cp.quantity),
                 "amount": float(cp.amount or 0),
                 "product_gst": cp.product_gst,
                 "igst": float(cp.igst or 0),
@@ -2451,7 +2454,7 @@ def get_structured_bill_data(analyzed_bill, organization):
                 # detail.jsx:2399 — name-based lookup lost tax ledger on reload).
                 "tax_ledger_id": str(item.taxes.id) if item.taxes else None,
                 "price": float(item.price or 0),
-                "quantity": int(item.quantity or 0),
+                "quantity": _fmt_quantity(item.quantity),
                 "amount": float(item.amount or 0),
                 "product_gst": item.product_gst,
                 "igst": float(item.igst or 0),
@@ -2536,6 +2539,22 @@ def sales_bill_sync(request, org_id):
             'current_status': bill.status,
             'required_status': 'Verified',
             'error_code': 'BILL_NOT_VERIFIED'
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    # A sale marked reverse charge that still carries output GST is
+    # stating two incompatible things. The purchase side has had this
+    # check since RCM landed; the sales side stored the flag and did
+    # nothing with it, so such an invoice synced with its output tax
+    # intact and overstated the client's liability.
+    from ..reverse_charge import sales_rcm_blockers
+
+    rcm_reasons = sales_rcm_blockers(analyzed_bill, organization)
+    if rcm_reasons:
+        return Response({
+            'error': 'Reverse Charge Conflict',
+            'message': ' '.join(rcm_reasons),
+            'reasons': rcm_reasons,
+            'error_code': 'SALES_RCM_CONFLICT',
         }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     # Sync XML falls back to "Unknown Customer" when customer is null —
@@ -2786,6 +2805,35 @@ def sales_bills_sync_list(request, org_id):
     # content, no escaping needed.
     xml_payload = _sync_data_to_xml(bills_data)
     return HttpResponse(xml_payload, content_type='application/xml; charset=utf-8')
+
+#: Emit the line quantity with its decimal places.
+#:
+#: The quantity columns became DecimalField in migration 0058, so a
+#: "2.5 kg" line is now STORED correctly. What reaches Tally is still
+#: int()-ed, because changing it changes a value inside the sync
+#: payload and the connector's TDL is not ours to test. Flip this to
+#: True once the Tally dev confirms <quantity> takes a decimal; until
+#: then every existing bill emits exactly the bytes it emits today.
+TALLY_EMIT_DECIMAL_QUANTITY = False
+
+
+def _fmt_quantity(value):
+    """The quantity as the payload should carry it."""
+    from decimal import Decimal, InvalidOperation
+
+    if not TALLY_EMIT_DECIMAL_QUANTITY:
+        # Byte-for-byte what this emitted before migration 0058.
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+    try:
+        # Trailing zeros dropped: "2.5", not "2.500"; "3", not "3.000".
+        q = Decimal(str(value or 0)).normalize()
+        return str(q.quantize(Decimal(1)) if q == q.to_integral_value() else q)
+    except (InvalidOperation, TypeError, ValueError):
+        return 0
+
 
 def prepare_sync_data(analyzed_bill, organization, cache=None):
     """Build the simplified sync payload for Tally TCP.
@@ -3040,7 +3088,7 @@ def prepare_sync_data(analyzed_bill, organization, cache=None):
             # quantity does not equal its amount, which is the ordinary
             # case whenever a fractional quantity was truncated into
             # the integer field.
-            _line_qty = int(getattr(line, 'quantity', 0) or 0)
+            _line_qty = _fmt_quantity(getattr(line, 'quantity', 0))
             _line_disc = abs(_money(getattr(line, 'discount', 0)))
             if _line_disc == 0:
                 _line_price = _money(getattr(line, 'price', 0))

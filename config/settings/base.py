@@ -273,7 +273,16 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "waffle.middleware.WaffleMiddleware",
+    # CSP and Permissions-Policy for everything Django answers. The SPA's
+    # HTML comes from nginx and is covered by the server block instead —
+    # see docs/nginx_security_headers.conf.
+    "apps.common.security_headers.SecurityHeadersMiddleware",
 ]
+
+# Start the policy in report-only. A CSP that blocks something the admin
+# needs takes the admin down, and the way to learn what it needs is to
+# watch it report first.
+CSP_ENFORCE = env.bool("CSP_ENFORCE", default=False)
 
 # ------------------------------------------------------------
 # URLs & WSGI/ASGI
@@ -508,6 +517,15 @@ CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=False)
 # SimpleJWT (override lifetimes via env as needed)
 # ------------------------------------------------------------
 from datetime import timedelta
+
+# How long a password-reset link stays usable.
+#
+# Django's default is three days. A reset link is a bearer credential
+# for the account — it is sitting in an inbox that may be shared,
+# forwarded or backed up, and three days is a long time for that to stay
+# live. Two hours is enough for somebody to read their mail and still
+# short enough that a leaked message is usually stale.
+PASSWORD_RESET_TIMEOUT = env.int("PASSWORD_RESET_TIMEOUT", default=2 * 60 * 60)
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=env.int("JWT_ACCESS_MINUTES", default=30)),

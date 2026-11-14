@@ -591,7 +591,7 @@ def zoho_bill_detail_base(
     except bill_model.DoesNotExist:
         return Response({"detail": f"{label} bill not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
-        logger.error(f"[DEBUG] {label}_bill_detail_view - Unexpected error: {e}")
+        logger.debug(f"{label}_bill_detail_view - Unexpected error: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

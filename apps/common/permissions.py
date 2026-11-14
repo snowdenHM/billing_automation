@@ -138,6 +138,31 @@ class OrganizationAPIKeyOrBearerToken(BasePermission):
                 # checked separately or an expired key never stops working.
                 if api_key_obj and not api_key_obj.has_expired:
                     org_api_key = OrganizationAPIKey.objects.get(api_key=api_key_obj)
+
+                    # The key proves which organisation the caller is,
+                    # not which organisation they asked for. Those are
+                    # the same thing only if we check.
+                    #
+                    # This used to stamp ``request.organization`` and
+                    # return True without comparing it to the ``org_id``
+                    # in the URL. Views that resolve the org through
+                    # ``get_organization_from_request`` were saved by the
+                    # check inside it, but the ones that call
+                    # ``get_object_or_404(Organization, id=org_id)``
+                    # directly — the whole Tally config surface — took
+                    # the URL at its word. One client's API key could
+                    # read, overwrite and wipe another client's Tally
+                    # configuration.
+                    url_org_id = None
+                    if hasattr(view, "kwargs") and isinstance(view.kwargs, dict):
+                        url_org_id = view.kwargs.get("org_id")
+                    if url_org_id and str(org_api_key.organization_id) != str(url_org_id):
+                        logger.warning(
+                            "Organization API key for %s was used against org %s — refused.",
+                            org_api_key.organization_id, url_org_id,
+                        )
+                        return False
+
                     request.organization = org_api_key.organization
                     return True
                 if api_key_obj:

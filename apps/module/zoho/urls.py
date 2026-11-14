@@ -41,6 +41,8 @@ from .views import (
     tds_tcs_sync_view,
     customers_list_view,
     customers_sync_view,
+    vendor_credits_list_view,
+    vendor_credits_sync_view,
     # Expense bills
     expense_bills_list_view,
     expense_bill_upload_view,
@@ -117,6 +119,8 @@ urlpatterns = [
         path('vendors/sync/', vendors_sync_view, name='vendors_sync'),
         path('customers/', customers_list_view, name='customers_list'),
         path('customers/sync/', customers_sync_view, name='customers_sync'),
+        path('vendor-credits/', vendor_credits_list_view, name='vendor_credits_list'),
+        path('vendor-credits/sync/', vendor_credits_sync_view, name='vendor_credits_sync'),
         path('chart-of-accounts/', chart_of_accounts_list_view, name='chart_of_accounts_list'),
         path('chart-of-accounts/sync/', chart_of_accounts_sync_view, name='chart_of_accounts_sync'),
         path('taxes/', taxes_list_view, name='taxes_list'),

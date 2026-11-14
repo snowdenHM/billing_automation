@@ -33,6 +33,8 @@ from .sync import (
     tds_tcs_sync_view,
     customers_list_view,
     customers_sync_view,
+    vendor_credits_list_view,
+    vendor_credits_sync_view,
 )
 
 # Vendor bills
@@ -130,6 +132,8 @@ __all__ = [
     "tds_tcs_sync_view",
     "customers_list_view",
     "customers_sync_view",
+    "vendor_credits_list_view",
+    "vendor_credits_sync_view",
     # Vendor bills
     "vendor_bills_list_view",
     "vendor_bill_upload_view",

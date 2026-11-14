@@ -53,6 +53,12 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     # "django.middleware.clickjacking.XFrameOptionsMiddleware",  # Disabled for local PDF viewing
     "waffle.middleware.WaffleMiddleware",
+    # Mirrors base.py. This file redefines MIDDLEWARE wholesale rather
+    # than appending to it, so anything added there has to be added here
+    # too or it is simply absent in development — which is how a
+    # security header can look broken locally while working in
+    # production, or the reverse.
+    "apps.common.security_headers.SecurityHeadersMiddleware",
 ]
 
 

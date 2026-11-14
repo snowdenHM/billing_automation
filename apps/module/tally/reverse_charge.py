@@ -274,3 +274,49 @@ def purchase_rcm_blockers(analyzed_bill, organization):
             "ledger and cancel the credit out."
         )
     return reasons
+
+
+def sales_rcm_blockers(analyzed_bill, organization=None):
+    """Why this reverse-charge SALES invoice must not sync yet.
+
+    Returns a list of human-readable reasons, empty when it is safe.
+
+    The sales side is not the mirror of the purchase side. Under
+    s.9(3)/9(4) the recipient self-assesses the tax, so the supplier —
+    the client issuing this invoice — does **not** charge GST on it. The
+    invoice carries "Tax payable on reverse charge: Yes" and no output
+    tax, and the voucher is Debtor Dr / Sales Cr with no output-GST
+    rows.
+
+    So an invoice that is marked reverse charge *and* still carries
+    output GST is stating two incompatible things, and one of them is
+    wrong. Which one, only the person looking at the document can say:
+    either the RCM flag does not belong on this sale, or the tax does
+    not. Guessing would either overstate the client's output-tax
+    liability or understate it, and both are a GST return somebody has
+    to amend.
+
+    So this refuses and explains, rather than quietly dropping the tax.
+    """
+    if not getattr(analyzed_bill, "is_reverse_charge", False):
+        return []
+
+    reasons = []
+    taxes = {
+        name: _money(getattr(analyzed_bill, name, 0))
+        for name in ("igst", "cgst", "sgst")
+    }
+    charged = {k: v for k, v in taxes.items() if v != Decimal("0")}
+
+    if charged:
+        shown = ", ".join(
+            f"{k.upper()} {v}" for k, v in sorted(charged.items())
+        )
+        reasons.append(
+            "Reverse charge is on, but this invoice still charges output "
+            f"GST ({shown}). Under reverse charge the buyer self-assesses "
+            "the tax and the supplier does not charge it, so one of the "
+            "two is wrong: either clear the GST, or turn reverse charge "
+            "off. Posting it as it stands would overstate your output tax."
+        )
+    return reasons

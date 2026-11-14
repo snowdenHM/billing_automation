@@ -211,7 +211,11 @@ class JournalZohoBillAdmin(BaseOrgAdmin):
         if obj.selectBill_id:
             url = admin_change_url(obj.selectBill)
             label = obj.selectBill.billmunshiName or str(obj.selectBill_id)
-            return mark_safe(f'<a href="{url}">{label}</a>')
+            # format_html, not mark_safe: `label` is a bill number read
+            # off the document by OCR, so it is attacker-influenced. An
+            # invoice numbered "<script>…" would have executed in the
+            # admin of whoever opened this list.
+            return format_html('<a href="{}">{}</a>', url, label)
         return "-"
 
 
@@ -350,7 +354,11 @@ class VendorZohoBillAdmin(BaseOrgAdmin):
         if obj.selectBill_id:
             url = admin_change_url(obj.selectBill)
             label = obj.selectBill.billmunshiName or str(obj.selectBill_id)
-            return mark_safe(f'<a href="{url}">{label}</a>')
+            # format_html, not mark_safe: `label` is a bill number read
+            # off the document by OCR, so it is attacker-influenced. An
+            # invoice numbered "<script>…" would have executed in the
+            # admin of whoever opened this list.
+            return format_html('<a href="{}">{}</a>', url, label)
         return "-"
 
 
@@ -444,7 +452,11 @@ class ExpenseZohoBillAdmin(BaseOrgAdmin):
         if obj.selectBill_id:
             url = admin_change_url(obj.selectBill)
             label = obj.selectBill.billmunshiName or str(obj.selectBill_id)
-            return mark_safe(f'<a href="{url}">{label}</a>')
+            # format_html, not mark_safe: `label` is a bill number read
+            # off the document by OCR, so it is attacker-influenced. An
+            # invoice numbered "<script>…" would have executed in the
+            # admin of whoever opened this list.
+            return format_html('<a href="{}">{}</a>', url, label)
         return "-"
 
 
@@ -482,7 +494,11 @@ class ExpenseZohoProductAdmin(BaseOrgAdmin):
         if obj.zohoBill_id:
             url = admin_change_url(obj.zohoBill)
             label = obj.zohoBill.bill_no or str(obj.zohoBill_id)
-            return mark_safe(f'<a href="{url}">{label}</a>')
+            # format_html, not mark_safe: `label` is a bill number read
+            # off the document by OCR, so it is attacker-influenced. An
+            # invoice numbered "<script>…" would have executed in the
+            # admin of whoever opened this list.
+            return format_html('<a href="{}">{}</a>', url, label)
         return "-"
 
 
@@ -541,7 +557,11 @@ class VendorZohoConsolidatedProductAdmin(BaseOrgAdmin):
         if obj.zohoBill_id:
             url = admin_change_url(obj.zohoBill)
             label = obj.zohoBill.bill_no or str(obj.zohoBill_id)
-            return mark_safe(f'<a href="{url}">{label}</a>')
+            # format_html, not mark_safe: `label` is a bill number read
+            # off the document by OCR, so it is attacker-influenced. An
+            # invoice numbered "<script>…" would have executed in the
+            # admin of whoever opened this list.
+            return format_html('<a href="{}">{}</a>', url, label)
         return "-"
 
 

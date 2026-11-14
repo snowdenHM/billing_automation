@@ -102,12 +102,37 @@ def find_tally_vendor_ledger(company_name, organization, vendor_gst=None,
             logger.warning(f"No TallyConfig found for organization {organization.id}")
             return None
 
-        # Step 1: GST match
+        # Step 1: GST match — the party's own group first, always.
+        #
+        # ``gst_search_scope='all'`` used to search every ledger in the
+        # organisation straight away. The journal and payment vouchers
+        # ask for that, and a GSTIN is unique per registration, so it
+        # looked safe. It is not: a firm you both buy from and sell to —
+        # ordinary in Indian trade — has that same GSTIN on a ledger
+        # under Sundry Debtors *and* one under Sundry Creditors, and
+        # whichever the database returned first won. A payment matched
+        # to the debtor posts the money on the wrong side of the books.
+        #
+        # So the scoped set is tried first whatever the scope, and the
+        # wide search stays as the fallback it was meant to be: the
+        # journal really does reference ledgers outside the vendor
+        # group, and that still works.
         if vendor_gst and vendor_gst.strip():
-            gst_qs = vendor_ledgers if gst_search_scope == 'parents' else Ledger.objects.filter(organization=organization)
-            gst_match = gst_qs.filter(gst_in__iexact=vendor_gst.strip()).first()
+            _gst = vendor_gst.strip()
+            gst_match = vendor_ledgers.filter(gst_in__iexact=_gst).first()
+            if gst_match is None and gst_search_scope != 'parents':
+                gst_match = (
+                    Ledger.objects
+                    .filter(organization=organization, gst_in__iexact=_gst)
+                    .first()
+                )
+                if gst_match:
+                    logger.info(
+                        "GST matched outside the %s group: ledger %s",
+                        party_parents_field, gst_match.id,
+                    )
             if gst_match:
-                logger.info(f"Found vendor by GST match: {gst_match.name} (GST: {gst_match.gst_in})")
+                logger.info("Found party by GST match: ledger %s", gst_match.id)
                 return gst_match
 
         # A name match must not pick a ledger registered under a DIFFERENT
@@ -477,38 +502,46 @@ def find_coa_ledger(coa_name, organization):
         return None
 
 
+
+def _quantity_decimal(value):
+    """A quantity as stored: three decimal places, never float noise."""
+    from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+    try:
+        return Decimal(str(value)).quantize(
+            Decimal('0.001'), rounding=ROUND_HALF_UP
+        )
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal('0')
+
+
 def read_line_amounts(item, context=""):
     """Read one extracted line's price, quantity and amount.
 
-    ``TallyVendorAnalyzedProduct.quantity`` and its sales twin are
-    ``PositiveIntegerField``, so a fractional quantity — "1.5 kg",
-    "2.5 ltr", the ordinary case on an Indian invoice — cannot be
-    stored. The quantity that reaches Tally is therefore the truncated
-    one, and that is a known limitation recorded in a warning here.
+    The quantity columns were ``PositiveIntegerField`` until migration
+    0058, so "1.5 kg" — an ordinary line on an Indian invoice — could
+    not be stored and the figure that reached Tally was the truncated
+    one. They are ``DecimalField(decimal_places=3)`` now and the
+    quantity is kept as read.
 
-    What must NOT follow from it is a wrong amount. The fresh-analysis
-    path multiplied the price by the *float* quantity and kept the money
-    right; ``process_existing_analysis_data`` multiplied by the
-    truncated int, so simply re-analysing a bill turned a 2.5 x 100 line
-    from 250 into 200, with nothing on screen saying the total had
-    moved. The two paths are the same code now, so they cannot disagree
-    about the same document again.
+    Two things followed from the old column and are kept fixed here:
 
-    Returns ``(price, quantity_int, amount)`` — price and amount as
-    floats for the caller to round as it sees fit.
+    * The fresh-analysis path multiplied the price by the *float*
+      quantity and kept the money right; the re-analysis path
+      multiplied by the truncated int, so re-analysing a bill turned a
+      2.5 x 100 line from 250 into 200 with nothing on screen saying the
+      total had moved. Both paths are this function now.
+    * A negative quantity tripped the column's check constraint and took
+      the whole analysis down. It is clamped, loudly.
+
+    Returns ``(price, quantity, amount)`` — price and amount as floats
+    for the caller to round, quantity as a ``Decimal``.
     """
+    from decimal import Decimal
+
     price = safe_float_convert(item.get('price', 0))
     quantity_float = safe_float_convert(item.get('quantity', 0))
-    quantity_int = safe_int_convert(item.get('quantity', 0))
-
-    if quantity_float and abs(quantity_float - quantity_int) > 0.001:
-        logger.warning(
-            "Fractional quantity %s truncated to %d for item %r%s — "
-            "line amount preserved via price*float(qty).",
-            quantity_float, quantity_int,
-            item.get('description', 'unknown'),
-            f" ({context})" if context else "",
-        )
+    quantity = _quantity_decimal(quantity_float)
 
     # The column carries a Postgres check constraint, so a negative
     # quantity does not store badly — it raises IntegrityError and takes
@@ -519,14 +552,13 @@ def read_line_amounts(item, context=""):
     # The quantity is clamped and the amount keeps whatever sign the
     # arithmetic gave it, because the money is the part that has to stay
     # right. The warning is what makes the dropped sign findable.
-    if quantity_int < 0:
+    if quantity < 0:
         logger.warning(
-            "Negative quantity %s on item %r%s — stored as 0 because the "
-            "column is a PositiveIntegerField. The line amount keeps its "
-            "sign; the quantity does not.",
-            quantity_int, item.get('description', 'unknown'),
+            "Negative quantity %s on item %r%s — stored as 0. The line "
+            "amount keeps its sign; the quantity does not.",
+            quantity, item.get('description', 'unknown'),
             f" ({context})" if context else "",
         )
-        quantity_int = 0
+        quantity = Decimal('0')
 
-    return price, quantity_int, price * quantity_float
+    return price, quantity, price * quantity_float

@@ -927,7 +927,14 @@ class TallyVendorAnalyzedProduct(BaseOrgModel):
     taxes = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
 
     price = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
-    quantity = models.PositiveIntegerField(blank=True, null=True, default=0)
+    quantity = models.DecimalField(
+        max_digits=20, decimal_places=3, null=True, blank=True, default=0,
+        help_text=(
+            "As printed on the bill. Decimal because "
+            "\"2.5 kg\" is an ordinary line on an Indian invoice; this "
+            "column used to be a PositiveIntegerField and truncated it."
+        ),
+    )
     unit = models.CharField(
         max_length=24, blank=True, default="",
         help_text="Unit of measure as printed on the bill (BAGS, NOS, KG...).",
@@ -1377,11 +1384,12 @@ class TallyVendorConsolidatedProduct(BaseOrgModel):
         null=True,
         help_text="Consolidated rate/price"
     )
-    quantity = models.PositiveIntegerField(
-        blank=True,
-        null=True,
-        default=1,
-        help_text="Usually 1 for consolidated items"
+    quantity = models.DecimalField(
+        max_digits=20, decimal_places=3, null=True, blank=True, default=1,
+        help_text=(
+            "Usually 1 for consolidated items. Decimal rather than integer "
+            "so a consolidated line can carry a real measured quantity."
+        ),
     )
     amount = models.DecimalField(
         max_digits=50,
@@ -2485,7 +2493,14 @@ class TallySalesAnalyzedProduct(BaseOrgModel):
     taxes = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
 
     price = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
-    quantity = models.PositiveIntegerField(blank=True, null=True, default=0)
+    quantity = models.DecimalField(
+        max_digits=20, decimal_places=3, null=True, blank=True, default=0,
+        help_text=(
+            "As printed on the bill. Decimal because "
+            "\"2.5 kg\" is an ordinary line on an Indian invoice; this "
+            "column used to be a PositiveIntegerField and truncated it."
+        ),
+    )
     unit = models.CharField(
         max_length=24, blank=True, default="",
         help_text="Unit of measure as printed on the bill (BAGS, NOS, KG...).",
@@ -2567,7 +2582,13 @@ class TallySalesConsolidatedProduct(BaseOrgModel):
     taxes = models.ForeignKey(Ledger, on_delete=models.CASCADE, blank=True, null=True)
 
     price = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
-    quantity = models.PositiveIntegerField(blank=True, null=True, default=1)
+    quantity = models.DecimalField(
+        max_digits=20, decimal_places=3, null=True, blank=True, default=1,
+        help_text=(
+            "Usually 1 for consolidated items. Decimal rather than integer "
+            "so a consolidated line can carry a real measured quantity."
+        ),
+    )
     amount = models.DecimalField(max_digits=50, decimal_places=2, blank=True, null=True)
 
     product_gst = models.CharField(max_length=50, choices=GST_CHOICES, blank=True, null=True)

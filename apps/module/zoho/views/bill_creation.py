@@ -131,7 +131,7 @@ def lookup_vendor_from_analysis(relevant_data, organization, *, use_fallback=Fal
                 vendor = find_zoho_vendor_ledger_enhanced(company_name, organization, vendor_gst)
                 logger.info(f"✅ Found vendor using enhanced lookup - {company_name}: {vendor}")
             except Exception as e:
-                logger.warning(f"Enhanced vendor lookup failed for {company_name}: {str(e)}")
+                logger.warning("Enhanced vendor lookup failed: %s", e)
                 vendor = ZohoVendor.objects.annotate(
                     lower_name=Lower('companyName')
                 ).filter(lower_name=company_name.lower()).first()
@@ -141,7 +141,7 @@ def lookup_vendor_from_analysis(relevant_data, organization, *, use_fallback=Fal
             if vendor:
                 logger.info(f"✅ Matched vendor: {vendor.companyName}")
             else:
-                logger.warning(f"⚠️ No vendor match found for: {company_name}")
+                logger.warning("No vendor matched for this bill's supplier name.")
 
     return vendor, company_name, vendor_gst
 

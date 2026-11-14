@@ -15,9 +15,13 @@ from apps.common import roles
 from apps.common.permissions import HasOrgPermission, requires
 
 from apps.common.pagination import DefaultPagination
-from ..models import ZohoVendor, ZohoCustomer, ZohoChartOfAccount, ZohoTaxes, ZohoTdsTcs
+from ..models import (
+    ZohoVendor, ZohoCustomer, ZohoChartOfAccount, ZohoTaxes, ZohoTdsTcs,
+    ZohoVendorCredit,
+)
 from ..serializers.settings import (
     ZohoVendorSerializer,
+    ZohoVendorCreditsSerializer,
     ZohoCustomerSerializer,
     ZohoChartOfAccountSerializer,
     ZohoTaxesSerializer,
@@ -205,6 +209,92 @@ def vendors_sync_view(request, org_id):
     except Exception as e:
         logger.error(f"Vendors sync failed: {str(e)}")
         return _sync_error_response(e, "vendors")
+
+
+# ---------------------------------------------------------------------------
+# Vendor credits
+#
+# The page, the route, the model and the serializer for these all
+# existed; the two views did not, so the screen called
+# ``zoho/<org>/vendor-credits/`` and got a 404 every time. It was hidden
+# from the menu rather than finished.
+# ---------------------------------------------------------------------------
+
+
+@extend_schema(responses=ZohoVendorCreditsSerializer(many=True), tags=["Zoho Ops"], methods=["GET"])
+@requires(roles.VIEW_BILLS)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, HasOrgPermission])
+def vendor_credits_list_view(request, org_id):
+    """List the vendor credit notes synced from Zoho Books."""
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    credits = (
+        ZohoVendorCredit.objects
+        .filter(organization=organization)
+        .order_by("-created_at")
+    )
+    paginator = DefaultPagination()
+    paginated = paginator.paginate_queryset(credits, request)
+    if paginated is not None:
+        return paginator.get_paginated_response(
+            ZohoVendorCreditsSerializer(paginated, many=True).data
+        )
+    return Response({
+        "count": credits.count(), "next": None, "previous": None,
+        "results": ZohoVendorCreditsSerializer(credits, many=True).data,
+    })
+
+
+@extend_schema(responses={"200": {"detail": "Vendor credits synced successfully"}},
+               tags=["Zoho Ops"], methods=["POST"])
+@requires(roles.MANAGE_MASTERS)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, HasOrgPermission])
+def vendor_credits_sync_view(request, org_id):
+    """Pull vendor credit notes from Zoho Books.
+
+    Same shape as every other master sync here: page through the Zoho
+    collection, upsert on the Zoho id, report what changed.
+    """
+    organization = get_organization_from_request(request, org_id=org_id)
+    if not organization:
+        return Response({"detail": "Organization not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        credentials = get_zoho_credentials(organization)
+        rows, truncated = fetch_all_zoho_pages(
+            credentials, "vendorcredits", "vendorcredits",
+        )
+
+        created_count = updated_count = 0
+        for row in rows:
+            credit_id = row.get("vendor_credit_id")
+            if not credit_id:
+                continue
+            created = _upsert_master(
+                ZohoVendorCredit, organization,
+                {"vendor_credit_id": str(credit_id)},
+                {
+                    "vendor_id": str(row.get("vendor_id") or ""),
+                    "vendor_name": row.get("vendor_name") or "",
+                    "vendor_credit_number": row.get("vendor_credit_number") or "",
+                },
+            )
+            if created:
+                created_count += 1
+            else:
+                updated_count += 1
+
+        message = f"Vendor credits synced: {created_count} added, {updated_count} updated"
+        if truncated:
+            message += " (more pages remain — run the sync again)"
+        return Response({"detail": message,
+                         "created": created_count, "updated": updated_count})
+    except ZohoApiError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
 
 # ---------------------------------------------------------------------------

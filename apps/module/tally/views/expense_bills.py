@@ -230,7 +230,19 @@ def process_expense_analysis_data(bill, json_data, organization):
         if vendor_ledger:
             logger.info(f"✅ Automatically selected vendor ledger: {vendor_ledger.name} (ID: {vendor_ledger.id})")
         else:
-            logger.warning(f"⚠️ No vendor ledger found for: {company_name} (GST: {vendor_gst_number})")
+            # The GSTIN is the matching key, so it is the thing somebody
+            # debugging this wants — but it is also the vendor's tax
+            # identity, and this line is the last one on the Tally side
+            # still reaching the production log with a party's details
+            # on it. Logged masked: enough to recognise which GSTIN was
+            # tried, not enough to be a record of who this client buys
+            # from.
+            _gst = str(vendor_gst_number or "")
+            _gst_masked = f"{_gst[:2]}…{_gst[-2:]}" if len(_gst) >= 6 else "none"
+            logger.warning(
+                "No vendor ledger matched for bill %s (GSTIN %s)",
+                getattr(bill, "id", "unknown"), _gst_masked,
+            )
 
         # Determine GST type with safe conversion and proper decimal rounding
         if igst_val > 0:

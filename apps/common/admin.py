@@ -326,7 +326,11 @@ class FKLinkMixin:
         url = admin_change_url(related)
         label = getattr(related, label_attr, None) if label_attr else None
         label = label or str(fk_id)
-        return mark_safe(f'<a href="{url}">{label}</a>')
+        # format_html, not mark_safe: `label_attr` names an arbitrary
+        # model field, and plenty of them hold text read off a client's
+        # document. One of those containing markup would have run in the
+        # admin of whoever opened the list.
+        return format_html('<a href="{}">{}</a>', url, label)
 
 
 @admin.register(BillActivity)
