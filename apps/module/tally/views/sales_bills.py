@@ -81,6 +81,7 @@ from apps.common.services.duplicate_detection import check_duplicate_bill, updat
 from apps.common.services.pdf_processing import split_pdf_to_bills
 from apps.common.services.bill_analysis import analyze_bill_file, get_sales_bill_prompt
 from apps.organizations.models import Organization
+from .helpers import read_line_amounts
 from ..models import (
     TallySalesBill,
     TallySalesAnalyzedBill,
@@ -422,6 +423,34 @@ def process_analysis_data(bill, json_data, organization):
                 # from that rate — see the note in the vendor-bill view and
                 # apps/common/services/line_gst.py. Splitting the bill's tax
                 # by amount and back-deriving the rate taxed exempt lines.
+                # What this customer's wording has meant before. One
+                # query for the whole bill; empty when the customer is
+                # new or nobody has taught us anything yet.
+                #
+                # The sales side had none of this: the stock item was a
+                # manual pick on every line of every invoice, even for a
+                # customer billed the same goods every week. The purchase
+                # side has had it since the item-memory service was
+                # written — this is the same service, same table, scoped
+                # to the customer ledger instead of the vendor one.
+                _known_items = {}
+                try:
+                    from apps.common.services.item_memory import (
+                        normalise_description, recall_item_choices,
+                    )
+                    _customer_ledger = getattr(analyzed_bill, 'customer', None)
+                    if _customer_ledger is not None:
+                        _known_items = recall_item_choices(
+                            organization=organization,
+                            party=_customer_ledger,
+                            descriptions=[
+                                i.get('description') for i in items
+                                if isinstance(i, dict)
+                            ],
+                        )
+                except Exception as _exc:
+                    logger.warning("Item recall skipped (%s)", _exc)
+
                 _hsn_summary = relevant_data.get('hsn_summary') or []
                 _gst_lines = []
                 for _it in items:
@@ -495,22 +524,12 @@ def process_analysis_data(bill, json_data, organization):
                 )
                 for idx, item in enumerate(items, 1):
                     if isinstance(item, dict):
-                        # Handle decimal precision for product amounts.
-                        # The DB field is PositiveIntegerField so quantity
-                        # itself must be an int; use a float when computing
-                        # the line amount so a fractional OCR quantity
-                        # ("1.5 kg") doesn't silently vanish from the total.
-                        price_val = safe_float_convert(item.get('price', 0))
-                        quantity_float = safe_float_convert(item.get('quantity', 0))
-                        quantity_val = safe_int_convert(item.get('quantity', 0))
-                        if quantity_float and abs(quantity_float - quantity_val) > 0.001:
-                            logger.warning(
-                                "Fractional quantity %s truncated to %d for item %r — "
-                                "line amount preserved via price*float(qty).",
-                                quantity_float, quantity_val,
-                                item.get('description', 'unknown'),
-                            )
-                        amount_val = price_val * quantity_float
+                        # Price, quantity and amount are read in one
+                        # place for every path, so the fresh analysis and
+                        # the re-analysis cannot compute a different
+                        # amount for the same line.
+                        price_val, quantity_val, amount_val = read_line_amounts(
+                            item, context="fresh analysis")
 
                         # Round to 2 decimal places
                         price_rounded = Decimal(str(price_val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
@@ -539,6 +558,18 @@ def process_analysis_data(bill, json_data, organization):
                         # Format GST rate to match choices using normalization
                         formatted_gst_rate = normalize_product_gst(gst_rate)
 
+                        # What this customer's wording has meant before,
+                        # if anything. The remembered line ledger wins
+                        # over the rate-based guess: the guess is a
+                        # heuristic, this is an answer a person gave on
+                        # this exact wording for this exact customer,
+                        # with the invoice in front of them.
+                        _mapped = _known_items.get(
+                            normalise_description(item.get('description'))
+                        )
+                        if _mapped is not None and _mapped.ledger_id:
+                            item_ledger = _mapped.ledger
+
                         product = TallySalesAnalyzedProduct(
                             sales_bill_analyzed=analyzed_bill,
                             item_details=str(item.get('description', '')),
@@ -547,6 +578,16 @@ def process_analysis_data(bill, json_data, organization):
                             amount=amount_rounded,
                             unit=str(item.get('unit') or '')[:24],
                             hsn=str(item.get('hsn') or '')[:16],
+                            # Pre-fill the stock item when this customer's
+                            # wording has been resolved before. Exact on
+                            # the normalised key only — a wrong item is
+                            # worse than an empty one, because nobody
+                            # re-reads a field that looks filled.
+                            item_name=(
+                                _mapped.stock_item.name
+                                if _mapped is not None and _mapped.stock_item_id
+                                else None
+                            ),
                             taxes=item_ledger,  # Line item ledger, scoped by sales_coa_parents
                             product_gst=formatted_gst_rate,   # 🎯 Auto-assigned GST rate with % format
                             igst=item_igst_rounded,  # 🎯 Individual item IGST
@@ -1030,9 +1071,14 @@ def process_existing_analysis_data(bill, existing_data, organization):
             if isinstance(items, list):
                 for item in items:
                     if isinstance(item, dict):
-                        price = round(safe_float_convert(item.get('price', 0)), 2)
-                        quantity = safe_int_convert(item.get('quantity', 0))
-                        amount = round(price * quantity, 2)
+                        # This used to multiply by the truncated integer
+                        # quantity while the fresh-analysis path used the
+                        # float, so re-analysing a bill with a fractional
+                        # quantity quietly lowered the line amount.
+                        _p, quantity, _a = read_line_amounts(
+                            item, context="re-analysis")
+                        price = round(_p, 2)
+                        amount = round(_a, 2)
                         total_products_amount += amount
 
                         product_instances.append({
@@ -1787,14 +1833,14 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                                 organization=organization,
                                 item_name=consolidated_product_data.get('item_name') or f'Consolidated Item {idx + 1}',
                                 item_details=consolidated_product_data.get('item_details') or '',
-                                quantity=int(consolidated_product_data.get('quantity', 1)),
-                                price=float(consolidated_product_data.get('price', 0) or consolidated_product_data.get('rate', 0)),
-                                amount=float(consolidated_product_data.get('amount', 0)),
+                                quantity=max(_to_int(consolidated_product_data.get('quantity'), 1), 0),
+                                price=safe_float_convert(consolidated_product_data.get('price') or consolidated_product_data.get('rate'), 0.0),
+                                amount=safe_float_convert(consolidated_product_data.get('amount'), 0.0),
                                 taxes=tax_ledger,  # This should save the tax ledger
                                 product_gst=consolidated_product_data.get('product_gst') or '',
-                                igst=float(consolidated_product_data.get('igst', 0)),
-                                cgst=float(consolidated_product_data.get('cgst', 0)),
-                                sgst=float(consolidated_product_data.get('sgst', 0)),
+                                igst=safe_float_convert(consolidated_product_data.get('igst'), 0.0),
+                                cgst=safe_float_convert(consolidated_product_data.get('cgst'), 0.0),
+                                sgst=safe_float_convert(consolidated_product_data.get('sgst'), 0.0),
                                 original_items_count=consolidated_product_data.get('original_items_count', 1),
                                 consolidation_notes='Created from frontend verification'
                             )
@@ -1869,14 +1915,14 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
                                 'organization': organization,
                                 'item_name': consolidated_product_from_payload.get('item_name', 'Consolidated Items'),
                                 'item_details': consolidated_product_from_payload.get('item_details', ''),
-                                'quantity': int(consolidated_product_from_payload.get('quantity', 1)),
-                                'price': float(consolidated_product_from_payload.get('price', 0) or consolidated_product_from_payload.get('rate', 0)),
-                                'amount': float(consolidated_product_from_payload.get('amount', 0)),
+                                'quantity': max(_to_int(consolidated_product_from_payload.get('quantity'), 1), 0),
+                                'price': safe_float_convert(consolidated_product_from_payload.get('price') or consolidated_product_from_payload.get('rate'), 0.0),
+                                'amount': safe_float_convert(consolidated_product_from_payload.get('amount'), 0.0),
                                 'taxes': tax_ledger,
                                 'product_gst': consolidated_product_from_payload.get('product_gst', ''),
-                                'igst': float(consolidated_product_from_payload.get('igst', 0)),
-                                'cgst': float(consolidated_product_from_payload.get('cgst', 0)),
-                                'sgst': float(consolidated_product_from_payload.get('sgst', 0)),
+                                'igst': safe_float_convert(consolidated_product_from_payload.get('igst'), 0.0),
+                                'cgst': safe_float_convert(consolidated_product_from_payload.get('cgst'), 0.0),
+                                'sgst': safe_float_convert(consolidated_product_from_payload.get('sgst'), 0.0),
                                 'original_items_count': consolidated_product_from_payload.get('original_items_count', 1),
                                 'consolidation_notes': "Updated via verification (fallback from products array)"
                             }
@@ -2220,6 +2266,68 @@ def update_analyzed_products(analyzed_bill, line_items, organization):
         f"{len(line_items or []) - len(updated_ids)} created, "
         f"{deletion_count} deleted (consolidate mode: {getattr(analyzed_bill, 'consolidate', False)})"
     )
+
+    _learn_item_choices(analyzed_bill, organization)
+
+
+def _learn_item_choices(analyzed_bill, organization):
+    """Remember which stock item this customer's wording turned out to mean.
+
+    The sales twin of the purchase-side function of the same name. The
+    operator has just answered, on this invoice, the question item
+    auto-match could not — and the next invoice to the same customer
+    arrives with its items already picked.
+
+    Only the pairs the operator actually resolved are learned: a line
+    with no stock item chosen teaches nothing. Never raises — failing to
+    learn must not fail the verify the user asked for.
+    """
+    try:
+        from apps.common.services.item_memory import remember_item_choice
+        from ..models import StockItem
+
+        customer = getattr(analyzed_bill, "customer", None)
+        if customer is None:
+            return
+
+        items_by_name = {}
+        learned = 0
+        for product in analyzed_bill.products.all():
+            description = (product.item_details or "").strip()
+            if not description:
+                continue
+
+            # Either half is worth remembering on its own. Requiring the
+            # stock item taught nothing from the common case where
+            # inventory sync is off and the operator only ever picks the
+            # line ledger — which is the pick they then had to repeat on
+            # every bill, for ever.
+            name = (product.item_name or "").strip()
+            stock_item = None
+            if name:
+                if name not in items_by_name:
+                    items_by_name[name] = StockItem.objects.filter(
+                        organization=organization, name=name
+                    ).first()
+                stock_item = items_by_name[name]
+
+            ledger = getattr(product, "taxes", None)
+            if stock_item is None and ledger is None:
+                continue
+
+            remember_item_choice(
+                organization=organization, party=customer,
+                description=description, stock_item=stock_item,
+                ledger=ledger,
+            )
+            learned += 1
+
+        if learned:
+            logger.info(
+                "Learned %d item mapping(s) for customer %s", learned, customer
+            )
+    except Exception as exc:
+        logger.warning("Item-mapping learning skipped (%s)", exc)
 
 
 def get_structured_bill_data(analyzed_bill, organization):

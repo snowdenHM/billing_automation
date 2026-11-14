@@ -19,6 +19,23 @@ from apps.organizations.models import Organization
 from decimal import Decimal, InvalidOperation
 
 from ..models import Ledger, ParentLedger, TallyConfig, GstRateLedgerMapping
+
+
+def parent_group_fields():
+    """Every ParentLedger group on TallyConfig, read from the model.
+
+    Three places in this file used to carry their own copy of this list
+    and all three fell behind the model: the two prefetch lists cost an
+    extra query per missing group, and the one in
+    ``create_or_update_tally_config`` quietly discarded four groups'
+    worth of saved configuration while answering 200.
+    """
+    return [
+        field.name
+        for field in TallyConfig._meta.many_to_many
+        if field.related_model is ParentLedger
+    ]
+
 from ..serializers import (
     LedgerSerializer,
     TallyConfigSerializer,
@@ -43,24 +60,7 @@ def get_tally_config(request, org_id):
     try:
         organization = get_object_or_404(Organization, id=org_id)
 
-        # Prefetch is tolerant of not-yet-migrated columns: the M2Ms
-        # cess/discount/freight_parents were added in migration 0038.
-        # If that migration hasn't been applied yet in the deployed env,
-        # skip those fields so the endpoint still serves the rest.
-        prefetch_fields = [
-            "igst_parents",
-            "cgst_parents",
-            "sgst_parents",
-            "vendor_parents",
-            "chart_of_accounts_parents",
-            "chart_of_accounts_expense_parents",
-            "tds_parents",
-            "payment_parents",
-            "round_off_parents",
-        ]
-        for _optional in ("cess_parents", "discount_parents", "freight_parents"):
-            if hasattr(TallyConfig, _optional):
-                prefetch_fields.append(_optional)
+        prefetch_fields = parent_group_fields()
 
         tally_config = (
             TallyConfig.objects.filter(organization=organization)
@@ -109,21 +109,19 @@ def create_or_update_tally_config(request, org_id):
     try:
         organization = get_object_or_404(Organization, id=org_id)
 
-        parent_fields = [
-            "igst_parents",
-            "cgst_parents",
-            "sgst_parents",
-            "vendor_parents",
-            "chart_of_accounts_parents",
-            "chart_of_accounts_expense_parents",
-            "tds_parents",
-            "payment_parents",
-            "round_off_parents",
-        ]
-        # Optional — only present after migration 0038 is applied.
-        for _optional in ("cess_parents", "discount_parents", "freight_parents"):
-            if hasattr(TallyConfig, _optional):
-                parent_fields.append(_optional)
+        # Every parent-group field on the model, read from the model
+        # itself rather than listed here by hand.
+        #
+        # The hand-written list fell four fields behind: customer_parents,
+        # sales_coa_parents, receipt_parents and rcm_parents were added for
+        # the sales and receipt vouchers and never added here. The save
+        # still answered 200 with "updated successfully", so the setup page
+        # showed a success toast, re-read the config, and displayed the same
+        # empty groups it started with. Nothing in the logs said otherwise.
+        #
+        # Deriving the list means a new ParentLedger group is saveable the
+        # moment it exists, and this cannot drift again.
+        parent_fields = parent_group_fields()
 
         for field in parent_fields:
             if field in request.data:
@@ -226,17 +224,7 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         organization = self._get_organization()
-        # See get_tally_config: cess/discount/freight_parents may not
-        # exist yet if migration 0038 isn't applied on this env.
-        prefetch_fields = [
-            "igst_parents", "cgst_parents", "sgst_parents",
-            "vendor_parents", "chart_of_accounts_parents",
-            "chart_of_accounts_expense_parents",
-            "tds_parents", "payment_parents", "round_off_parents",
-        ]
-        for _optional in ("cess_parents", "discount_parents", "freight_parents"):
-            if hasattr(TallyConfig, _optional):
-                prefetch_fields.append(_optional)
+        prefetch_fields = parent_group_fields()
         return (
             TallyConfig.objects.filter(organization=organization)
             .prefetch_related(*prefetch_fields)

@@ -45,11 +45,20 @@ def _parse_corners(raw):
         return None
     out = []
     for p in raw:
-        if isinstance(p, dict):
-            out.append((float(p.get("x", 0)), float(p.get("y", 0))))
-        elif isinstance(p, (list, tuple)) and len(p) >= 2:
-            out.append((float(p[0]), float(p[1])))
-        else:
+        # Every other malformed shape returns None and lets the caller
+        # fall back to the whole image. These two branches raised
+        # instead — ``float(None)`` on a corner sent as {"x": null}, or
+        # a coordinate that arrived as a string — and the call sits
+        # outside the view's try block, so that surfaced as a 500 on a
+        # scan upload rather than an ignored crop.
+        try:
+            if isinstance(p, dict):
+                out.append((float(p.get("x", 0) or 0), float(p.get("y", 0) or 0)))
+            elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                out.append((float(p[0]), float(p[1])))
+            else:
+                return None
+        except (TypeError, ValueError):
             return None
     return out
 

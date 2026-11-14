@@ -11,6 +11,7 @@ from rest_framework.response import Response
 
 from apps.common.permissions import OrganizationAPIKeyOrBearerToken  # noqa: F401 – re-exported
 from apps.common.utils import normalize_company_name, calculate_string_similarity
+from apps.common.converters import safe_float_convert, safe_int_convert
 
 logger = logging.getLogger(__name__)
 
@@ -457,3 +458,58 @@ def find_coa_ledger(coa_name, organization):
     except Exception as e:
         logger.error(f"Error finding COA ledger: {str(e)}")
         return None
+
+
+def read_line_amounts(item, context=""):
+    """Read one extracted line's price, quantity and amount.
+
+    ``TallyVendorAnalyzedProduct.quantity`` and its sales twin are
+    ``PositiveIntegerField``, so a fractional quantity — "1.5 kg",
+    "2.5 ltr", the ordinary case on an Indian invoice — cannot be
+    stored. The quantity that reaches Tally is therefore the truncated
+    one, and that is a known limitation recorded in a warning here.
+
+    What must NOT follow from it is a wrong amount. The fresh-analysis
+    path multiplied the price by the *float* quantity and kept the money
+    right; ``process_existing_analysis_data`` multiplied by the
+    truncated int, so simply re-analysing a bill turned a 2.5 x 100 line
+    from 250 into 200, with nothing on screen saying the total had
+    moved. The two paths are the same code now, so they cannot disagree
+    about the same document again.
+
+    Returns ``(price, quantity_int, amount)`` — price and amount as
+    floats for the caller to round as it sees fit.
+    """
+    price = safe_float_convert(item.get('price', 0))
+    quantity_float = safe_float_convert(item.get('quantity', 0))
+    quantity_int = safe_int_convert(item.get('quantity', 0))
+
+    if quantity_float and abs(quantity_float - quantity_int) > 0.001:
+        logger.warning(
+            "Fractional quantity %s truncated to %d for item %r%s — "
+            "line amount preserved via price*float(qty).",
+            quantity_float, quantity_int,
+            item.get('description', 'unknown'),
+            f" ({context})" if context else "",
+        )
+
+    # The column carries a Postgres check constraint, so a negative
+    # quantity does not store badly — it raises IntegrityError and takes
+    # the whole analysis down with it. A line reading "LESS: RETURN 2
+    # PCS" is ordinary on an invoice, so this is reachable from a real
+    # document, and losing the bill is worse than losing the sign.
+    #
+    # The quantity is clamped and the amount keeps whatever sign the
+    # arithmetic gave it, because the money is the part that has to stay
+    # right. The warning is what makes the dropped sign findable.
+    if quantity_int < 0:
+        logger.warning(
+            "Negative quantity %s on item %r%s — stored as 0 because the "
+            "column is a PositiveIntegerField. The line amount keeps its "
+            "sign; the quantity does not.",
+            quantity_int, item.get('description', 'unknown'),
+            f" ({context})" if context else "",
+        )
+        quantity_int = 0
+
+    return price, quantity_int, price * quantity_float

@@ -3026,6 +3026,13 @@ class ItemDescriptionMapping(BaseOrgModel):
     Vendors send the same descriptions month after month, so coverage
     gets high within one billing cycle.
 
+    The same row also remembers which line ledger the operator posted
+    that wording to. That was picked by a rate-based heuristic on every
+    bill, and an operator who corrected it had to correct it again the
+    next month, because nothing learned from the correction. Either half
+    may be absent: a line can have a ledger and no stock item, or the
+    reverse, and both are worth remembering on their own.
+
     Scoped to (organisation, vendor, normalised description) on purpose.
     Two vendors use the same words for different goods, and one client's
     mapping must never reach another's.
@@ -3047,6 +3054,17 @@ class ItemDescriptionMapping(BaseOrgModel):
     stock_item = models.ForeignKey(
         "tally.StockItem", on_delete=models.CASCADE,
         related_name="description_mappings",
+        null=True, blank=True,
+        help_text="The stock item this wording means, when one was chosen.",
+    )
+    ledger = models.ForeignKey(
+        Ledger, on_delete=models.SET_NULL,
+        related_name="item_description_mappings_as_line_ledger",
+        null=True, blank=True,
+        help_text=(
+            "The line ledger the operator posted this wording to. Only the "
+            "purchase/sales account — never a party or tax ledger."
+        ),
     )
     hit_count = models.PositiveIntegerField(default=1)
     last_used_at = models.DateTimeField(auto_now=True)
@@ -3061,10 +3079,19 @@ class ItemDescriptionMapping(BaseOrgModel):
                 fields=["organization", "vendor", "description_key"],
                 name="uniq_item_mapping_per_vendor_description",
             ),
+            # A row that remembers neither is a row that teaches nothing.
+            models.CheckConstraint(
+                check=(
+                    models.Q(stock_item__isnull=False)
+                    | models.Q(ledger__isnull=False)
+                ),
+                name="item_mapping_remembers_something",
+            ),
         ]
         indexes = [
             models.Index(fields=["organization", "vendor", "description_key"]),
         ]
 
     def __str__(self):
-        return f"{self.description_sample or self.description_key} -> {self.stock_item}"
+        target = self.stock_item or self.ledger
+        return f"{self.description_sample or self.description_key} -> {target}"
