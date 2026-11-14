@@ -191,3 +191,83 @@ class TallyConfigParentSaveTests(APITestCase):
         )
         config = TallyConfig.objects.get(organization=self.org)
         self.assertEqual(config.customer_parents.count(), 1)
+
+
+class AdjustmentLedgerPlacementTests(APITestCase):
+    """A configured adjustment group must actually be used.
+
+    ``discount_parents``, ``cess_parents`` and ``freight_parents``
+    arrived in migration 0038. The config endpoint saved them, the setup
+    page showed them, the signals seeded them — and nothing read them.
+    ``find_or_create_tally_tax_ledger`` still sent every adjustment to
+    ``chart_of_accounts_parents``, so an operator who set "Discount
+    ledgers -> Indirect Expenses" watched a quick-created discount
+    ledger land under Purchase Accounts anyway.
+
+    The chart-of-accounts group stays as the fallback, so an
+    organisation that never configured these keeps today's placement.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            email="adjust@tally.test", password="x-test-pass-123",
+        )
+        cls.org = Organization.objects.create(
+            name="Adjust Org", owner=cls.user, created_by=cls.user,
+        )
+        OrgMembership.objects.create(
+            organization=cls.org, user=cls.user, role=OrgMembership.ADMIN,
+        )
+        cls.purchase = ParentLedger.objects.create(
+            organization=cls.org, parent="Purchase Accounts",
+        )
+        cls.indirect = ParentLedger.objects.create(
+            organization=cls.org, parent="Indirect Expenses",
+        )
+
+    def config(self, **groups):
+        cfg, _ = TallyConfig.objects.get_or_create(organization=self.org)
+        for name, parent in groups.items():
+            getattr(cfg, name).set([parent] if parent else [])
+        return cfg
+
+    def place(self, name, tax_type):
+        from apps.module.tally.views.helpers import find_or_create_tally_tax_ledger
+
+        ledger = find_or_create_tally_tax_ledger(name, tax_type, self.org)
+        return ledger.parent.parent if ledger and ledger.parent else None
+
+    def test_a_configured_adjustment_group_is_honoured(self):
+        self.config(
+            chart_of_accounts_parents=self.purchase,
+            discount_parents=self.indirect,
+            cess_parents=self.indirect,
+            freight_parents=self.indirect,
+        )
+        for tax_type in ("DISCOUNT", "CESS", "FREIGHT"):
+            self.assertEqual(
+                self.place(f"PROBE {tax_type}", tax_type), "Indirect Expenses",
+                f"{tax_type} ignored its configured group",
+            )
+
+    def test_an_unconfigured_group_keeps_the_old_placement(self):
+        """Nobody who never set these should see their books move."""
+        self.config(
+            chart_of_accounts_parents=self.purchase,
+            discount_parents=None,
+            cess_parents=None,
+            freight_parents=None,
+        )
+        for tax_type in ("DISCOUNT", "CESS", "FREIGHT"):
+            self.assertEqual(
+                self.place(f"FALLBACK {tax_type}", tax_type), "Purchase Accounts",
+                f"{tax_type} moved for an organisation that configured nothing",
+            )
+
+    def test_the_other_types_are_unaffected(self):
+        self.config(
+            chart_of_accounts_parents=self.purchase,
+            discount_parents=self.indirect,
+        )
+        self.assertEqual(self.place("PROBE COA", "COA"), "Purchase Accounts")

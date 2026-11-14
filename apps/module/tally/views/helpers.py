@@ -398,21 +398,38 @@ def find_or_create_tally_tax_ledger(ledger_name, tax_type, organization):
                 # purchase ones; without this a sales ledger created on
                 # the fly lands under Purchase Accounts.
                 'SALES': tally_config.sales_coa_parents,
-                # Adjustments (discount/cess/freight/other) don't get a
-                # dedicated slot on TallyConfig — book them alongside the
-                # chart-of-accounts / purchase ledgers, which is where
-                # accountants typically expect line-level surcharges.
-                'DISCOUNT': tally_config.chart_of_accounts_parents,
-                'CESS': tally_config.chart_of_accounts_parents,
-                'FREIGHT': tally_config.chart_of_accounts_parents,
+                # Adjustments now DO have dedicated slots —
+                # discount/cess/freight_parents arrived in migration 0038,
+                # the config endpoint saves them and the setup page shows
+                # them. Nothing read them, so an operator who set
+                # "Discount ledgers -> Indirect Expenses" watched a
+                # quick-created discount ledger land under Purchase
+                # Accounts anyway: configuration that silently did
+                # nothing.
+                #
+                # The dedicated group is tried first and the
+                # chart-of-accounts group is kept behind it, so an
+                # organisation that never configured these keeps exactly
+                # the placement it has today.
+                'DISCOUNT': (tally_config.discount_parents,
+                             tally_config.chart_of_accounts_parents),
+                'CESS': (tally_config.cess_parents,
+                         tally_config.chart_of_accounts_parents),
+                'FREIGHT': (tally_config.freight_parents,
+                            tally_config.chart_of_accounts_parents),
                 'OTHER': tally_config.chart_of_accounts_parents,
                 'PRODUCT TAX': tally_config.chart_of_accounts_parents,
             }
             parent_rel = type_map.get(key)
-            if parent_rel is not None:
-                parents = parent_rel.all()
+            # A tuple means "this group, else that one".
+            for _rel in (parent_rel if isinstance(parent_rel, tuple)
+                         else (parent_rel,)):
+                if _rel is None:
+                    continue
+                parents = _rel.all()
                 if parents.exists():
                     parent_ledger = parents.first()
+                    break
             if parent_ledger is None:
                 # Last-resort fallback: union of GST parents so an unknown
                 # tax_type still lands in a Duties & Taxes group rather
