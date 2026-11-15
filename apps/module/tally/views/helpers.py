@@ -216,8 +216,74 @@ def find_tally_vendor_ledger(company_name, organization, vendor_gst=None,
 # ============================================================================
 # Tax Ledger Lookup (shared by vendor and expense views)
 # ============================================================================
+def _rate_decimal(rate):
+    """A GST rate as a Decimal, from "18%", 18, "18.00" or None."""
+    from decimal import Decimal, InvalidOperation
 
-def find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_type='bill'):
+    if rate in (None, ""):
+        return None
+    try:
+        return Decimal(str(rate).strip().rstrip("%").strip() or "0")
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def rate_mapped_tax_ledger(organization, tax_type, rate):
+    """The ledger the operator mapped this GST rate to, if they mapped one.
+
+    ``GstRateLedgerMapping`` is written by the setup page's "GST rate
+    mappings" section and was read by nothing at all — the picker below
+    went straight to "first ledger under the GST parents whose name
+    contains 'igst'". An organisation with "Output IGST 5%", "Output
+    IGST 12%" and "Output IGST 18%" therefore got whichever the database
+    returned first for every rate.
+
+    That is how an 18% tax lands on a ledger named "Output IGST 5%": the
+    amount is right, the ledger is wrong, and Tally's rate-wise GST
+    summary — the one GSTR-1 is filed from — is wrong with it. Nothing
+    in the voucher looks amiss, because the figure agrees.
+    """
+    rate_value = _rate_decimal(rate)
+    if rate_value is None or tax_type not in ("igst", "cgst", "sgst"):
+        return None
+    try:
+        from ..models import GstRateLedgerMapping
+
+        mapping = GstRateLedgerMapping.objects.filter(
+            organization=organization, rate=rate_value,
+        ).select_related(f"{tax_type}_ledger").first()
+        return getattr(mapping, f"{tax_type}_ledger", None) if mapping else None
+    except Exception as exc:
+        logger.warning("GST rate mapping lookup failed (%s)", exc)
+        return None
+
+
+def _ledger_matching_rate(ledgers, rate):
+    """A ledger whose own name carries this rate, e.g. "Output IGST 18%".
+
+    Second preference, behind the configured mapping. Named rates are
+    the near-universal convention in Tally charts of accounts, so this
+    picks the right one for the many organisations that never filled the
+    mapping table in.
+    """
+    import re
+
+    rate_value = _rate_decimal(rate)
+    if rate_value is None:
+        return None
+    whole = int(rate_value) if rate_value == rate_value.to_integral_value() else None
+    wanted = {str(rate_value.normalize()), f"{rate_value:.2f}"}
+    if whole is not None:
+        wanted.add(str(whole))
+    for ledger in ledgers:
+        for found in re.findall(r"\d+(?:\.\d+)?", ledger.name or ""):
+            if found in wanted or _rate_decimal(found) == rate_value:
+                return ledger
+    return None
+
+
+def find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val,
+                          ledger_type='bill', rate=None):
     """
     Find appropriate tax ledger based on GST values and TallyConfig.
 
@@ -229,6 +295,10 @@ def find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_typ
         ledger_type: 'bill' = Duties & Taxes GST ledgers
                      'product' = Purchase Account ledgers (vendor)
                      'expense_coa' = Expense COA ledgers (expense)
+        rate: the GST rate this tax was worked out at ("18%", 18, ...).
+              When given, the ledger the operator mapped to that rate
+              wins, then one whose name carries the rate, then the old
+              first-match. Without it the behaviour is unchanged.
     """
     from ..models import TallyConfig, Ledger
 
@@ -276,9 +346,22 @@ def find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_typ
                     tax_ledgers = Ledger.objects.filter(
                         organization=organization, parent__in=parent_ledgers
                     )
-                    match = tax_ledgers.filter(name__icontains=keyword).first() or tax_ledgers.first()
+                    # The rate decides, when we know it. A tax worked
+                    # out at 18% must not post to a ledger named for 5%.
+                    match = rate_mapped_tax_ledger(organization, keyword, rate)
+                    if match is None:
+                        named = tax_ledgers.filter(name__icontains=keyword)
+                        match = (
+                            _ledger_matching_rate(named, rate)
+                            or _ledger_matching_rate(tax_ledgers, rate)
+                            or named.first()
+                            or tax_ledgers.first()
+                        )
                     if match:
-                        logger.info(f"Found {keyword.upper()} tax ledger: {match.name}")
+                        logger.info(
+                            "Found %s tax ledger: %s (rate %s)",
+                            keyword.upper(), match.name, rate or "unknown",
+                        )
                         return match
 
         # Fallback: any available tax parent

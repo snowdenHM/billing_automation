@@ -446,10 +446,12 @@ def extract_expenses_from_properties(json_data):
         return []
 
 
-def find_appropriate_expense_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_type='bill'):
+def find_appropriate_expense_tax_ledger(organization, igst_val, cgst_val, sgst_val,
+                                        ledger_type='bill', rate=None):
     """Delegates to shared find_tally_tax_ledger in helpers."""
     from .helpers import find_tally_tax_ledger
-    return find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_type=ledger_type)
+    return find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val,
+                                 ledger_type=ledger_type, rate=rate)
 
 
 def find_expense_vendor_ledger(company_name, organization, vendor_gst=None):

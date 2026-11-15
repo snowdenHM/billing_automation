@@ -553,7 +553,10 @@ def process_analysis_data(bill, json_data, organization):
 
                         # � AUTO-ASSIGN LINE ITEM LEDGER FROM CHART OF ACCOUNTS (Purchase Accounts)
                         logger.info(f"🏛️  Finding line item ledger for product '{item.get('description', 'No desc')[:30]}...'")
-                        item_ledger = find_appropriate_tax_ledger(organization, float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded), ledger_type='product')
+                        item_ledger = find_appropriate_tax_ledger(
+                            organization, float(item_igst_rounded),
+                            float(item_cgst_rounded), float(item_sgst_rounded),
+                            ledger_type='product', rate=_assigned['rate'])
                         
                         # The rate was chosen, not back-derived.
                         gst_rate = _assigned['rate']
@@ -709,10 +712,12 @@ def extract_items_from_properties(json_data):
         return []
 
 
-def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_type='bill'):
+def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val,
+                                ledger_type='bill', rate=None):
     """Delegates to shared find_tally_tax_ledger in helpers."""
     from .helpers import find_tally_tax_ledger
-    return find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_type=ledger_type)
+    return find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val,
+                                 ledger_type=ledger_type, rate=rate)
 
 
 def find_customer_ledger(company_name, organization, customer_gst=None):
@@ -2835,6 +2840,115 @@ def _fmt_quantity(value):
         return 0
 
 
+#: Emit <debit_or_credit> on every ledger row of a Sales voucher.
+#:
+#: The journal, receipt and payment feeds have always carried it,
+#: because on those vouchers any line can go either way. Purchase and
+#: Sales omit it: the voucher type fixes the sides — on a Sales voucher
+#: the party is debited and revenue and output tax are credited — and
+#: the importer has been reading it that way since it was written.
+#:
+#: Being explicit is better, because the sides stop depending on the
+#: importer and this code agreeing silently about what a Sales voucher
+#: means.
+#:
+#: OFF. Built and tested on 2026-11-15, then held back the same day:
+#: the Tally developer wants the sales feed left as it is for now, so
+#: both feeds stay off rather than only one — a payload where sales
+#: and purchase disagree is worse than one where neither states it.
+#:
+#: Turning it on gives all three feeds the journal's row shape:
+#: amount, ledger, parent, [rate], debit_or_credit, always positive.
+#: One line, and apps/common/tests/test_sales_debit_credit.py covers
+#: the behaviour either way.
+#:
+#: Note what it does NOT do: no amount changes. A row whose amount is
+#: negative — a discount, a downward round-off — keeps its sign and is
+#: labelled with the opposite side, so the two readings agree however
+#: the importer treats it.
+SALES_BILL_EMIT_DEBIT_CREDIT = False
+
+
+def _check_voucher_balance(ledgers, total_amount, party_side, bill_ref, dropped):
+    """Log when the ledger rows do not reconcile to the stated total.
+
+    The party is not a row — Tally posts it for the amount that makes
+    the voucher balance. So the rows must satisfy:
+
+        {party_side}  party  =  sum(other side) - sum(party side)
+
+    and that has to equal ``total_amount``, or Tally will post a
+    different figure against the party than the bill says it owes.
+
+    This is the check that would have caught a discount posted on the
+    wrong side: reversing one row moves the implied party amount by
+    twice the discount, and nothing else in the payload looks wrong.
+
+    Never raises, and says nothing when rows were dropped for a missing
+    ledger — the shortfall is already reported as ``dropped``, and
+    repeating it as an imbalance would bury the real case.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    if dropped:
+        return
+    try:
+        total = Decimal(str(total_amount or 0))
+        debit = sum(Decimal(str(r["amount"])) for r in ledgers
+                    if r.get("debit_or_credit") == "debit")
+        credit = sum(Decimal(str(r["amount"])) for r in ledgers
+                     if r.get("debit_or_credit") == "credit")
+    except (InvalidOperation, ValueError, TypeError, KeyError):
+        return
+    if not ledgers or (debit == 0 and credit == 0):
+        return
+
+    implied = (debit - credit) if party_side == "credit" else (credit - debit)
+    if abs(implied - total) > Decimal("0.01"):
+        logger.warning(
+            "Voucher %s does not reconcile: rows imply %s against the party "
+            "but the bill total is %s (Dr %s / Cr %s). A row posted on the "
+            "wrong side moves this by twice its amount.",
+            bill_ref, implied, total, debit, credit,
+        )
+
+
+def _dc_row(amount):
+    """The journal convention: a positive magnitude and an explicit side.
+
+    The journal feed never sends a negative amount — every row is
+    ``abs(value)`` with ``debit_or_credit`` saying which way it goes.
+    Purchase and sales used to send the sign and say nothing; they say
+    both now, the same way.
+
+    The side comes from the sign alone, against the voucher's own
+    direction. On a sale the rows that make up the bill are credits,
+    and a row that *reduces* it — a discount, a downward round-off — is
+    stored negative and is therefore the opposite.
+
+    An earlier version of this gave each row type its own "natural"
+    side and then flipped it on a negative amount. For a discount that
+    flipped twice: a discount of -17.05 on a purchase came out as
+    17.05 DEBIT, which adds to the cost instead of reducing it. A
+    discount is always stored negative, so its positive case never
+    happens and the per-row side was never the thing to reason about.
+
+    Returns ``(amount, extra_keys)``.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        value = Decimal(str(amount or 0))
+    except (InvalidOperation, ValueError, TypeError):
+        value = Decimal("0")
+
+    if not SALES_BILL_EMIT_DEBIT_CREDIT:
+        return value, {}
+
+    side = "credit" if value >= 0 else "debit"
+    return abs(value), {"debit_or_credit": side}
+
+
 def prepare_sync_data(analyzed_bill, organization, cache=None):
     """Build the simplified sync payload for Tally TCP.
 
@@ -3233,12 +3347,15 @@ def prepare_sync_data(analyzed_bill, organization, cache=None):
                     f"{_fmt_money(total)} has no sales ledger"
                 )
                 continue
+            # Revenue on a sale is credited.
+            _amt, _side = _dc_row(total)
             ledgers_payload.append({
-                "amount": _fmt_money(total),
+                "amount": _fmt_money(_amt),
                 "ledger": pledger_name,
                 **({"parent": (
                     _ledger_parent_name(pledger_obj) or "Purchase Accounts"
                 )} if SALES_BILL_EMIT_LEDGER_EXTRAS else {}),
+                **_side,
             })
 
     for entry in sorted_gst_buckets:
@@ -3249,12 +3366,15 @@ def prepare_sync_data(analyzed_bill, organization, cache=None):
         rate_str = ""
         if entry["rates"]:
             rate_str = max(set(entry["rates"]), key=entry["rates"].count)
+        # Output tax collected from the customer is credited.
+        _amt, _side = _dc_row(entry["amount"])
         ledgers_payload.append({
-            "amount": _fmt_money(entry["amount"]),
+            "amount": _fmt_money(_amt),
             "ledger": entry["ledger"],
             **({"parent": entry.get("parent") or "Duties & Taxes"}
                if SALES_BILL_EMIT_LEDGER_EXTRAS else {}),
             "rate": rate_str,
+            **_side,
         })
 
     # ------------------------------------------------------------------
@@ -3288,13 +3408,19 @@ def prepare_sync_data(analyzed_bill, organization, cache=None):
         amt = _money(amount)
         if amt == 0:
             continue
+        # A discount given reduces revenue, so its natural side is the
+        # debit; cess and freight recovered from the customer are
+        # credited like the rest of the invoice. Round-off goes whichever
+        # way the rounding went, which the sign already says.
+        _amt, _side = _dc_row(amt)
         ledgers_payload.append({
-            "amount": _fmt_money(amt),
+            "amount": _fmt_money(_amt),
             "ledger": str(ledger) if ledger else "No Tax Ledger",
             **({"parent": (
                 _ledger_parent_name(ledger)
                 or _extras_default_parent.get(tax_type, "Indirect Expenses")
             )} if SALES_BILL_EMIT_LEDGER_EXTRAS else {}),
+            **_side,
         })
 
     bill_data = {
@@ -3340,6 +3466,11 @@ def prepare_sync_data(analyzed_bill, organization, cache=None):
                 )
         bill_data = _with_extras
 
+    _check_voucher_balance(
+        ledgers_payload, bill_data.get("total_amount"),
+        party_side="debit", bill_ref=analyzed_bill.bill_no,
+        dropped=dropped_amounts,
+    )
     return {"data": bill_data, "dropped": dropped_amounts}
 
 
