@@ -526,9 +526,20 @@ def process_payment_analysis_data(bill, json_data, organization):
 
     except Exception as e:
         logger.error(f"❌ Error processing payment analysis data: {str(e)} - Data: {json_data}")
-        # Update bill status to failed
-        bill.status = TallyPaymentBill.BillStatus.FAILED
-        fields_to_update = ['status']
+        # The status is deliberately left alone.
+        #
+        # This block used to assign BillStatus.FAILED, and that member
+        # does not exist — DRAFT, ANALYSED, VERIFIED and SYNCED are the
+        # only four. On Python 3.11 the enum raises AttributeError('FAILED')
+        # right here, so the handler threw before saving anything and the
+        # message the operator saw was the bare word "FAILED" instead of
+        # whatever actually went wrong. A real advisory-lock failure
+        # reached a client that way.
+        #
+        # Failure is recorded by processing_error / the failed processing
+        # stage, which the task layer sets. Sales and vendor already leave
+        # the status untouched here; these three now match.
+        fields_to_update = []
         
         # Only update ownership validation fields if they exist in the model
         if hasattr(bill, 'ownership_validation_status'):
@@ -539,8 +550,19 @@ def process_payment_analysis_data(bill, json_data, organization):
             bill.ownership_validation_message = f"Processing failed: {str(e)}"
             fields_to_update.append('ownership_validation_message')
         
-        bill.save(update_fields=fields_to_update)
-        raise Exception(f"Error processing payment analysis data: {str(e)}")
+        if fields_to_update:
+            try:
+                bill.save(update_fields=fields_to_update)
+            except Exception as save_error:
+                # Recording the failure must not replace it.
+                logger.error(
+                    f"Could not record the failure on bill {bill.id}: "
+                    f"{type(save_error).__name__}: {save_error}"
+                )
+        raise Exception(
+            f"Error processing payment analysis data: "
+            f"{type(e).__name__}: {e}"
+        ) from e
 
 
 def extract_payments_from_properties(json_data):

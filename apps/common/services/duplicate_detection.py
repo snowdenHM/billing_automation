@@ -26,11 +26,39 @@ DUPLICATE_SCAN_DAYS = getattr(settings, "DUPLICATE_SCAN_DAYS", 365)
 DUPLICATE_SCAN_LIMIT = getattr(settings, "DUPLICATE_SCAN_LIMIT", 500)
 
 
-# Arbitrary 32-bit namespace key for ``pg_try_advisory_xact_lock``.
-# Keeps duplicate-check critical sections per (namespace, organization_id)
+# Namespace for the advisory lock, occupying the top 32 bits of the key.
+# Keeps duplicate-check critical sections per (namespace, organization)
 # so two concurrent RQ workers in the same org cannot race past the read
 # of ``analysed_data`` before the other writes.
 _DUPLICATE_LOCK_NAMESPACE = 0x6D616E61  # "mana"
+
+
+def dup_lock_key(organization_id):
+    """The advisory-lock key for one organization, as a signed bigint.
+
+    One 64-bit key, not two 32-bit ones. The two-argument form is
+    ``pg_advisory_xact_lock(int, int)`` and ``int`` there is SIGNED, so it
+    stops at 2147483647. The org half is the first eight hex digits of the
+    UUID, which runs to 4294967295, and psycopg sends anything above the
+    signed limit as a bigint. Postgres has no ``(integer, bigint)``
+    overload, so the call failed outright:
+
+        function pg_advisory_xact_lock(integer, bigint) does not exist
+
+    That is every organization whose UUID begins 8-f — about half of them —
+    and because it aborted the transaction the whole analysis went down
+    with it, reported to the operator as a failed AI analysis.
+
+    Packing both halves into one bigint uses the single-argument overload,
+    which has no such ceiling, and still keeps the namespace and the org
+    distinct. The namespace is 0x6D616E61, so bit 63 stays clear and the
+    result is always a positive signed bigint.
+    """
+    try:
+        org_id_int = int(str(organization_id).replace("-", "")[:8], 16)
+    except (TypeError, ValueError):
+        org_id_int = abs(hash(str(organization_id))) % (2 ** 32)
+    return (_DUPLICATE_LOCK_NAMESPACE << 32) | (org_id_int & 0xFFFFFFFF)
 
 
 @contextmanager
@@ -42,14 +70,10 @@ def _organization_dup_lock(organization_id):
     """
     with transaction.atomic():
         if connection.vendor == "postgresql":
-            try:
-                org_id_int = int(str(organization_id).replace("-", "")[:8], 16)
-            except (TypeError, ValueError):
-                org_id_int = abs(hash(str(organization_id))) % (2 ** 31)
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT pg_advisory_xact_lock(%s, %s)",
-                    [_DUPLICATE_LOCK_NAMESPACE, org_id_int],
+                    "SELECT pg_advisory_xact_lock(%s)",
+                    [dup_lock_key(organization_id)],
                 )
         yield
 

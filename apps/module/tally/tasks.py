@@ -290,6 +290,24 @@ def _screen_document_is_bill(bill, bill_type):
     return False
 
 
+def _describe(exc):
+    """An exception rendered so the message alone identifies it.
+
+    ``f"{exc}"`` alone has cost us a diagnosis already. A client's
+    receipt voucher recorded "AI analysis failed: FAILED" — and nothing
+    in this codebase raises the bare string "FAILED", so the class that
+    did was never found. The message was all we had and it named
+    nothing.
+
+    Including the type means the next one reads
+    "APIStatusError: FAILED" and says where to look. An exception with
+    no message at all stops rendering as an empty string.
+    """
+    name = type(exc).__name__
+    text = str(exc).strip()
+    return f"{name}: {text}" if text else name
+
+
 def _process_tally_bill(bill_id, *, model_class, get_functions, bill_type):
     """
     Generic task body for Tally bill analysis + duplicate check.
@@ -344,8 +362,14 @@ def _process_tally_bill(bill_id, *, model_class, get_functions, bill_type):
             analyze_fn(bill, organization)
             logger.info("AI analysis completed for %s bill %s", bill_type, bill_id)
         except Exception as exc:
-            logger.error("AI analysis failed for %s bill %s: %s", bill_type, bill_id, exc)
-            mark_processing_error(bill, f"AI analysis failed: {exc}")
+            # exc_info so the traceback reaches the log. Without it the
+            # only record of a failure is the message, and a message that
+            # names nothing — "FAILED" — leaves nowhere to start.
+            logger.error(
+                "AI analysis failed for %s bill %s: %s",
+                bill_type, bill_id, _describe(exc), exc_info=True,
+            )
+            mark_processing_error(bill, f"AI analysis failed: {_describe(exc)}")
             return
 
         # Step 2 — duplicate check
@@ -355,7 +379,10 @@ def _process_tally_bill(bill_id, *, model_class, get_functions, bill_type):
             update_bill_duplicate_fields(bill, result, include_url=True)
             logger.info("Duplicate check completed for %s bill %s", bill_type, bill_id)
         except Exception as exc:
-            logger.error("Duplicate check failed for %s bill %s: %s", bill_type, bill_id, exc)
+            logger.error(
+                "Duplicate check failed for %s bill %s: %s",
+                bill_type, bill_id, _describe(exc), exc_info=True,
+            )
             bill.duplicate_description = f"Duplicate check failed: {exc}"
             bill.save(update_fields=["duplicate_description"])
 
@@ -367,9 +394,12 @@ def _process_tally_bill(bill_id, *, model_class, get_functions, bill_type):
         logger.error("%s bill %s not found", bill_type.capitalize(), bill_id)
         raise
     except Exception as exc:
-        logger.error("Background processing failed for %s bill %s: %s", bill_type, bill_id, exc)
+        logger.error(
+            "Background processing failed for %s bill %s: %s",
+            bill_type, bill_id, _describe(exc), exc_info=True,
+        )
         try:
-            mark_processing_error(model_class.objects.get(id=bill_id), str(exc))
+            mark_processing_error(model_class.objects.get(id=bill_id), _describe(exc))
         except Exception:
             pass
         raise
@@ -450,6 +480,9 @@ def process_multiple_bills(bill_ids, bill_type="vendor"):
             job = enqueue_bill_processing(fn, bill_id)
             results.append(f"Started processing {bill_type} bill {bill_id} — Job ID: {job.id}")
         except Exception as exc:
-            logger.error("Failed to start processing %s bill %s: %s", bill_type, bill_id, exc)
+            logger.error(
+                "Failed to start processing %s bill %s: %s",
+                bill_type, bill_id, _describe(exc), exc_info=True,
+            )
             results.append(f"Failed to start processing {bill_type} bill {bill_id}: {exc}")
     return results
