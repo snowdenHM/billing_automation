@@ -23,22 +23,43 @@ class GstRateLedgerMappingSerializer(serializers.ModelSerializer):
     igst_ledger = serializers.PrimaryKeyRelatedField(
         queryset=Ledger.objects.all(), allow_null=True, required=False,
     )
+    cgst_output_ledger = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.all(), allow_null=True, required=False,
+    )
+    sgst_output_ledger = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.all(), allow_null=True, required=False,
+    )
+    igst_output_ledger = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.all(), allow_null=True, required=False,
+    )
     cgst_ledger_name = serializers.CharField(source='cgst_ledger.name', read_only=True)
     sgst_ledger_name = serializers.CharField(source='sgst_ledger.name', read_only=True)
     igst_ledger_name = serializers.CharField(source='igst_ledger.name', read_only=True)
+    cgst_output_ledger_name = serializers.CharField(
+        source='cgst_output_ledger.name', read_only=True)
+    sgst_output_ledger_name = serializers.CharField(
+        source='sgst_output_ledger.name', read_only=True)
+    igst_output_ledger_name = serializers.CharField(
+        source='igst_output_ledger.name', read_only=True)
 
     class Meta:
         model = GstRateLedgerMapping
         fields = [
             'id', 'rate',
+            # Input = tax paid on a purchase. Output = tax charged on a sale.
             'cgst_ledger', 'cgst_ledger_name',
             'sgst_ledger', 'sgst_ledger_name',
             'igst_ledger', 'igst_ledger_name',
+            'cgst_output_ledger', 'cgst_output_ledger_name',
+            'sgst_output_ledger', 'sgst_output_ledger_name',
+            'igst_output_ledger', 'igst_output_ledger_name',
             'created_at', 'updated_at',
         ]
         read_only_fields = [
             'id', 'created_at', 'updated_at',
             'cgst_ledger_name', 'sgst_ledger_name', 'igst_ledger_name',
+            'cgst_output_ledger_name', 'sgst_output_ledger_name',
+            'igst_output_ledger_name',
         ]
 
 
@@ -142,11 +163,37 @@ class TallyConfigSerializer(serializers.ModelSerializer):
     tds_ledger = serializers.PrimaryKeyRelatedField(
         queryset=Ledger.objects.none(), required=False, allow_null=True,
     )
+    # The sales-side twins. The five above stay the purchase side.
+    cess_ledger_sales = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.none(), required=False, allow_null=True,
+    )
+    discount_ledger_sales = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.none(), required=False, allow_null=True,
+    )
+    freight_ledger_sales = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.none(), required=False, allow_null=True,
+    )
+    round_off_ledger_sales = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.none(), required=False, allow_null=True,
+    )
+    tds_ledger_sales = serializers.PrimaryKeyRelatedField(
+        queryset=Ledger.objects.none(), required=False, allow_null=True,
+    )
     cess_ledger_name = serializers.CharField(source='cess_ledger.name', read_only=True)
     discount_ledger_name = serializers.CharField(source='discount_ledger.name', read_only=True)
     freight_ledger_name = serializers.CharField(source='freight_ledger.name', read_only=True)
     round_off_ledger_name = serializers.CharField(source='round_off_ledger.name', read_only=True)
     tds_ledger_name = serializers.CharField(source='tds_ledger.name', read_only=True)
+    cess_ledger_sales_name = serializers.CharField(
+        source='cess_ledger_sales.name', read_only=True)
+    discount_ledger_sales_name = serializers.CharField(
+        source='discount_ledger_sales.name', read_only=True)
+    freight_ledger_sales_name = serializers.CharField(
+        source='freight_ledger_sales.name', read_only=True)
+    round_off_ledger_sales_name = serializers.CharField(
+        source='round_off_ledger_sales.name', read_only=True)
+    tds_ledger_sales_name = serializers.CharField(
+        source='tds_ledger_sales.name', read_only=True)
 
     # Read-only fields for displaying parent ledger names in response
     igst_parent_names = serializers.SerializerMethodField()
@@ -219,7 +266,10 @@ class TallyConfigSerializer(serializers.ModelSerializer):
             else Ledger.objects.none()
         )
         for field_name in ('cess_ledger', 'discount_ledger', 'freight_ledger',
-                           'round_off_ledger', 'tds_ledger'):
+                           'round_off_ledger', 'tds_ledger',
+                           'cess_ledger_sales', 'discount_ledger_sales',
+                           'freight_ledger_sales', 'round_off_ledger_sales',
+                           'tds_ledger_sales'):
             if field_name in self.fields:
                 self.fields[field_name].queryset = ledger_qs
 
@@ -238,6 +288,11 @@ class TallyConfigSerializer(serializers.ModelSerializer):
             'cess_ledger', 'discount_ledger', 'freight_ledger', 'round_off_ledger', 'tds_ledger',
             'cess_ledger_name', 'discount_ledger_name', 'freight_ledger_name',
             'round_off_ledger_name', 'tds_ledger_name',
+            'cess_ledger_sales', 'discount_ledger_sales', 'freight_ledger_sales',
+            'round_off_ledger_sales', 'tds_ledger_sales',
+            'cess_ledger_sales_name', 'discount_ledger_sales_name',
+            'freight_ledger_sales_name', 'round_off_ledger_sales_name',
+            'tds_ledger_sales_name',
             # Read-only name fields for output
             'igst_parent_names', 'cgst_parent_names', 'sgst_parent_names',
             'vendor_parent_names', 'coa_parent_names', 'expense_coa_parent_names',
@@ -254,7 +309,10 @@ class TallyConfigSerializer(serializers.ModelSerializer):
                            'customer_parent_names', 'sales_coa_parent_names', 'receipt_parent_names',
                            'rcm_parent_names',
                            'cess_ledger_name', 'discount_ledger_name', 'freight_ledger_name',
-                           'round_off_ledger_name', 'tds_ledger_name']
+                           'round_off_ledger_name', 'tds_ledger_name',
+                           'cess_ledger_sales_name', 'discount_ledger_sales_name',
+                           'freight_ledger_sales_name', 'round_off_ledger_sales_name',
+                           'tds_ledger_sales_name']
 
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_igst_parent_names(self, obj) -> List[str]:

@@ -228,7 +228,7 @@ def _rate_decimal(rate):
         return None
 
 
-def rate_mapped_tax_ledger(organization, tax_type, rate):
+def rate_mapped_tax_ledger(organization, tax_type, rate, direction=None):
     """The ledger the operator mapped this GST rate to, if they mapped one.
 
     ``GstRateLedgerMapping`` is written by the setup page's "GST rate
@@ -251,11 +251,52 @@ def rate_mapped_tax_ledger(organization, tax_type, rate):
 
         mapping = GstRateLedgerMapping.objects.filter(
             organization=organization, rate=rate_value,
-        ).select_related(f"{tax_type}_ledger").first()
-        return getattr(mapping, f"{tax_type}_ledger", None) if mapping else None
+        ).first()
+        if not mapping:
+            return None
+        # Output (sales) tax and input (purchase) tax are different
+        # ledgers. The output column falls back to the input one so an
+        # organisation that has not filled it in keeps the ledger it
+        # already gets today.
+        if direction == "output":
+            return (
+                getattr(mapping, f"{tax_type}_output_ledger", None)
+                or getattr(mapping, f"{tax_type}_ledger", None)
+            )
+        return getattr(mapping, f"{tax_type}_ledger", None)
     except Exception as exc:
         logger.warning("GST rate mapping lookup failed (%s)", exc)
         return None
+
+
+def _ledgers_matching_direction(ledgers, direction):
+    """Narrow to the ledgers whose names say input or output.
+
+    Most Tally charts of accounts spell the direction out — "Input
+    CGST 18%", "Output CGST 18%" — so when the rate mapping has not
+    been filled in this still keeps a sale off an input ledger.
+
+    Returns the full set unchanged when the names say nothing, because
+    a wrong narrowing would be worse than no narrowing.
+    """
+    if direction not in ("input", "output"):
+        return ledgers
+    wanted, other = (
+        ("output", "input") if direction == "output" else ("input", "output")
+    )
+    matched = [
+        ledger for ledger in ledgers
+        if wanted in (ledger.name or "").lower()
+    ]
+    if matched:
+        return matched
+    # Nothing is named for our side; at least drop the ones named for
+    # the other side, if that leaves anything.
+    remaining = [
+        ledger for ledger in ledgers
+        if other not in (ledger.name or "").lower()
+    ]
+    return remaining or ledgers
 
 
 def _ledger_matching_rate(ledgers, rate):
@@ -283,7 +324,7 @@ def _ledger_matching_rate(ledgers, rate):
 
 
 def find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val,
-                          ledger_type='bill', rate=None):
+                          ledger_type='bill', rate=None, direction=None):
     """
     Find appropriate tax ledger based on GST values and TallyConfig.
 
@@ -299,6 +340,12 @@ def find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val,
               When given, the ledger the operator mapped to that rate
               wins, then one whose name carries the rate, then the old
               first-match. Without it the behaviour is unchanged.
+        direction: 'output' for tax we charge a customer (sales,
+              receipt), 'input' for tax we pay a supplier (purchase,
+              expense, payment). One slot used to serve both, so a
+              sale could post its GST to an input-credit ledger — the
+              figures balance and the GST position is wrong, which is
+              what reaches GSTR-1. None keeps the old behaviour.
     """
     from ..models import TallyConfig, Ledger
 
@@ -348,19 +395,29 @@ def find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val,
                     )
                     # The rate decides, when we know it. A tax worked
                     # out at 18% must not post to a ledger named for 5%.
-                    match = rate_mapped_tax_ledger(organization, keyword, rate)
+                    match = rate_mapped_tax_ledger(
+                        organization, keyword, rate, direction=direction,
+                    )
                     if match is None:
-                        named = tax_ledgers.filter(name__icontains=keyword)
+                        named = list(tax_ledgers.filter(name__icontains=keyword))
+                        # Side first, then rate: an 18% sale belongs on
+                        # the 18% OUTPUT ledger, and of the two the side
+                        # is the one that cannot be corrected later.
+                        sided = _ledgers_matching_direction(named, direction)
+                        sided_all = _ledgers_matching_direction(
+                            list(tax_ledgers), direction,
+                        )
                         match = (
-                            _ledger_matching_rate(named, rate)
-                            or _ledger_matching_rate(tax_ledgers, rate)
-                            or named.first()
-                            or tax_ledgers.first()
+                            _ledger_matching_rate(sided, rate)
+                            or _ledger_matching_rate(sided_all, rate)
+                            or (sided[0] if sided else None)
+                            or (sided_all[0] if sided_all else None)
                         )
                     if match:
                         logger.info(
-                            "Found %s tax ledger: %s (rate %s)",
+                            "Found %s tax ledger: %s (rate %s, %s)",
                             keyword.upper(), match.name, rate or "unknown",
+                            direction or "direction unknown",
                         )
                         return match
 
@@ -370,9 +427,13 @@ def find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val,
             all_parents.update(rel.all())
 
         if all_parents:
-            fallback = Ledger.objects.filter(
-                organization=organization, parent__in=list(all_parents)
-            ).first()
+            candidates = _ledgers_matching_direction(
+                list(Ledger.objects.filter(
+                    organization=organization, parent__in=list(all_parents)
+                )),
+                direction,
+            )
+            fallback = candidates[0] if candidates else None
             if fallback:
                 logger.info(f"Fallback tax ledger: {fallback.name}")
                 return fallback

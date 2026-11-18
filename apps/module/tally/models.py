@@ -86,6 +86,121 @@ def _pick_round_off_ledger(organization):
         return None
 
 
+
+def _journal_round_off(bill, party_amount_field, party_dc_field, save=True):
+    """Round off a journal-shaped voucher: expense, payment, receipt.
+
+    These three balance by sides rather than by a running total, and the
+    rule used to be simply ``DEBIT total - CREDIT total``. On a voucher
+    whose party row is derived from the lines that residual is zero by
+    construction — the party amount is computed as whatever balances the
+    lines, so it balances the lines — and the round off could never fire.
+    An operator watched "Round Off (auto)" sit at 0.00 beside a stated
+    difference of 0.03 and no way to clear it.
+
+    What the two numbers actually are:
+
+    * ``abs(net)`` — what the lines and taxes add up to, which is what
+      the party row gets set to automatically.
+    * ``bill.total`` — what the bill itself prints.
+
+    The round off is the gap between them, which is the same thing the
+    vendor and sales vouchers have always computed. The party row is
+    moved onto the printed figure and the round off carries the
+    remainder, so the voucher both balances and agrees with the document.
+
+    Only inside ``ROUND_OFF_THRESHOLD`` (₹1). A larger gap is an
+    extraction or entry error, not rounding, and must stay visible
+    rather than be papered over by a round-off line — so beyond the
+    threshold this falls back to the old side-balance rule and changes
+    nothing.
+    """
+    from decimal import Decimal as _D
+
+    debit = bill.DebitCredit.DEBIT
+    credit = bill.DebitCredit.CREDIT
+
+    def _rows(include_party):
+        rows = []
+        if bill.pk:
+            for product in bill.products.all():
+                rows.append((product.amount or _D("0"), product.debit_or_credit))
+        rows.extend([
+            (bill.igst, bill.igst_debit_or_credit),
+            (bill.cgst, bill.cgst_debit_or_credit),
+            (bill.sgst, bill.sgst_debit_or_credit),
+            (bill.tds, bill.tds_debit_or_credit),
+            (bill.other_adjustment, bill.other_adjustment_debit_or_credit),
+        ])
+        if include_party:
+            rows.append((
+                getattr(bill, party_amount_field),
+                getattr(bill, party_dc_field),
+            ))
+        return rows
+
+    def _side_total(rows, side):
+        return sum(
+            (amount for amount, dc in rows if dc == side and amount),
+            _D("0"),
+        )
+
+    def _apply(amount, side):
+        bill.round_off = amount
+        if amount:
+            bill.round_off_debit_or_credit = side
+            if not bill.round_off_taxes_id:
+                org = getattr(bill, "organization", None) if bill.organization_id else None
+                bill.round_off_taxes = _pick_round_off_ledger(org)
+        if save:
+            bill.save(
+                skip_validation=True,
+                update_fields=[
+                    "round_off", "round_off_debit_or_credit", "round_off_taxes",
+                    party_amount_field,
+                ],
+            )
+        return bill.round_off
+
+    printed = bill.total or _D("0")
+    without_party = _rows(include_party=False)
+    net = (
+        _side_total(without_party, debit) - _side_total(without_party, credit)
+    ).quantize(_D("0.01"))
+
+    if printed > 0 and net != _D("0"):
+        # What the party row has to be for the voucher to balance, and
+        # the side it sits on.
+        required = abs(net)
+        party_side = credit if net > 0 else debit
+        residual = (required - printed).quantize(_D("0.01"))
+
+        if residual != _D("0") and abs(residual) < bill.ROUND_OFF_THRESHOLD:
+            # The party row takes the printed figure; the round off
+            # makes up the difference. A positive residual means the
+            # lines came to more than the bill says, so the round off
+            # goes on the party's own side to pull it back.
+            setattr(bill, party_amount_field, printed)
+            setattr(bill, party_dc_field, party_side)
+            return _apply(abs(residual), party_side if residual > 0 else (
+                debit if party_side == credit else credit
+            ))
+
+        if residual == _D("0"):
+            return _apply(_D("0"), None)
+
+    # No printed total to work against, or the gap is too large to be
+    # rounding: the original side-balance rule, unchanged.
+    with_party = _rows(include_party=True)
+    residual = (
+        _side_total(with_party, debit) - _side_total(with_party, credit)
+    ).quantize(_D("0.01"))
+
+    if abs(residual) >= bill.ROUND_OFF_THRESHOLD or residual == _D("0"):
+        return _apply(_D("0"), None)
+    return _apply(abs(residual), credit if residual > 0 else debit)
+
+
 class ProcessingStage(models.TextChoices):
     """Where a bill is in the upload -> analysis pipeline.
 
@@ -440,6 +555,58 @@ class TallyConfig(BaseOrgModel):
     )
 
     # ------------------------------------------------------------------
+    # The sales-side twins.
+    #
+    # "Discount on purchases goes to one ledger and Discount on Sales
+    # goes to another" — a discount a supplier gives us is income, a
+    # discount we give a customer is an expense, and they are different
+    # ledgers in every chart of accounts. One slot could only ever be
+    # right for one side of the books.
+    #
+    # The five fields above keep their names and their meaning: they are
+    # the PURCHASE side, which is what every existing organisation has
+    # already configured. These are consulted for sales and receipt
+    # vouchers, and fall back to the purchase ledger when unset, so an
+    # organisation that has not filled them in behaves exactly as it
+    # does today.
+    # ------------------------------------------------------------------
+    cess_ledger_sales = models.ForeignKey(
+        'Ledger', on_delete=models.SET_NULL,
+        blank=True, null=True,
+        related_name="cess_sales_tally_configs",
+        verbose_name="Cess ledger (sales)",
+        help_text="Ledger applied when a SALES voucher has Cess.",
+    )
+    discount_ledger_sales = models.ForeignKey(
+        'Ledger', on_delete=models.SET_NULL,
+        blank=True, null=True,
+        related_name="discount_sales_tally_configs",
+        verbose_name="Discount ledger (sales)",
+        help_text="Ledger applied when a SALES voucher has a Discount.",
+    )
+    freight_ledger_sales = models.ForeignKey(
+        'Ledger', on_delete=models.SET_NULL,
+        blank=True, null=True,
+        related_name="freight_sales_tally_configs",
+        verbose_name="Freight ledger (sales)",
+        help_text="Ledger applied when a SALES voucher has Freight Charges.",
+    )
+    round_off_ledger_sales = models.ForeignKey(
+        'Ledger', on_delete=models.SET_NULL,
+        blank=True, null=True,
+        related_name="round_off_sales_tally_configs",
+        verbose_name="Round Off ledger (sales)",
+        help_text="Ledger applied for Round Off on a SALES voucher.",
+    )
+    tds_ledger_sales = models.ForeignKey(
+        'Ledger', on_delete=models.SET_NULL,
+        blank=True, null=True,
+        related_name="tds_sales_tally_configs",
+        verbose_name="TDS ledger (sales)",
+        help_text="Ledger applied when TDS is deducted on a SALES voucher.",
+    )
+
+    # ------------------------------------------------------------------
     # TCP bridge health check. The Tally TDL POSTs to
     # ``/api/v1/tally/org/<id>/health/ping/`` every 10 minutes; each hit
     # stamps ``last_tally_ping_at``. The frontend polls the paired
@@ -504,6 +671,49 @@ class GstRateLedgerMapping(BaseOrgModel):
         blank=True,
         related_name="igst_rate_mappings",
     )
+
+    # ------------------------------------------------------------------
+    # Output (sales) ledgers.
+    #
+    # The three fields above are the INPUT side — the tax we pay on a
+    # purchase, claimed as input credit. Tax we charge a customer is
+    # output tax and posts to a different ledger entirely; a chart of
+    # accounts carries both ("Input IGST 18%", "Output IGST 18%").
+    #
+    # Until now one slot per rate served both directions, so whichever
+    # ledger an organisation picked was used for sales and purchases
+    # alike. The amount came out right and the GST position did not,
+    # which is the shape of error that reaches GSTR-1 without anything
+    # on the voucher looking wrong.
+    #
+    # The existing columns keep their names and stay the input side, so
+    # nothing an organisation has already configured changes meaning.
+    # ------------------------------------------------------------------
+    cgst_output_ledger = models.ForeignKey(
+        Ledger,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cgst_output_rate_mappings",
+        help_text="CGST ledger for sales (output tax) at this rate.",
+    )
+    sgst_output_ledger = models.ForeignKey(
+        Ledger,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sgst_output_rate_mappings",
+        help_text="SGST ledger for sales (output tax) at this rate.",
+    )
+    igst_output_ledger = models.ForeignKey(
+        Ledger,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="igst_output_rate_mappings",
+        help_text="IGST ledger for sales (output tax) at this rate.",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1245,62 +1455,16 @@ class TallyExpenseAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
     ROUND_OFF_THRESHOLD = Decimal("1.00")
 
     def compute_round_off(self, save=True):
-        """Recompute round_off for an expense (journal) bill.
+        """Recompute round_off for a expense voucher.
 
-        Formula (DR == CR rule):
-            DR = sum(debit-side line items) + sum(debit-side tax & adjustment amounts)
-            CR = sum(credit-side line items) + sum(credit-side tax & adjustment amounts)
-                 + (vendor_amount when vendor_debit_or_credit == 'credit')
-            (vendor_amount on the debit side is added to DR analogously.)
-
-        Residual = DR - CR. Only applied when |Residual| < ROUND_OFF_THRESHOLD.
-        Sign decides which side the round_off entry sits on:
-          • Residual > 0  → CR side gains the round_off (to balance)
-          • Residual < 0  → DR side gains the round_off
-        round_off is always stored as a positive magnitude;
-        round_off_debit_or_credit indicates the side.
+        The arithmetic lives in ``_journal_round_off`` — expense,
+        payment and receipt each had their own copy of it and the
+        copies drifted, which is how the printed total came to be
+        ignored on all three at once.
         """
-        from decimal import Decimal as _D
-
-        def _sum_side(side):
-            total = _D("0")
-            if self.pk:
-                for product in self.products.all():
-                    if product.debit_or_credit == side:
-                        total += product.amount or _D("0")
-            for amount, dc in (
-                (self.igst, self.igst_debit_or_credit),
-                (self.cgst, self.cgst_debit_or_credit),
-                (self.sgst, self.sgst_debit_or_credit),
-                (self.tds, self.tds_debit_or_credit),
-                (self.other_adjustment, self.other_adjustment_debit_or_credit),
-                (self.vendor_amount, self.vendor_debit_or_credit),
-            ):
-                if dc == side and amount:
-                    total += amount
-            return total
-
-        dr_total = _sum_side(self.DebitCredit.DEBIT)
-        cr_total = _sum_side(self.DebitCredit.CREDIT)
-        residual = (dr_total - cr_total).quantize(_D("0.01"))
-
-        if abs(residual) >= self.ROUND_OFF_THRESHOLD or residual == _D("0"):
-            self.round_off = _D("0")
-        else:
-            self.round_off = abs(residual)
-            self.round_off_debit_or_credit = (
-                self.DebitCredit.CREDIT if residual > 0 else self.DebitCredit.DEBIT
-            )
-            if not self.round_off_taxes_id:
-                org = getattr(self, 'organization', None) if self.organization_id else None
-                self.round_off_taxes = _pick_round_off_ledger(org)
-
-        if save:
-            self.save(
-                skip_validation=True,
-                update_fields=['round_off', 'round_off_debit_or_credit', 'round_off_taxes'],
-            )
-        return self.round_off
+        return _journal_round_off(
+            self, "vendor_amount", "vendor_debit_or_credit", save=save,
+        )
 
 
 class TallyExpenseAnalyzedProduct(BaseOrgModel):
@@ -1866,52 +2030,14 @@ class TallyPaymentAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
     def compute_round_off(self, save=True):
         """Recompute round_off for a payment voucher.
 
-        Mirrors ``TallyExpenseAnalyzedBill.compute_round_off`` — same
-        DR == CR balancing rule, same tolerance. Kept as an independent
-        method so future payment-specific rules can diverge without
-        touching the expense side.
+        The arithmetic lives in ``_journal_round_off`` — expense,
+        payment and receipt each had their own copy of it and the
+        copies drifted, which is how the printed total came to be
+        ignored on all three at once.
         """
-        from decimal import Decimal as _D
-
-        def _sum_side(side):
-            total = _D("0")
-            if self.pk:
-                for product in self.products.all():
-                    if product.debit_or_credit == side:
-                        total += product.amount or _D("0")
-            for amount, dc in (
-                (self.igst, self.igst_debit_or_credit),
-                (self.cgst, self.cgst_debit_or_credit),
-                (self.sgst, self.sgst_debit_or_credit),
-                (self.tds, self.tds_debit_or_credit),
-                (self.other_adjustment, self.other_adjustment_debit_or_credit),
-                (self.vendor_amount, self.vendor_debit_or_credit),
-            ):
-                if dc == side and amount:
-                    total += amount
-            return total
-
-        dr_total = _sum_side(self.DebitCredit.DEBIT)
-        cr_total = _sum_side(self.DebitCredit.CREDIT)
-        residual = (dr_total - cr_total).quantize(_D("0.01"))
-
-        if abs(residual) >= self.ROUND_OFF_THRESHOLD or residual == _D("0"):
-            self.round_off = _D("0")
-        else:
-            self.round_off = abs(residual)
-            self.round_off_debit_or_credit = (
-                self.DebitCredit.CREDIT if residual > 0 else self.DebitCredit.DEBIT
-            )
-            if not self.round_off_taxes_id:
-                org = getattr(self, "organization", None) if self.organization_id else None
-                self.round_off_taxes = _pick_round_off_ledger(org)
-
-        if save:
-            self.save(
-                skip_validation=True,
-                update_fields=["round_off", "round_off_debit_or_credit", "round_off_taxes"],
-            )
-        return self.round_off
+        return _journal_round_off(
+            self, "vendor_amount", "vendor_debit_or_credit", save=save,
+        )
 
 
 class TallyPaymentAnalyzedProduct(BaseOrgModel):
@@ -2875,52 +3001,14 @@ class TallyReceiptAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
     def compute_round_off(self, save=True):
         """Recompute round_off for a receipt voucher.
 
-        Mirrors ``TallyExpenseAnalyzedBill.compute_round_off`` — same
-        DR == CR balancing rule, same tolerance. Kept as an independent
-        method so future receipt-specific rules can diverge without
-        touching the expense side.
+        The arithmetic lives in ``_journal_round_off`` — expense,
+        payment and receipt each had their own copy of it and the
+        copies drifted, which is how the printed total came to be
+        ignored on all three at once.
         """
-        from decimal import Decimal as _D
-
-        def _sum_side(side):
-            total = _D("0")
-            if self.pk:
-                for product in self.products.all():
-                    if product.debit_or_credit == side:
-                        total += product.amount or _D("0")
-            for amount, dc in (
-                (self.igst, self.igst_debit_or_credit),
-                (self.cgst, self.cgst_debit_or_credit),
-                (self.sgst, self.sgst_debit_or_credit),
-                (self.tds, self.tds_debit_or_credit),
-                (self.other_adjustment, self.other_adjustment_debit_or_credit),
-                (self.customer_amount, self.customer_debit_or_credit),
-            ):
-                if dc == side and amount:
-                    total += amount
-            return total
-
-        dr_total = _sum_side(self.DebitCredit.DEBIT)
-        cr_total = _sum_side(self.DebitCredit.CREDIT)
-        residual = (dr_total - cr_total).quantize(_D("0.01"))
-
-        if abs(residual) >= self.ROUND_OFF_THRESHOLD or residual == _D("0"):
-            self.round_off = _D("0")
-        else:
-            self.round_off = abs(residual)
-            self.round_off_debit_or_credit = (
-                self.DebitCredit.CREDIT if residual > 0 else self.DebitCredit.DEBIT
-            )
-            if not self.round_off_taxes_id:
-                org = getattr(self, "organization", None) if self.organization_id else None
-                self.round_off_taxes = _pick_round_off_ledger(org)
-
-        if save:
-            self.save(
-                skip_validation=True,
-                update_fields=["round_off", "round_off_debit_or_credit", "round_off_taxes"],
-            )
-        return self.round_off
+        return _journal_round_off(
+            self, "customer_amount", "customer_debit_or_credit", save=save,
+        )
 
 
 class TallyReceiptAnalyzedProduct(BaseOrgModel):

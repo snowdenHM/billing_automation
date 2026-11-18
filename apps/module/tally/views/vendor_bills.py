@@ -674,8 +674,10 @@ def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val,
                                 ledger_type='bill', rate=None):
     """Delegates to shared find_tally_tax_ledger in helpers."""
     from .helpers import find_tally_tax_ledger
+    # A vendor voucher carries input GST.
     return find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val,
-                                 ledger_type=ledger_type, rate=rate)
+                                 ledger_type=ledger_type, rate=rate,
+                                 direction="input")
 
 
 def find_vendor_ledger(company_name, organization, vendor_gst=None):

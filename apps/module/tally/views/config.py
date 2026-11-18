@@ -36,6 +36,24 @@ def parent_group_fields():
         if field.related_model is ParentLedger
     ]
 
+
+def adjustment_ledger_fields():
+    """Every direct Ledger FK on TallyConfig, read from the model.
+
+    The Additional Adjustments mapping — and now its sales-side twin,
+    so a discount we receive and a discount we give post to different
+    ledgers. Three copies of this list were written out by hand in this
+    file; the parent-group list next to it was written out the same way
+    and quietly dropped four groups for weeks. Deriving it means a new
+    adjustment slot is readable and saveable the moment it exists.
+    """
+    return [
+        field.name
+        for field in TallyConfig._meta.get_fields()
+        if getattr(field, "many_to_one", False)
+        and getattr(field, "related_model", None) is Ledger
+    ]
+
 from ..serializers import (
     LedgerSerializer,
     TallyConfigSerializer,
@@ -66,13 +84,7 @@ def get_tally_config(request, org_id):
             TallyConfig.objects.filter(organization=organization)
             .prefetch_related(*prefetch_fields)
             .select_related(
-                *[
-                    f for f in (
-                        'cess_ledger', 'discount_ledger', 'freight_ledger',
-                        'round_off_ledger', 'tds_ledger',
-                    )
-                    if hasattr(TallyConfig, f)
-                ]
+                *[f for f in adjustment_ledger_fields() if hasattr(TallyConfig, f)]
             )
             .first()
         )
@@ -162,10 +174,7 @@ def create_or_update_tally_config(request, org_id):
         # accepts a single Ledger UUID scoped to this org, or null to
         # clear. Skipped silently if the migration hasn't been applied.
         from ..models import Ledger as _Ledger
-        for field in (
-            'cess_ledger', 'discount_ledger', 'freight_ledger',
-            'round_off_ledger', 'tds_ledger',
-        ):
+        for field in adjustment_ledger_fields():
             if field not in request.data:
                 continue
             if not hasattr(TallyConfig, field):
@@ -229,13 +238,7 @@ class TallyConfigViewSet(viewsets.ModelViewSet):
             TallyConfig.objects.filter(organization=organization)
             .prefetch_related(*prefetch_fields)
             .select_related(
-                *[
-                    f for f in (
-                        'cess_ledger', 'discount_ledger', 'freight_ledger',
-                        'round_off_ledger', 'tds_ledger',
-                    )
-                    if hasattr(TallyConfig, f)
-                ]
+                *[f for f in adjustment_ledger_fields() if hasattr(TallyConfig, f)]
             )
             .order_by("-id")
         )
@@ -433,7 +436,10 @@ def list_gst_rate_ledger_mappings(request, org_id):
         mappings = (
             GstRateLedgerMapping.objects
             .filter(organization=organization)
-            .select_related("cgst_ledger", "sgst_ledger", "igst_ledger")
+            .select_related(
+                "cgst_ledger", "sgst_ledger", "igst_ledger",
+                "cgst_output_ledger", "sgst_output_ledger", "igst_output_ledger",
+            )
             .order_by("rate")
         )
         serializer = GstRateLedgerMappingSerializer(mappings, many=True)
@@ -457,9 +463,16 @@ def upsert_gst_rate_ledger_mappings(request, org_id):
     Bulk upsert GST rate → ledger mappings.
 
     Payload: {"mappings": [
-        {"rate": "5.00", "cgst_ledger": "<uuid>", "sgst_ledger": "<uuid>", "igst_ledger": "<uuid>"},
+        {"rate": "5.00",
+         "cgst_ledger": "<uuid>", "sgst_ledger": "<uuid>", "igst_ledger": "<uuid>",
+         "cgst_output_ledger": "<uuid>", "sgst_output_ledger": "<uuid>",
+         "igst_output_ledger": "<uuid>"},
         ...
     ]}
+
+    The plain columns are the INPUT side (tax paid on a purchase); the
+    ``*_output_*`` ones are the tax charged on a sale. Both are
+    optional and any omitted column is cleared.
 
     Each rate is unique per organization. Existing rows are updated; new rows are created.
     """
@@ -481,18 +494,43 @@ def upsert_gst_rate_ledger_mappings(request, org_id):
                 errors.append({"rate": rate_raw, "error": "Invalid rate"})
                 continue
 
-            cgst_id = entry.get("cgst_ledger") or None
-            sgst_id = entry.get("sgst_ledger") or None
-            igst_id = entry.get("igst_ledger") or None
+            # Derived from the model so a new column is saveable the
+            # moment it exists, rather than silently dropped the way
+            # the parent-group list was.
+            ledger_columns = [
+                field.name
+                for field in GstRateLedgerMapping._meta.get_fields()
+                if getattr(field, "many_to_one", False)
+                and getattr(field, "related_model", None) is Ledger
+            ]
+
+            # Every id is checked against this organization. It was
+            # taken on trust, so a caller could map another tenant's
+            # ledger into their own GST configuration by id alone.
+            defaults, rejected = {}, []
+            for column in ledger_columns:
+                ledger_id = entry.get(column) or None
+                if ledger_id and not Ledger.objects.filter(
+                    id=ledger_id, organization=organization,
+                ).exists():
+                    rejected.append(column)
+                    ledger_id = None
+                defaults[f"{column}_id"] = ledger_id
+
+            if rejected:
+                logger.warning(
+                    "Ignoring %s on rate %s — not a ledger in org %s",
+                    ", ".join(rejected), rate, organization.id,
+                )
+                errors.append({
+                    "rate": str(rate),
+                    "error": f"Not a ledger in this organization: {', '.join(rejected)}",
+                })
 
             obj, _ = GstRateLedgerMapping.objects.update_or_create(
                 organization=organization,
                 rate=rate,
-                defaults={
-                    "cgst_ledger_id": cgst_id,
-                    "sgst_ledger_id": sgst_id,
-                    "igst_ledger_id": igst_id,
-                },
+                defaults=defaults,
             )
             saved.append(GstRateLedgerMappingSerializer(obj).data)
         except Exception as e:

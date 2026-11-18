@@ -539,6 +539,21 @@ def process_receipt_analysis_data(bill, json_data, organization):
                     
             logger.info(f"✅ Successfully processed receipt analysis for bill {bill.id} with full automation")
 
+            # Fill the round off right after analysis, the way the vendor
+            # and sales vouchers already do. These three only ever computed
+            # it on Verify, and Verify would not pass until the voucher
+            # balanced — so the operator was asked to fix a difference using
+            # a field that stayed blank until they had already fixed it.
+            #
+            # Applies only inside ₹1, so a real mismatch still surfaces.
+            try:
+                analyzed_bill.compute_round_off()
+            except Exception as round_off_err:
+                logger.warning(
+                    "Auto round-off failed for receipt bill %s: %s",
+                    analyzed_bill.id, round_off_err,
+                )
+
             return analyzed_bill
 
     except Exception as e:
@@ -612,8 +627,10 @@ def find_appropriate_receipt_tax_ledger(organization, igst_val, cgst_val, sgst_v
                                         ledger_type='bill', rate=None):
     """Delegates to shared find_tally_tax_ledger in helpers."""
     from .helpers import find_tally_tax_ledger
+    # A receipt voucher carries output GST.
     return find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val,
-                                 ledger_type=ledger_type, rate=rate)
+                                 ledger_type=ledger_type, rate=rate,
+                                 direction="output")
 
 
 def find_receipt_customer_ledger(company_name, organization, customer_gst=None):
@@ -1004,6 +1021,21 @@ def process_existing_receipt_analysis_data(bill, existing_data, organization):
             bill.save(update_fields=['status', 'process', 'processing_error'])
 
             logger.info(f"Successfully processed existing receipt analysis data for bill {bill.id}")
+            # Fill the round off right after analysis, the way the vendor
+            # and sales vouchers already do. These three only ever computed
+            # it on Verify, and Verify would not pass until the voucher
+            # balanced — so the operator was asked to fix a difference using
+            # a field that stayed blank until they had already fixed it.
+            #
+            # Applies only inside ₹1, so a real mismatch still surfaces.
+            try:
+                analyzed_bill.compute_round_off()
+            except Exception as round_off_err:
+                logger.warning(
+                    "Auto round-off failed for receipt bill %s: %s",
+                    analyzed_bill.id, round_off_err,
+                )
+
             return analyzed_bill
 
     except Exception as e:
