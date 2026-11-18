@@ -157,7 +157,15 @@ def _journal_round_off(bill, party_amount_field, party_dc_field, save=True):
                 skip_validation=True,
                 update_fields=[
                     "round_off", "round_off_debit_or_credit", "round_off_taxes",
-                    party_amount_field,
+                    # The party's SIDE as well as its amount. Leaving the
+                    # side out meant the branch below could move the party
+                    # row to the other side and have that silently thrown
+                    # away on save — the column kept its default, and a
+                    # voucher whose lines sit on the debit side came out
+                    # of the exercise unbalanced. It only looked correct
+                    # because the default happened to match the commoner
+                    # arrangement.
+                    party_amount_field, party_dc_field,
                 ],
             )
         return bill.round_off

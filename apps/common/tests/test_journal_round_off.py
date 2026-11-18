@@ -256,3 +256,107 @@ class SalesRoundOffTests(TestCase):
         bill.compute_round_off()
         bill.refresh_from_db()
         self.assertEqual(bill.round_off, Decimal("0"))
+
+
+class PartySideTests(TestCase):
+    """The party row's SIDE has to survive the save, not just its amount.
+
+    From the client's own bill, 20-Apr-23, invoice 46::
+
+        Rental Service Charges   62,816.13
+        IGST 18%                 11,306.90
+        Less: Rounded Off           (-)0.03
+        Total                   ₹74,123.00
+
+    Rounding off this voucher moves the party row onto 74,123.00 and may
+    move it to the other side, because the side is derived from where
+    the remaining rows sit. ``update_fields`` listed the party's amount
+    and not its side, so that move was written and then silently
+    discarded — the column kept its default.
+
+    It passed every test here anyway: the default happens to be the side
+    the commoner arrangement wants, so only a voucher whose lines sit on
+    the debit side came out unbalanced. Both arrangements are checked
+    now, because "it balanced in the case we happened to write" is what
+    went wrong.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        owner = User.objects.create_user(
+            email="partyside@tally.test", password="x-test-pass-123",
+        )
+        cls.org = Organization.objects.create(
+            name="Party Side Org", owner=owner, created_by=owner,
+        )
+        parent = ParentLedger.objects.create(
+            organization=cls.org, parent="Indirect Expenses",
+        )
+        Ledger.objects.create(
+            organization=cls.org, name="Round Off", parent=parent,
+        )
+        config = TallyConfig.objects.create(organization=cls.org)
+        config.round_off_parents.set([parent])
+
+    def build(self, side):
+        bill = TallyReceiptAnalyzedBill.objects.create(
+            organization=self.org,
+            total=Decimal("74123.00"),
+            igst=Decimal("11306.90"),
+            igst_debit_or_credit=side,
+        )
+        TallyReceiptAnalyzedProduct.objects.create(
+            organization=self.org, receipt_bill=bill,
+            amount=Decimal("62816.13"), debit_or_credit=side,
+        )
+        bill.compute_round_off()
+        bill.refresh_from_db()
+        return bill
+
+    def totals(self, bill):
+        debit = credit = Decimal("0")
+        rows = [(p.amount, p.debit_or_credit) for p in bill.products.all()] + [
+            (bill.igst, bill.igst_debit_or_credit),
+            (bill.customer_amount, bill.customer_debit_or_credit),
+            (bill.round_off, bill.round_off_debit_or_credit),
+        ]
+        for amount, side in rows:
+            if not amount:
+                continue
+            if side == "debit":
+                debit += amount
+            else:
+                credit += amount
+        return debit, credit
+
+    def test_it_balances_with_the_lines_on_the_debit_side(self):
+        bill = self.build("debit")
+        debit, credit = self.totals(bill)
+        self.assertEqual(
+            debit, credit,
+            f"Dr {debit} != Cr {credit} — the party row's side was not saved",
+        )
+        self.assertEqual(bill.customer_debit_or_credit, "credit")
+        self.assertEqual(bill.round_off_debit_or_credit, "credit")
+
+    def test_it_balances_with_the_lines_on_the_credit_side(self):
+        bill = self.build("credit")
+        debit, credit = self.totals(bill)
+        self.assertEqual(debit, credit, f"Dr {debit} != Cr {credit}")
+        self.assertEqual(bill.customer_debit_or_credit, "debit")
+        self.assertEqual(bill.round_off_debit_or_credit, "debit")
+
+    def test_the_round_off_sits_with_the_party_row(self):
+        """It reduces the party amount, so it rides on the party's side.
+
+        The bill states the same thing in words: "Less: Rounded Off".
+        """
+        for side in ("debit", "credit"):
+            with self.subTest(lines=side):
+                bill = self.build(side)
+                self.assertEqual(
+                    bill.round_off_debit_or_credit,
+                    bill.customer_debit_or_credit,
+                )
+                self.assertEqual(bill.customer_amount, Decimal("74123.00"))
+                self.assertEqual(bill.round_off, Decimal("0.03"))
