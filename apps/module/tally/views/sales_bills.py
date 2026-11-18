@@ -553,7 +553,10 @@ def process_analysis_data(bill, json_data, organization):
 
                         # � AUTO-ASSIGN LINE ITEM LEDGER FROM CHART OF ACCOUNTS (Purchase Accounts)
                         logger.info(f"🏛️  Finding line item ledger for product '{item.get('description', 'No desc')[:30]}...'")
-                        item_ledger = find_appropriate_tax_ledger(organization, float(item_igst_rounded), float(item_cgst_rounded), float(item_sgst_rounded), ledger_type='product')
+                        item_ledger = find_appropriate_tax_ledger(
+                            organization, float(item_igst_rounded),
+                            float(item_cgst_rounded), float(item_sgst_rounded),
+                            ledger_type='product', rate=_assigned['rate'])
                         
                         # The rate was chosen, not back-derived.
                         gst_rate = _assigned['rate']
@@ -674,9 +677,20 @@ def process_analysis_data(bill, json_data, organization):
                 )
 
             # Update bill status
+            # A successful analysis clears whatever the last failed one
+            # left behind.
+            #
+            # ``mark_processing_done`` does this for the background task,
+            # but the re-analyse endpoint never goes through it: it calls
+            # this function directly. So a bill that failed once and was
+            # then analysed successfully kept the old message for ever —
+            # the record showed "Analysed" with its data all present and
+            # an "AI analysis failed" error sitting beside it, and the
+            # list drew a red Error badge on a row that was fine.
             bill.status = TallySalesBill.BillStatus.ANALYSED
             bill.process = True
-            bill.save(update_fields=['status', 'process'])
+            bill.processing_error = ""
+            bill.save(update_fields=['status', 'process', 'processing_error'])
 
             logger.info(f"🎉 ANALYSIS COMPLETE - Bill {bill.id} status updated to ANALYSED")
 
@@ -709,10 +723,12 @@ def extract_items_from_properties(json_data):
         return []
 
 
-def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_type='bill'):
+def find_appropriate_tax_ledger(organization, igst_val, cgst_val, sgst_val,
+                                ledger_type='bill', rate=None):
     """Delegates to shared find_tally_tax_ledger in helpers."""
     from .helpers import find_tally_tax_ledger
-    return find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_type=ledger_type)
+    return find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val,
+                                 ledger_type=ledger_type, rate=rate)
 
 
 def find_customer_ledger(company_name, organization, customer_gst=None):
@@ -1227,7 +1243,8 @@ def process_existing_analysis_data(bill, existing_data, organization):
             # Update bill status
             bill.status = TallySalesBill.BillStatus.ANALYSED
             bill.process = True
-            bill.save(update_fields=['status', 'process'])
+            bill.processing_error = ""
+            bill.save(update_fields=['status', 'process', 'processing_error'])
 
             logger.info(f"Successfully processed existing analysis data for bill {bill.id}")
             return analyzed_bill

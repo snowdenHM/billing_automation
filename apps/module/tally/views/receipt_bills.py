@@ -509,10 +509,21 @@ def process_receipt_analysis_data(bill, json_data, organization):
                     logger.info(f"ℹ️ Skipping consolidated receipt product creation - bill has only {len(product_instances)} item(s)")
 
             # Update bill status and save ownership validation results
+            # A successful analysis clears whatever the last failed one
+            # left behind.
+            #
+            # ``mark_processing_done`` does this for the background task,
+            # but the re-analyse endpoint never goes through it: it calls
+            # this function directly. So a bill that failed once and was
+            # then analysed successfully kept the old message for ever —
+            # the record showed "Analysed" with its data all present and
+            # an "AI analysis failed" error sitting beside it, and the
+            # list drew a red Error badge on a row that was fine.
             bill.status = TallyReceiptBill.BillStatus.ANALYSED
             bill.process = True
+            bill.processing_error = ""
             # Update fields list based on what exists in the model
-            fields_to_update = ['status', 'process']
+            fields_to_update = ['status', 'process', 'processing_error']
             if hasattr(bill, 'ownership_validation_status'):
                 fields_to_update.append('ownership_validation_status')
             if hasattr(bill, 'ownership_validation_message'):
@@ -575,10 +586,12 @@ def extract_receipts_from_properties(json_data):
         return []
 
 
-def find_appropriate_receipt_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_type='bill'):
+def find_appropriate_receipt_tax_ledger(organization, igst_val, cgst_val, sgst_val,
+                                        ledger_type='bill', rate=None):
     """Delegates to shared find_tally_tax_ledger in helpers."""
     from .helpers import find_tally_tax_ledger
-    return find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val, ledger_type=ledger_type)
+    return find_tally_tax_ledger(organization, igst_val, cgst_val, sgst_val,
+                                 ledger_type=ledger_type, rate=rate)
 
 
 def find_receipt_customer_ledger(company_name, organization, customer_gst=None):
@@ -965,7 +978,8 @@ def process_existing_receipt_analysis_data(bill, existing_data, organization):
             # Update bill status
             bill.status = TallyReceiptBill.BillStatus.ANALYSED
             bill.process = True
-            bill.save(update_fields=['status', 'process'])
+            bill.processing_error = ""
+            bill.save(update_fields=['status', 'process', 'processing_error'])
 
             logger.info(f"Successfully processed existing receipt analysis data for bill {bill.id}")
             return analyzed_bill
