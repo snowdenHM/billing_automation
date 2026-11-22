@@ -877,6 +877,38 @@ class TallyVendorAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
         Ledger, on_delete=models.CASCADE, blank=True, null=True, related_name="sgst_tally_vendor_analysed_bills"
     )
 
+    # ------------------------------------------------------------------
+    # Reverse charge: where the LIABILITY sits.
+    #
+    # The three above are the input-credit ledgers — the tax we may
+    # reclaim. Under reverse charge the same figure is also a debt owed
+    # to the government, and that is a different account: posting it to
+    # the input ledger would cancel the credit instead of recording the
+    # debt.
+    #
+    # ``purchase_rcm_rows`` used to pick this ledger itself, from the
+    # RCM parent group. That works when an organisation has exactly one
+    # candidate per tax head and silently guesses when it has several,
+    # and the operator had no way to say which. These hold their answer;
+    # the automatic pick remains the fallback for anyone who has not
+    # made one.
+    # ------------------------------------------------------------------
+    igst_rcm_taxes = models.ForeignKey(
+        Ledger, on_delete=models.SET_NULL, blank=True, null=True,
+        related_name="igst_rcm_tally_vendor_analysed_bills",
+        help_text="IGST RCM payable ledger — the liability side.",
+    )
+    cgst_rcm_taxes = models.ForeignKey(
+        Ledger, on_delete=models.SET_NULL, blank=True, null=True,
+        related_name="cgst_rcm_tally_vendor_analysed_bills",
+        help_text="CGST RCM payable ledger — the liability side.",
+    )
+    sgst_rcm_taxes = models.ForeignKey(
+        Ledger, on_delete=models.SET_NULL, blank=True, null=True,
+        related_name="sgst_rcm_tally_vendor_analysed_bills",
+        help_text="SGST RCM payable ledger — the liability side.",
+    )
+
     # How the discount and freight relate to the taxable value.
     #
     # Default False on both, so every bill already in the database keeps

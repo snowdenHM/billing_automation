@@ -1637,6 +1637,30 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
         # cess/freight/round_off) share the same shape → single loop.
         # Ledger FK cleared when amount is zero so stale references
         # don't leak into the sync XML.
+        # Reverse charge: the liability ledger the operator picked on
+        # the voucher's mirror row. Sent flat, beside `taxes`, because
+        # it carries no amount of its own — the amount is the input
+        # row's, by definition.
+        from ..models import Ledger as _Ledger
+        for _head in ('igst', 'cgst', 'sgst'):
+            _key = f'{_head}_rcm_taxes'
+            if _key not in analyzed_data:
+                continue
+            _val = analyzed_data.get(_key)
+            if not _val:
+                setattr(analyzed_bill, _key, None)
+                continue
+            _ledger = _Ledger.objects.filter(
+                id=_val, organization=organization,
+            ).first()
+            if _ledger is None:
+                logger.warning(
+                    "Ignoring %s=%s — no such Ledger in org %s",
+                    _key, _val, organization.id,
+                )
+                continue
+            setattr(analyzed_bill, _key, _ledger)
+
         taxes_data = analyzed_data.get('taxes', {})
         if taxes_data:
             _TAX_FIELDS = (

@@ -228,7 +228,12 @@ def purchase_rcm_rows(analyzed_bill, organization):
         amount = _money(getattr(analyzed_bill, tax_type, 0))
         if amount == Decimal("0"):
             continue
-        ledger = rcm_ledger_for(organization, tax_type)
+        # The operator's answer first. ``*_rcm_taxes`` is what the
+        # voucher's mirror row is bound to; the automatic pick below is
+        # the fallback for a bill where nobody chose one.
+        ledger = getattr(analyzed_bill, f"{tax_type}_rcm_taxes", None)
+        if ledger is None:
+            ledger = rcm_ledger_for(organization, tax_type)
         if ledger is None:
             # No RCM group configured. Returning nothing is the only safe
             # answer: posting the liability to the input-credit ledger

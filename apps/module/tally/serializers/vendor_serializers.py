@@ -84,6 +84,10 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
     igst_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
     cgst_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
     sgst_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    # Reverse charge: the liability ledgers, chosen on the voucher.
+    igst_rcm_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    cgst_rcm_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
+    sgst_rcm_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
     discount_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
     cess_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
     freight_taxes = serializers.PrimaryKeyRelatedField(read_only=True)
@@ -153,7 +157,9 @@ class TallyVendorAnalyzedBillSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'selected_bill', 'selected_bill_name', 'vendor', 'vendor_name',
             'bill_no', 'bill_date', 'due_date', 'total', 'igst', 'igst_taxes',
-            'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes', 'discount', 'discount_taxes',
+            'cgst', 'cgst_taxes', 'sgst', 'sgst_taxes',
+            'igst_rcm_taxes', 'cgst_rcm_taxes', 'sgst_rcm_taxes',
+            'discount', 'discount_taxes',
             'cess', 'cess_taxes', 'freight', 'freight_taxes',
             # Whether the discount comes off before GST and whether
             # freight is taxed. Both change the taxable value, so the
