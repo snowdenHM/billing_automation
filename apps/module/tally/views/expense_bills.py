@@ -370,15 +370,17 @@ def process_expense_analysis_data(bill, json_data, organization):
 
                         logger.info(f"✅ Created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
 
-                        # Flip analyzed_bill.consolidate on since we
-                        # populated the consolidated_products table.
-                        # Without this, next verify treats the rows we
-                        # just created as orphans and deletes them.
-                        analyzed_bill.consolidate = True
-                        analyzed_bill.save(
-                            skip_validation=True,
-                            update_fields=["consolidate"],
-                        )
+                        # The consolidated row is built, but the voucher
+                        # does NOT open in consolidated mode.
+                        #
+                        # This used to flip the flag on, and the reason
+                        # given was that verify would otherwise delete
+                        # the rows as orphans. That is no longer true:
+                        # verify preserves them explicitly, for exactly
+                        # this layout switching. So the rows survive
+                        # with the flag off, and the toggle has
+                        # something to turn on when the operator wants
+                        # it — which is the point.
 
                     except Exception as e:
                         logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")
@@ -868,15 +870,17 @@ def process_existing_expense_analysis_data(bill, existing_data, organization):
 
                         logger.info(f"✅ Created consolidated expense product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
 
-                        # Flip analyzed_bill.consolidate on since we
-                        # populated the consolidated_products table.
-                        # Without this, next verify treats the rows we
-                        # just created as orphans and deletes them.
-                        analyzed_bill.consolidate = True
-                        analyzed_bill.save(
-                            skip_validation=True,
-                            update_fields=["consolidate"],
-                        )
+                        # The consolidated row is built, but the voucher
+                        # does NOT open in consolidated mode.
+                        #
+                        # This used to flip the flag on, and the reason
+                        # given was that verify would otherwise delete
+                        # the rows as orphans. That is no longer true:
+                        # verify preserves them explicitly, for exactly
+                        # this layout switching. So the rows survive
+                        # with the flag off, and the toggle has
+                        # something to turn on when the operator wants
+                        # it — which is the point.
 
                     except Exception as e:
                         logger.error(f"❌ Error creating consolidated expense product for bill {analyzed_bill.id}: {str(e)}")

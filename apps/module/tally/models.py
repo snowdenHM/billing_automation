@@ -1946,6 +1946,18 @@ class TallyPaymentAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
 
     gst_type = models.CharField(max_length=20, choices=GSTType.choices, default=GSTType.UNKNOWN)
 
+    lines_include_gst = models.BooleanField(
+        default=False,
+        verbose_name="Line amounts include GST",
+        help_text=(
+            "ON: the printed line amounts already hold their GST (MRP "
+            "pricing on a retail or pharmacy bill), so the taxable value "
+            "is lower than the amount. OFF: GST is added on top. The "
+            "purchase and sales vouchers have carried this since "
+            "migration 0046; a receipt or payment can be raised against "
+            "an MRP-priced document just as easily."
+        ),
+    )
     total = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     igst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     igst_taxes = models.ForeignKey(
@@ -2004,10 +2016,12 @@ class TallyPaymentAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
     note = models.CharField(max_length=100, blank=True, null=True, default="Enter Your Description")
 
     consolidate = models.BooleanField(
-        default=True,
+        default=False,
         help_text=(
-            "Payment vouchers default to consolidated line items — most "
-            "users only care about ledger-level totals in a payment."
+            "Off by default, like every other voucher. Payment vouchers "
+            "used to open consolidated, so the operator's first sight of "
+            "the document was an aggregate and the lines it actually "
+            "carries were a click away. The toggle still turns it on."
         ),
     )
 
@@ -2917,6 +2931,18 @@ class TallyReceiptAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
     due_date = models.DateField(blank=True, null=True)
     gst_type = models.CharField(max_length=20, choices=GSTType.choices, default=GSTType.UNKNOWN)
 
+    lines_include_gst = models.BooleanField(
+        default=False,
+        verbose_name="Line amounts include GST",
+        help_text=(
+            "ON: the printed line amounts already hold their GST (MRP "
+            "pricing on a retail or pharmacy bill), so the taxable value "
+            "is lower than the amount. OFF: GST is added on top. The "
+            "purchase and sales vouchers have carried this since "
+            "migration 0046; a receipt or payment can be raised against "
+            "an MRP-priced document just as easily."
+        ),
+    )
     total = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     igst = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, default=Decimal("0"))
     igst_taxes = models.ForeignKey(
@@ -2975,10 +3001,12 @@ class TallyReceiptAnalyzedBill(BaseOrgModel, ForeignCurrencyMixin):
     note = models.CharField(max_length=100, blank=True, null=True, default="Enter Your Description")
 
     consolidate = models.BooleanField(
-        default=True,
+        default=False,
         help_text=(
-            "Receipt vouchers default to consolidated line items — most "
-            "users only care about ledger-level totals in a receipt."
+            "Off by default, like every other voucher. Receipt vouchers "
+            "used to open consolidated, so the operator's first sight of "
+            "the document was an aggregate and the lines it actually "
+            "carries were a click away. The toggle still turns it on."
         ),
     )
 

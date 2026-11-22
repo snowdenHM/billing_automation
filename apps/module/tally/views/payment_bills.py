@@ -479,13 +479,13 @@ def process_payment_analysis_data(bill, json_data, organization):
 
                         logger.info(f"✅ Created consolidated payment product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
 
-                        # Initial analysis with 2+ items — flip to consolidate
-                        # mode so the FE opens with the aggregated view (mirrors
-                        # vendor/expense behaviour).
-                        if not analyzed_bill.consolidate:
-                            analyzed_bill.consolidate = True
-                            analyzed_bill.save(update_fields=['consolidate'])
-
+                        # The consolidated row is built, but the voucher does NOT
+                        # open in consolidated mode. Analysis used to flip the flag
+                        # on for any bill with two or more lines, so the operator's
+                        # first sight of the voucher was an aggregate and the lines
+                        # the bill actually carries were a click away. Off by
+                        # default on every voucher now; the toggle still turns it
+                        # on, and the row above is what it turns on.
                     except Exception as e:
                         logger.error(f"❌ Error creating consolidated payment product for bill {analyzed_bill.id}: {str(e)}")
                 else:
@@ -988,10 +988,13 @@ def process_existing_payment_analysis_data(bill, existing_data, organization):
 
                         logger.info(f"✅ Created consolidated payment product for bill {analyzed_bill.id} with {items_count} entries (₹{total_amount})")
 
-                        if not analyzed_bill.consolidate:
-                            analyzed_bill.consolidate = True
-                            analyzed_bill.save(update_fields=['consolidate'])
-
+                        # The consolidated row is built, but the voucher does NOT
+                        # open in consolidated mode. Analysis used to flip the flag
+                        # on for any bill with two or more lines, so the operator's
+                        # first sight of the voucher was an aggregate and the lines
+                        # the bill actually carries were a click away. Off by
+                        # default on every voucher now; the toggle still turns it
+                        # on, and the row above is what it turns on.
                     except Exception as e:
                         logger.error(f"❌ Error creating consolidated payment product for bill {analyzed_bill.id}: {str(e)}")
                 else:
@@ -1249,6 +1252,18 @@ def update_analyzed_payment_bill_data(analyzed_bill, analyzed_data, organization
                     analyzed_bill.due_date = due_date
         if 'total' in analyzed_data:
             analyzed_bill.total = _to_decimal(analyzed_data['total'])
+
+        # Line amounts that already hold their GST.
+        #
+        # Analysis sets this from what the document says; verify has to
+        # accept it too, or the operator can see the reading is wrong
+        # and has no way to save the correction — which is the same as
+        # not having the field. The purchase and sales vouchers have
+        # worked this way since migration 0046.
+        if 'lines_include_gst' in analyzed_data:
+            analyzed_bill.lines_include_gst = bool(
+                analyzed_data['lines_include_gst']
+            )
 
         # Update tax information — unified 6-block loop.
         # Each block: (payload key, amount field, FK field, tax_type,
