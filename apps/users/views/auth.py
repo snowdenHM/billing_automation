@@ -160,6 +160,7 @@ def login_view(request):
     return _attach_refresh_cookie(
         Response(serializer.validated_data, status=status.HTTP_200_OK),
         serializer.validated_data,
+        keep_in_body=_asks_for_refresh_in_body(request),
     )
 
 
@@ -194,9 +195,27 @@ REFRESH_COOKIE_NAME = "bm_refresh"
 #: turns out to be anybody.
 _REFRESH_IN_BODY = False
 
+#: The mobile app has no cookie jar it can rely on and keeps the token in
+#: the OS keystore instead, which page scripts cannot reach. It sends
+#: ``X-Token-Transport: body`` on login to get the token in the JSON.
+#:
+#: Only login honours it, because login needs the password. On refresh a
+#: script injected into the site could send the header too, the browser
+#: would attach the cookie, and the script would get the very token this
+#: section keeps from it.
+_TOKEN_TRANSPORT_HEADER = "HTTP_X_TOKEN_TRANSPORT"
 
-def _attach_refresh_cookie(response, data):
-    """Move the refresh token from *data* into an httpOnly cookie."""
+
+def _asks_for_refresh_in_body(request):
+    return request.META.get(_TOKEN_TRANSPORT_HEADER, "").strip().lower() == "body"
+
+
+def _attach_refresh_cookie(response, data, *, keep_in_body=False):
+    """Move the refresh token from *data* into an httpOnly cookie.
+
+    With *keep_in_body* the cookie is still set but the token stays in
+    the JSON as well, for a client that stores it itself.
+    """
     refresh = (data or {}).get("refresh")
     if not refresh:
         return response
@@ -215,7 +234,7 @@ def _attach_refresh_cookie(response, data):
         # API call, which keeps it out of logs and proxies.
         path="/api/v1/auth/refresh/",
     )
-    if not _REFRESH_IN_BODY:
+    if not (_REFRESH_IN_BODY or keep_in_body):
         response.data = {k: v for k, v in response.data.items() if k != "refresh"}
     return response
 
