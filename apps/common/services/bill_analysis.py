@@ -1163,7 +1163,8 @@ def get_vendor_bill_prompt():
         "freight": 0
     }
 
-    ITEM FIELDS: "price" = rate per unit, "quantity" = qty, "amount" =
+    ITEM FIELDS: "price" = the RATE per unit — the column an invoice
+    labels Rate, Unit Price, Price or Rate per unit. "quantity" = qty, "amount" =
     the line total printed in that row's Amount column (0 if the bill
     prints no line amount). "price" x "quantity" should equal "amount".
     "hsn" = the HSN/SAC code printed in that row. "unit" = the unit as
@@ -1348,7 +1349,8 @@ def get_sales_bill_prompt():
       - Never copy the same name into both. If only one party is legible,
         fill that one and leave the other's fields as empty strings.
 
-    ITEM FIELDS: "price" = rate per unit, "quantity" = qty, "amount" =
+    ITEM FIELDS: "price" = the RATE per unit — the column an invoice
+    labels Rate, Unit Price, Price or Rate per unit. "quantity" = qty, "amount" =
     the line total printed in that row's Amount column (0 if the invoice
     prints no line amount). "price" x "quantity" should equal "amount".
     "hsn" = the HSN/SAC code printed in that row. "unit" = the unit as

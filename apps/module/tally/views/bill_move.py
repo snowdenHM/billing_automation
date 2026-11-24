@@ -23,12 +23,106 @@ from ..models import (
     TallyExpenseAnalyzedBill,
     TallyExpenseAnalyzedProduct,
     TallyExpenseConsolidatedProduct,
+    TallySalesBill,
+    TallySalesAnalyzedBill,
+    TallySalesAnalyzedProduct,
+    TallySalesConsolidatedProduct,
+    TallyPaymentBill,
+    TallyPaymentAnalyzedBill,
+    TallyPaymentAnalyzedProduct,
+    TallyPaymentConsolidatedProduct,
+    TallyReceiptBill,
+    TallyReceiptAnalyzedBill,
+    TallyReceiptAnalyzedProduct,
+    TallyReceiptConsolidatedProduct,
 )
 
 logger = logging.getLogger(__name__)
 
-# Menu-facing names for the two modules a bill can move between.
-MODULE_LABELS = {"vendor": "Purchase Voucher", "expense": "Journal Entry"}
+# ----------------------------------------------------------------------
+# Every voucher a bill can move between, described once.
+#
+# This used to be hand-written if/elif pairs for vendor and expense
+# only — two modules, four branches, and the shape repeated in the
+# lookup, the create and the line copy. Adding a third voucher meant
+# writing all three again, so nobody did: the payment list carried
+# ``allowMove={false}`` with a comment saying the endpoint had no
+# correct value to send, and Receipt and Sales had no Move at all.
+#
+# ``shape`` is what actually differs between them. An ITEM voucher
+# carries goods — name, rate, quantity, a GST rate per line. A LEDGER
+# voucher carries postings — a ledger, an amount and a side. Moving
+# between two of the same shape keeps everything; moving across shapes
+# keeps what the destination can hold and drops the rest, which is why
+# the list warns before it does it.
+# ----------------------------------------------------------------------
+MODULES = {
+    "vendor": {
+        "label": "Purchase Voucher",
+        "bill": TallyVendorBill,
+        "analysed": TallyVendorAnalyzedBill,
+        "product": TallyVendorAnalyzedProduct,
+        "consolidated": TallyVendorConsolidatedProduct,
+        "fk": "vendor_bill_analyzed",
+        "party": "vendor",
+        "shape": "item",
+    },
+    "sales": {
+        "label": "Sales Voucher",
+        "bill": TallySalesBill,
+        "analysed": TallySalesAnalyzedBill,
+        "product": TallySalesAnalyzedProduct,
+        "consolidated": TallySalesConsolidatedProduct,
+        "fk": "sales_bill_analyzed",
+        "party": "customer",
+        "shape": "item",
+    },
+    "expense": {
+        "label": "Journal Entry",
+        "bill": TallyExpenseBill,
+        "analysed": TallyExpenseAnalyzedBill,
+        "product": TallyExpenseAnalyzedProduct,
+        "consolidated": TallyExpenseConsolidatedProduct,
+        "fk": "expense_bill",
+        "party": "vendor",
+        "shape": "ledger",
+    },
+    "payment": {
+        "label": "Payment Voucher",
+        "bill": TallyPaymentBill,
+        "analysed": TallyPaymentAnalyzedBill,
+        "product": TallyPaymentAnalyzedProduct,
+        "consolidated": TallyPaymentConsolidatedProduct,
+        "fk": "payment_bill",
+        "party": "vendor",
+        "shape": "ledger",
+    },
+    "receipt": {
+        "label": "Receipt Voucher",
+        "bill": TallyReceiptBill,
+        "analysed": TallyReceiptAnalyzedBill,
+        "product": TallyReceiptAnalyzedProduct,
+        "consolidated": TallyReceiptConsolidatedProduct,
+        "fk": "receipt_bill",
+        "party": "customer",
+        "shape": "ledger",
+    },
+}
+
+MODULE_LABELS = {key: spec["label"] for key, spec in MODULES.items()}
+
+
+def _settable(model, data):
+    """Only the fields this model actually has.
+
+    The five analysed-bill models agree on most columns and not all of
+    them — TDS is on the journal stack, place of supply on the invoice
+    one. Filtering here means a destination takes what it understands
+    and silently ignores the rest, instead of the caller needing a
+    branch per pair.
+    """
+    names = {f.name for f in model._meta.get_fields()}
+    return {k: v for k, v in data.items() if k in names}
 
 
 @extend_schema(
@@ -39,12 +133,12 @@ MODULE_LABELS = {"vendor": "Purchase Voucher", "expense": "Journal Entry"}
         'properties': {
             'from': {
                 'type': 'string',
-                'enum': ['vendor', 'expense'],
+                'enum': list(MODULES),
                 'description': 'Source module'
             },
             'to': {
                 'type': 'string',
-                'enum': ['vendor', 'expense'],
+                'enum': list(MODULES),
                 'description': 'Destination module'
             },
             'bill_ids': {
@@ -102,7 +196,7 @@ def move_tally_bills_between_modules_view(request, org_id):
     to_module = request.data.get('to', '').lower()
     bill_ids = request.data.get('bill_ids', [])
 
-    valid_modules = ['vendor', 'expense']
+    valid_modules = list(MODULES)
 
     if not from_module or not to_module:
         return Response({
@@ -141,43 +235,30 @@ def move_tally_bills_between_modules_view(request, org_id):
     for bill_id in bill_ids:
         try:
             with transaction.atomic():
-                # Get source bill and analyzed bill based on from_module
-                source_bill = None
+                # Source, looked up through the registry rather than
+                # a branch per module.
+                src = MODULES[from_module]
+                dst = MODULES[to_module]
                 source_analyzed_bill = None
 
-                if from_module == 'vendor':
-                    try:
-                        source_bill = TallyVendorBill.objects.alive().get(id=bill_id, organization=organization)
-                        try:
-                            source_analyzed_bill = TallyVendorAnalyzedBill.objects.prefetch_related(
-                                'products', 'consolidated_product'
-                            ).get(selected_bill=source_bill, organization=organization)
-                        except TallyVendorAnalyzedBill.DoesNotExist:
-                            source_analyzed_bill = None
-                    except TallyVendorBill.DoesNotExist:
-                        errors.append({
-                            'bill_id': bill_id,
-                            'error': f'Vendor bill with ID {bill_id} not found'
-                        })
-                        failed_moves += 1
-                        continue
+                try:
+                    source_bill = src["bill"].objects.alive().get(
+                        id=bill_id, organization=organization,
+                    )
+                except src["bill"].DoesNotExist:
+                    errors.append({
+                        'bill_id': bill_id,
+                        'error': f'{src["label"]} with ID {bill_id} not found',
+                    })
+                    failed_moves += 1
+                    continue
 
-                elif from_module == 'expense':
-                    try:
-                        source_bill = TallyExpenseBill.objects.alive().get(id=bill_id, organization=organization)
-                        try:
-                            source_analyzed_bill = TallyExpenseAnalyzedBill.objects.prefetch_related(
-                                'products', 'consolidated_product'
-                            ).get(selected_bill=source_bill, organization=organization)
-                        except TallyExpenseAnalyzedBill.DoesNotExist:
-                            source_analyzed_bill = None
-                    except TallyExpenseBill.DoesNotExist:
-                        errors.append({
-                            'bill_id': bill_id,
-                            'error': f'Expense bill with ID {bill_id} not found'
-                        })
-                        failed_moves += 1
-                        continue
+                try:
+                    source_analyzed_bill = src["analysed"].objects.prefetch_related(
+                        "products",
+                    ).get(selected_bill=source_bill, organization=organization)
+                except src["analysed"].DoesNotExist:
+                    source_analyzed_bill = None
 
                 # Check bill status - only allow Draft or Analysed
                 if source_bill.status not in ['Draft', 'Analysed']:
@@ -203,136 +284,108 @@ def move_tally_bills_between_modules_view(request, org_id):
                     'file': source_bill.file  # Copy file reference
                 }
 
-                # Create bill based on destination module
-                if to_module == 'vendor':
-                    new_bill = TallyVendorBill.objects.create(**common_data)
+                # Create the destination bill and carry across what it
+                # can hold.
+                new_bill = dst["bill"].objects.create(**common_data)
 
-                    # Transfer analyzed bill data if exists
-                    if source_analyzed_bill:
-                        analyzed_common_data = {
-                            'selected_bill': new_bill,
-                            'organization': organization,
-                            'vendor': getattr(source_analyzed_bill, 'vendor', None),
-                            'bill_no': str(getattr(source_analyzed_bill, 'bill_no', ''))[:50],
-                            'bill_date': getattr(source_analyzed_bill, 'bill_date', None),
-                            'due_date': getattr(source_analyzed_bill, 'due_date', None),
-                            'total': getattr(source_analyzed_bill, 'total', 0),
-                            'igst': getattr(source_analyzed_bill, 'igst', 0),
-                            'cgst': getattr(source_analyzed_bill, 'cgst', 0),
-                            'sgst': getattr(source_analyzed_bill, 'sgst', 0),
-                            'note': (f"Moved from {from_module} - " + str(getattr(source_analyzed_bill, 'note', '')))[:100],
-                            'consolidate': getattr(source_analyzed_bill, 'consolidate', False)
-                        }
+                if source_analyzed_bill:
+                    carried = {
+                        "selected_bill": new_bill,
+                        "organization": organization,
+                        "bill_no": str(getattr(source_analyzed_bill, "bill_no", "") or "")[:50],
+                        "bill_date": getattr(source_analyzed_bill, "bill_date", None),
+                        "due_date": getattr(source_analyzed_bill, "due_date", None),
+                        "total": getattr(source_analyzed_bill, "total", 0),
+                        "igst": getattr(source_analyzed_bill, "igst", 0),
+                        "cgst": getattr(source_analyzed_bill, "cgst", 0),
+                        "sgst": getattr(source_analyzed_bill, "sgst", 0),
+                        "tds": getattr(source_analyzed_bill, "tds", 0),
+                        "note": (
+                            f"Moved from {src['label']} - "
+                            + str(getattr(source_analyzed_bill, "note", "") or "")
+                        )[:100],
+                        "consolidate": getattr(source_analyzed_bill, "consolidate", False),
+                    }
 
-                        new_analyzed_bill = TallyVendorAnalyzedBill.objects.create(**analyzed_common_data)
+                    # The party only travels when both sides keep it in
+                    # the same place. A supplier ledger is not a customer
+                    # ledger, so moving a purchase to a sales voucher
+                    # leaves the party blank for the operator to pick
+                    # rather than writing a creditor into a debtor field.
+                    if src["party"] == dst["party"]:
+                        carried[dst["party"]] = getattr(
+                            source_analyzed_bill, src["party"], None,
+                        )
 
-                elif to_module == 'expense':
-                    new_bill = TallyExpenseBill.objects.create(**common_data)
+                    new_analyzed_bill = dst["analysed"].objects.create(
+                        **_settable(dst["analysed"], carried)
+                    )
 
-                    if source_analyzed_bill:
-                        analyzed_common_data = {
-                            'selected_bill': new_bill,
-                            'organization': organization,
-                            'vendor': getattr(source_analyzed_bill, 'vendor', None),
-                            'bill_no': str(getattr(source_analyzed_bill, 'bill_no', ''))[:50],
-                            'bill_date': getattr(source_analyzed_bill, 'bill_date', None),
-                            'due_date': getattr(source_analyzed_bill, 'due_date', None),
-                            'total': getattr(source_analyzed_bill, 'total', 0),
-                            'igst': getattr(source_analyzed_bill, 'igst', 0),
-                            'cgst': getattr(source_analyzed_bill, 'cgst', 0),
-                            'sgst': getattr(source_analyzed_bill, 'sgst', 0),
-                            'tds': getattr(source_analyzed_bill, 'tds', 0),
-                            'note': (f"Moved from {from_module} - " + str(getattr(source_analyzed_bill, 'note', '')))[:100],
-                            'consolidate': getattr(source_analyzed_bill, 'consolidate', False)
-                        }
-
-                        new_analyzed_bill = TallyExpenseAnalyzedBill.objects.create(**analyzed_common_data)
-
-                # Transfer products/line items if they exist and bill was analysed
+                # Line items, translated between the two shapes.
                 if source_analyzed_bill and source_bill.status == 'Analysed' and new_analyzed_bill:
                     try:
-                        # Transfer individual products
-                        source_products = source_analyzed_bill.products.all() if hasattr(source_analyzed_bill, 'products') else []
-                        for product in source_products:
-                            if to_module == 'vendor':
-                                TallyVendorAnalyzedProduct.objects.create(
-                                    vendor_bill_analyzed=new_analyzed_bill,
-                                    organization=organization,
-                                    item_name=str(getattr(product, 'item_name', ''))[:100],
-                                    item_details=str(getattr(product, 'item_details', '')),
-                                    price=getattr(product, 'price', 0),
-                                    quantity=getattr(product, 'quantity', 0),
-                                    amount=getattr(product, 'amount', 0),
-                                    product_gst=str(getattr(product, 'product_gst', ''))[:20],
-                                    igst=getattr(product, 'igst', 0),
-                                    cgst=getattr(product, 'cgst', 0),
-                                    sgst=getattr(product, 'sgst', 0),
-                                    stock_item=getattr(product, 'stock_item', None),
-                                    taxes=getattr(product, 'taxes', None)
-                                )
-                            elif to_module == 'expense':
-                                TallyExpenseAnalyzedProduct.objects.create(
-                                    expense_bill=new_analyzed_bill,
-                                    organization=organization,
-                                    item_details=str(getattr(product, 'item_details', '') or getattr(product, 'item_name', '')),
-                                    chart_of_accounts=getattr(product, 'ledger', None) or getattr(product, 'stock_item', None),
-                                    amount=getattr(product, 'amount', 0),
-                                    debit_or_credit=getattr(product, 'debit_credit', 'debit') or 'debit'
-                                )
-
-                        # Transfer consolidated products if they exist
-                        source_consolidated = None
-                        if hasattr(source_analyzed_bill, 'consolidated_product'):
-                            try:
-                                source_consolidated = source_analyzed_bill.consolidated_product
-                            except (TallyVendorConsolidatedProduct.DoesNotExist, TallyExpenseConsolidatedProduct.DoesNotExist):
-                                source_consolidated = None
-
-                        if source_consolidated:
-                            if to_module == 'vendor':
-                                TallyVendorConsolidatedProduct.objects.create(
-                                    vendor_bill_analyzed=new_analyzed_bill,
-                                    organization=organization,
-                                    item_name=str(getattr(source_consolidated, 'item_name', ''))[:500],
-                                    item_details=str(getattr(source_consolidated, 'item_details', '')),
-                                    price=getattr(source_consolidated, 'price', 0),
-                                    quantity=getattr(source_consolidated, 'quantity', 1),
-                                    amount=getattr(source_consolidated, 'amount', 0),
-                                    product_gst=str(getattr(source_consolidated, 'product_gst', ''))[:20],
-                                    igst=getattr(source_consolidated, 'igst', 0),
-                                    cgst=getattr(source_consolidated, 'cgst', 0),
-                                    sgst=getattr(source_consolidated, 'sgst', 0),
-                                    stock_item=getattr(source_consolidated, 'stock_item', None),
-                                    taxes=getattr(source_consolidated, 'taxes', None),
-                                    original_items_count=getattr(source_consolidated, 'original_items_count', 1),
-                                    consolidation_notes=f"Moved from {from_module} module"
-                                )
-                            elif to_module == 'expense':
-                                TallyExpenseConsolidatedProduct.objects.create(
-                                    expense_bill=new_analyzed_bill,
-                                    organization=organization,
-                                    item_details=str(getattr(source_consolidated, 'item_details', '') or getattr(source_consolidated, 'item_name', '')),
-                                    chart_of_accounts=getattr(source_consolidated, 'chart_of_accounts', None) or getattr(source_consolidated, 'stock_item', None),
-                                    amount=getattr(source_consolidated, 'amount', 0),
-                                    debit_or_credit=getattr(source_consolidated, 'debit_or_credit', 'debit') or getattr(source_consolidated, 'debit_credit', 'debit') or 'debit',
-                                    original_entries_count=getattr(source_consolidated, 'original_entries_count', 1) or getattr(source_consolidated, 'original_items_count', 1) or 1,
-                                    consolidation_notes=f"Moved from {from_module} module"
-                                )
-
+                        for product in source_analyzed_bill.products.all():
+                            if dst["shape"] == "item":
+                                row = {
+                                    dst["fk"]: new_analyzed_bill,
+                                    "organization": organization,
+                                    "item_name": str(
+                                        getattr(product, "item_name", "")
+                                        or getattr(product, "item_details", "")
+                                        or ""
+                                    )[:100],
+                                    "item_details": str(getattr(product, "item_details", "") or ""),
+                                    "price": getattr(product, "price", 0) or 0,
+                                    "quantity": getattr(product, "quantity", 0) or 0,
+                                    "amount": getattr(product, "amount", 0) or 0,
+                                    "product_gst": str(getattr(product, "product_gst", "") or "")[:20],
+                                    "igst": getattr(product, "igst", 0) or 0,
+                                    "cgst": getattr(product, "cgst", 0) or 0,
+                                    "sgst": getattr(product, "sgst", 0) or 0,
+                                    "stock_item": getattr(product, "stock_item", None),
+                                    "taxes": getattr(product, "taxes", None),
+                                }
+                            else:
+                                row = {
+                                    dst["fk"]: new_analyzed_bill,
+                                    "organization": organization,
+                                    "item_details": str(
+                                        getattr(product, "item_details", "")
+                                        or getattr(product, "item_name", "")
+                                        or ""
+                                    ),
+                                    "chart_of_accounts": (
+                                        getattr(product, "chart_of_accounts", None)
+                                        or getattr(product, "taxes", None)
+                                    ),
+                                    "amount": getattr(product, "amount", 0) or 0,
+                                    "debit_or_credit": getattr(
+                                        product, "debit_or_credit", "debit",
+                                    ) or "debit",
+                                }
+                            dst["product"].objects.create(
+                                **_settable(dst["product"], row)
+                            )
                     except Exception as product_transfer_error:
-                        logger.warning(f"Failed to transfer products for Tally bill {bill_id}: {product_transfer_error}")
-                        # Don't fail the entire move operation, just log the warning
+                        logger.warning(
+                            "Failed to transfer line items for Tally bill %s: %s",
+                            bill_id, product_transfer_error,
+                        )
+                        # A move that lands without its lines is still a
+                        # move; the operator re-enters them rather than
+                        # losing the document.
 
-                # Delete source bill and related data
+                # The source goes. Cascade would take the children
+                # anyway; they are cleared first so a failure here shows
+                # up as a failure rather than as orphaned rows.
                 if source_analyzed_bill:
-                    # Delete products and consolidated products (cascade should handle this, but being explicit)
-                    if hasattr(source_analyzed_bill, 'products'):
-                        source_analyzed_bill.products.all().delete()
-                    if hasattr(source_analyzed_bill, 'consolidated_product'):
-                        try:
-                            source_analyzed_bill.consolidated_product.delete()
-                        except (TallyVendorConsolidatedProduct.DoesNotExist, TallyExpenseConsolidatedProduct.DoesNotExist):
-                            pass
+                    source_analyzed_bill.products.all().delete()
+                    try:
+                        source_analyzed_bill.consolidated_products.all().delete()
+                    except Exception:
+                        # Not every stack exposes the reverse name; the
+                        # cascade on delete covers it either way.
+                        pass
                     source_analyzed_bill.delete()
 
                 # The source row is about to go, so the move is recorded

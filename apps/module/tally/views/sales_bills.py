@@ -1745,6 +1745,20 @@ def update_analyzed_bill_data(analyzed_bill, analyzed_data, organization):
             if _flag in analyzed_data:
                 setattr(analyzed_bill, _flag, bool(analyzed_data[_flag]))
 
+        # The GST heads, as corrected on the voucher.
+        #
+        # Analysis decides this from the figures it read and gets it
+        # wrong whenever OCR drops a value into the wrong column: a bill
+        # printing CGST and SGST comes back as a single IGST row. The
+        # split was described here as a server decision, which left the
+        # operator looking at the mistake with no way to say so.
+        #
+        # Validated against the model's own choices, so a stale or
+        # malformed client cannot write a head that does not exist.
+        _head = analyzed_data.get('gst_type')
+        if _head in {c for c, _ in TallySalesAnalyzedBill.GSTType.choices}:
+            analyzed_bill.gst_type = _head
+
         # Place of supply, IRN and Ack No. Extraction has written these
         # since e-invoicing went in and nothing ever returned them, so
         # a misread place of supply — the field that decides IGST vs
