@@ -9,11 +9,24 @@ from apps.module.tally.models import (
     TallyVendorBill,
     TallyExpenseBill,
     TallyPaymentBill,
+    TallySalesBill,
+    TallyReceiptBill,
     TallyVendorAnalyzedBill,
     TallyExpenseAnalyzedBill,
     TallyPaymentAnalyzedBill,
+    TallySalesAnalyzedBill,
+    TallyReceiptAnalyzedBill,
     Ledger,
 )
+
+# The voucher types the dashboard carries beyond purchase and journal.
+# Tally has five; the dashboard showed three, so sales and receipt were
+# uploaded, analysed and synced without ever appearing on it.
+TALLY_EXTRA_MODULES = {
+    "payment": (TallyPaymentBill, TallyPaymentAnalyzedBill),
+    "sales": (TallySalesBill, TallySalesAnalyzedBill),
+    "receipt": (TallyReceiptBill, TallyReceiptAnalyzedBill),
+}
 from ..helpers import build_overview_response, build_funnel_response, build_usage_response
 from ..serializers import (
     TallyOverviewResponseSerializer,
@@ -36,10 +49,9 @@ def tally_overview_view(request, org_id):
         org_id,
         vendor_bill_model=TallyVendorBill,
         expense_bill_model=TallyExpenseBill,
-        payment_bill_model=TallyPaymentBill,
         analyzed_vendor_model=TallyVendorAnalyzedBill,
         analyzed_expense_model=TallyExpenseAnalyzedBill,
-        analyzed_payment_model=TallyPaymentAnalyzedBill,
+        extra_modules=TALLY_EXTRA_MODULES,
         # Tally bills are trashable; keep trashed ones out of the amounts.
         analyzed_bill_field="selected_bill",
         counter_model=Ledger,
@@ -59,7 +71,7 @@ def tally_funnel_view(request, org_id):
         org_id,
         vendor_bill_model=TallyVendorBill,
         expense_bill_model=TallyExpenseBill,
-        payment_bill_model=TallyPaymentBill,
+        extra_modules=TALLY_EXTRA_MODULES,
     )
 
 
@@ -76,6 +88,6 @@ def tally_usage_view(request, org_id):
         org_id,
         vendor_bill_model=TallyVendorBill,
         expense_bill_model=TallyExpenseBill,
-        payment_bill_model=TallyPaymentBill,
+        extra_modules=TALLY_EXTRA_MODULES,
         updated_at_field="updated_at",
     )

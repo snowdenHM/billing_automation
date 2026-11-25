@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     zoho_overview_view, zoho_funnel_view, zoho_usage_view,
     tally_overview_view, tally_funnel_view, tally_usage_view,
+    tally_insights_view,
 )
 
 app_name = "dashboard"
@@ -16,4 +17,5 @@ urlpatterns = [
     path('organizations/<uuid:org_id>/tally/overview/', tally_overview_view, name='tally_overview'),
     path('organizations/<uuid:org_id>/tally/funnel/', tally_funnel_view, name='tally_funnel'),
     path('organizations/<uuid:org_id>/tally/usage/', tally_usage_view, name='tally_usage'),
+    path('organizations/<uuid:org_id>/tally/insights/', tally_insights_view, name='tally_insights'),
 ]

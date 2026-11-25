@@ -277,6 +277,11 @@ MIDDLEWARE = [
     # HTML comes from nginx and is covered by the server block instead —
     # see docs/nginx_security_headers.conf.
     "apps.common.security_headers.SecurityHeadersMiddleware",
+    # Last, so it wraps the view and sees the real status code it has to
+    # record. It refuses what an impersonated session may not do and
+    # writes one SupportAccessEvent per impersonated request — including
+    # the refusals, which are the most interesting lines in the trail.
+    "apps.support.guards.SupportImpersonationMiddleware",
 ]
 
 # Start the policy in report-only. A CSP that blocks something the admin
@@ -406,6 +411,13 @@ MEDIA_ROOT = BASE_DIR / "media"
 # ------------------------------------------------------------
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
+        # First: it speaks only for tokens whose token_type says
+        # "impersonation" and returns None for everything else, so an
+        # ordinary login still lands on JWTAuthentication below. The
+        # order matters the other way round too — simplejwt's
+        # AccessToken refuses an impersonation token outright, so a
+        # support token can never be presented as a normal login.
+        "apps.support.impersonation.SupportImpersonationAuthentication",
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (

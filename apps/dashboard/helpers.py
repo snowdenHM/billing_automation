@@ -116,6 +116,23 @@ def _funnel(qs):
 # Generic view builders
 # ---------------------------------------------------------------------------
 
+def _extras(payment_bill_model, analyzed_payment_model, extra_modules):
+    """The optional voucher types this response should also carry.
+
+    Payment arrived as its own pair of keyword arguments, and adding
+    sales and receipt the same way would have meant four more and four
+    near-identical blocks in each of the three builders below. They are
+    collected here instead: ``{"sales": (BillModel, AnalysedModel), …}``.
+
+    The payment keywords stay because Zoho still passes them, and Zoho
+    has no sales or receipt module to pass.
+    """
+    extras = dict(extra_modules or {})
+    if payment_bill_model is not None:
+        extras.setdefault("payment", (payment_bill_model, analyzed_payment_model))
+    return extras
+
+
 def build_overview_response(
     org_id,
     *,
@@ -126,6 +143,7 @@ def build_overview_response(
     counter_model,
     payment_bill_model=None,
     analyzed_payment_model=None,
+    extra_modules=None,
     analyzed_bill_field=None,
     amount_field="total",
     counter_label="vendor_count",
@@ -167,17 +185,18 @@ def build_overview_response(
         },
     }
 
-    if payment_bill_model is not None:
-        payment_qs = _visible(payment_bill_model).filter(organization=organization)
-        total_payment = _total_amount(
-            analyzed_payment_model, organization, amount_field, analyzed_bill_field,
+    for kind, (bill_model, analyzed_model) in _extras(
+        payment_bill_model, analyzed_payment_model, extra_modules
+    ).items():
+        qs = _visible(bill_model).filter(organization=organization)
+        total = _total_amount(
+            analyzed_model, organization, amount_field, analyzed_bill_field,
         )
-
-        payload["payment_bills"] = _bill_stats(payment_qs)
-        payload["financial_summary"]["total_payment_amount"] = total_payment
-        payload["financial_summary"]["combined_amount"] += total_payment
-        payload["recent_activity"]["payment_bills_last_7_days"] = (
-            payment_qs.filter(created_at__gte=week_ago).count()
+        payload[f"{kind}_bills"] = _bill_stats(qs)
+        payload["financial_summary"][f"total_{kind}_amount"] = total
+        payload["financial_summary"]["combined_amount"] += total
+        payload["recent_activity"][f"{kind}_bills_last_7_days"] = (
+            qs.filter(created_at__gte=week_ago).count()
         )
 
     return Response(payload)
@@ -189,6 +208,7 @@ def build_funnel_response(
     vendor_bill_model,
     expense_bill_model,
     payment_bill_model=None,
+    extra_modules=None,
 ):
     """Build the funnel response dict used by both Tally and Zoho dashboards."""
     organization, err = _get_organization(org_id)
@@ -199,9 +219,11 @@ def build_funnel_response(
         "vendor_bills_funnel": _funnel(_visible(vendor_bill_model).filter(organization=organization)),
         "expense_bills_funnel": _funnel(_visible(expense_bill_model).filter(organization=organization)),
     }
-    if payment_bill_model is not None:
-        payload["payment_bills_funnel"] = _funnel(
-            _visible(payment_bill_model).filter(organization=organization)
+    for kind, (bill_model, _analyzed) in _extras(
+        payment_bill_model, None, extra_modules
+    ).items():
+        payload[f"{kind}_bills_funnel"] = _funnel(
+            _visible(bill_model).filter(organization=organization)
         )
     return Response(payload)
 
@@ -212,6 +234,7 @@ def build_usage_response(
     vendor_bill_model,
     expense_bill_model,
     payment_bill_model=None,
+    extra_modules=None,
     updated_at_field="updated_at",
 ):
     """Build the usage response dict used by both Tally and Zoho dashboards."""
@@ -222,8 +245,10 @@ def build_usage_response(
     # Keyed by the prefix each bill type contributes to the response
     # (``vendor_bills_uploaded``, ``total_vendor_files`` …).
     bill_models = {"vendor": vendor_bill_model, "expense": expense_bill_model}
-    if payment_bill_model is not None:
-        bill_models["payment"] = payment_bill_model
+    for kind, (bill_model, _analyzed) in _extras(
+        payment_bill_model, None, extra_modules
+    ).items():
+        bill_models[kind] = bill_model
     querysets = {
         kind: _visible(model).filter(organization=organization)
         for kind, model in bill_models.items()

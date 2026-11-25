@@ -1841,6 +1841,30 @@ def expense_bill_sync(request, org_id):
     from .bill_sync_guard import find_pending_masters
     pending_masters = find_pending_masters(analyzed_bill)
 
+    # Pre-flight the feed's own builder before anything is marked Synced.
+    #
+    # Two builders exist per voucher type and they do not validate the
+    # same things: this endpoint uses ``get_structured_expense_bill_data`` while the
+    # ``sync_bills`` feed Tally actually collects uses ``prepare_expense_sync_data``,
+    # and only the latter refuses an unbalanced voucher. So a voucher
+    # could be marked Synced here, show as Synced on screen for ever,
+    # and be silently dropped from every feed the TCP bridge read —
+    # the skip is logged server-side and says nothing to the operator.
+    # Observed on a payment and a receipt voucher whose debits and
+    # credits did not agree.
+    #
+    # Running it here changes no payload: it is the same function the
+    # feed calls, and its result is discarded. It only moves the
+    # refusal to the moment the person clicks Sync.
+    try:
+        prepare_expense_sync_data(analyzed_bill, organization)
+    except ValueError as ve:
+        return Response({
+            'error': 'Voucher Cannot Be Posted',
+            'message': str(ve),
+            'error_code': 'SYNC_PAYLOAD_INVALID',
+        }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
     try:
         sync_data = get_structured_expense_bill_data(analyzed_bill, organization)
 

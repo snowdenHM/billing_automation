@@ -62,6 +62,7 @@ class OrganizationInfoSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     organizations = serializers.SerializerMethodField()
     full_name = serializers.SerializerMethodField()
+    is_support_agent = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -69,13 +70,27 @@ class UserSerializer(serializers.ModelSerializer):
             "id", "email", "first_name", "last_name", "full_name",
             "phone_number", "bio", "profile_image", "email_verified",
             "last_active", "notification_preferences",
-            "is_active", "is_staff", "is_superuser",
+            "is_active", "is_staff", "is_superuser", "is_support_agent",
             "organizations", "date_joined"
         ]
         read_only_fields = [
-            "id", "is_active", "is_staff", "is_superuser",
+            "id", "is_active", "is_staff", "is_superuser", "is_support_agent",
             "date_joined", "email_verified", "last_active"
         ]
+
+    @extend_schema_field(OpenApiTypes.BOOL)
+    def get_is_support_agent(self, obj) -> bool:
+        """Staff AND an active SupportAgent row — the same two-part test
+        the desk endpoints apply.
+
+        The interface was gating on ``is_staff`` alone, which is not what
+        the backend means by an agent. Every staff user without a
+        SupportAgent row therefore polled the desk endpoints from every
+        page and collected a 403 each time — visible on an ordinary
+        client's dashboard. One flag, one definition, both sides.
+        """
+        agent = getattr(obj, "support_agent", None)
+        return bool(obj.is_staff and agent and agent.is_active)
 
     @extend_schema_field(OpenApiTypes.STR)
     def get_full_name(self, obj) -> str:

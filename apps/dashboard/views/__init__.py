@@ -22,4 +22,6 @@ __all__ = [
     "tally_overview_view",
     "tally_funnel_view",
     "tally_usage_view",
+    "tally_insights_view",
 ]
+from .tally_insights import tally_insights_view  # noqa: F401

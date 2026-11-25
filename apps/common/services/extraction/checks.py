@@ -85,9 +85,7 @@ def _run(data, document_text=None, page_count=None):
             if not (stated and page_count and int(stated) <= page_count):
                 out.append(_finding(
                     "continued_elsewhere",
-                    "This document says it continues on another page that was not "
-                    "uploaded. Figures printed there — often the total — are missing. "
-                    "Upload the remaining pages and analyse again.",
+                    "Continues on a page that was not uploaded.",
                     pages_uploaded=page_count,
                 ))
 
@@ -98,17 +96,29 @@ def _run(data, document_text=None, page_count=None):
         if g and not gstin_valid(g):
             out.append(_finding(
                 "gstin_checksum",
-                f"The {label} GSTIN {g} fails its check digit — it is likely misread.",
+                f"{label.title()} GSTIN {g} fails its check digit.",
                 value=g,
             ))
     if seller_gstin and buyer_gstin and seller_gstin.strip().upper() == buyer_gstin.strip().upper():
         out.append(_finding(
             "same_gstin",
-            "Supplier and customer carry the same GSTIN. One of them is the wrong party.",
+            "Supplier and customer have the same GSTIN.",
         ))
 
     # --- line arithmetic ------------------------------------------------
-    items = data.get("items") or []
+    # Item vouchers (purchase, sales) carry their lines under "items";
+    # ledger vouchers (expense, payment, receipt) carry theirs under
+    # "expenses". Reading only "items" meant every ledger voucher was
+    # told "No line items were found" however many lines it had — one
+    # receipt in this corpus has eighteen — while the totals check,
+    # which is gated on the same list, never ran on them at all. So the
+    # advisory an operator saw on those vouchers was always wrong, and
+    # the one worth seeing was never shown.
+    #
+    # An expense line is {description, category, amount}: no price or
+    # quantity, so the rate x quantity test below skips it of its own
+    # accord and only the sum is taken.
+    items = data.get("items") or data.get("expenses") or []
     bad_lines = []
     line_sum = 0.0
     for n, item in enumerate(items, start=1):
@@ -125,7 +135,7 @@ def _run(data, document_text=None, page_count=None):
         more = f" and {len(bad_lines) - 5} more" if len(bad_lines) > 5 else ""
         out.append(_finding(
             "line_arithmetic",
-            f"Rate x quantity does not equal the amount on line {shown}{more}.",
+            f"Rate x quantity does not match the amount on line {shown}{more}.",
             lines=bad_lines,
         ))
 
@@ -152,8 +162,7 @@ def _run(data, document_text=None, page_count=None):
         if abs(expected - total) > TOLERANCE:
             out.append(_finding(
                 "total_mismatch",
-                f"Line items plus tax come to {expected:,.2f}, but the bill total "
-                f"reads {total:,.2f}.",
+                f"Lines plus tax come to {expected:,.2f}; bill says {total:,.2f}.",
                 computed=round(expected, 2), stated=round(total, 2),
             ))
 
@@ -166,21 +175,19 @@ def _run(data, document_text=None, page_count=None):
     if _ccy and _ccy != "INR":
         out.append(_finding(
             "currency_not_inr",
-            f"This bill appears to be written in {_ccy}. Set the currency on "
-            f"the voucher so the amounts post to Tally in rupees.",
+            f"Bill is in {_ccy}. Set the voucher currency.",
             currency=_ccy,
         ))
 
     if igst and (cgst or sgst):
         out.append(_finding(
             "igst_with_cgst_sgst",
-            "The bill carries IGST as well as CGST/SGST. A supply is either "
-            "inter-state or intra-state, not both.",
+            "IGST and CGST/SGST are both present.",
         ))
     if cgst and sgst and abs(cgst - sgst) > TOLERANCE:
         out.append(_finding(
             "cgst_sgst_unequal",
-            f"CGST {cgst:,.2f} and SGST {sgst:,.2f} differ. They are normally equal.",
+            f"CGST {cgst:,.2f} and SGST {sgst:,.2f} differ.",
         ))
 
     # --- completeness ---------------------------------------------------

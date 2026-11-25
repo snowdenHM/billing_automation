@@ -59,6 +59,10 @@ MIDDLEWARE = [
     # security header can look broken locally while working in
     # production, or the reverse.
     "apps.common.security_headers.SecurityHeadersMiddleware",
+    # Also mirrors base.py — and this one is a guard, not a header: left
+    # out here, an impersonated session would be unaudited and unfenced
+    # in development, i.e. exactly where the flow is tested.
+    "apps.support.guards.SupportImpersonationMiddleware",
 ]
 
 

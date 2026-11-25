@@ -9,5 +9,9 @@ urlpatterns = [
     path("tally/", include("apps.module.tally.urls")),
     path("", include("apps.dashboard.urls", namespace="dashboard")),
     path("support/", include("apps.support.urls")),
+    # The access-grant and support-desk trees sit at the root rather than
+    # under support/: the grant list is an organization endpoint the
+    # client reads about their own account.
+    path("", include("apps.support.access_urls")),
 
 ]
