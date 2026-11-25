@@ -2140,6 +2140,8 @@ def payment_bills_sync_list(request, org_id):
     return HttpResponse(xml_payload, content_type='application/xml; charset=utf-8')
 
 
+
+
 def prepare_payment_sync_data(analyzed_bill, organization):
     """Build the sync payload for Tally TCP (Payment voucher).
 
@@ -2272,7 +2274,35 @@ def prepare_payment_sync_data(analyzed_bill, organization):
     # DR/CR ("debit"), so a ₹45,000 expense + ₹8,100 IGST voucher emitted
     # ₹61,100 of debits against ₹45,000 of credits and Tally refused it.
     # The screen already stores the correct, balanced sides — use them.
-    if payment_mode_ledger and _money(analyzed_bill.total) > 0:
+    # What the Bank/Cash ledger actually moves, once TDS is taken off.
+    #
+    # This line used to post ``analyzed_bill.total``. That is the invoice
+    # figure, and it is only what the bank moves when no tax is withheld
+    # at source. Deduct 900 of TDS from a 53,100 receipt and the bank
+    # receives 52,200 — the 900 goes to the TDS ledger instead — so
+    # posting the full total put that 900 on the voucher twice and Tally
+    # refused the whole thing as unbalanced.
+    #
+    # It stayed invisible because the TDS row had been removed from these
+    # two screens, so no voucher reaching here ever carried a TDS figure.
+    # Restoring the row exposed it on the first bill that did.
+    #
+    # TDS on the same side as this line is money that never moved through
+    # the bank, so it comes off; on the opposite side it is money the bank
+    # moved on top, so it goes on. With no TDS the answer is the total,
+    # unchanged — which is every voucher posted before today.
+    #
+    # The payload's shape does not change: same tag, same position, same
+    # formatting. Only the figure is right now.
+    _tds = _money(analyzed_bill.tds)
+    _settled = _money(analyzed_bill.total)
+    if _tds:
+        _settled += (
+            -_tds if _dc(analyzed_bill.tds_debit_or_credit or "credit") == _dc(analyzed_bill.vendor_debit_or_credit or "credit")
+            else _tds
+        )
+
+    if payment_mode_ledger and _settled > 0:
         # Parent-group default varies with the payment mode category so a
         # newly-created ledger lands in the right Tally group.
         _pm_parent = _ledger_parent_name(payment_mode_ledger)
@@ -2283,7 +2313,7 @@ def prepare_payment_sync_data(analyzed_bill, organization):
                 else "Bank Accounts"
             )
         ledgers_payload.append({
-            "amount": _fmt_money(analyzed_bill.total),
+            "amount": _fmt_money(_settled),
             "ledger": payment_mode_ledger.name or "Unknown Payment Mode",
             **({"parent": _pm_parent} if PAYMENT_EMIT_LEDGER_EXTRAS else {}),
             "debit_or_credit": _dc(
